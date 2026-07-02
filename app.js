@@ -2813,7 +2813,9 @@ function createMessageElement(message, animated = false, options = {}) {
 
   if (hasHydration) {
     bubble.classList.add("is-hydrated-message");
-    bubble.appendChild(createHydratedWaterEffectElement());
+    const gooeyEffect = createHydratedGooeyDropsEffectElement();
+    bubble.appendChild(gooeyEffect);
+    scheduleHydratedGooeyDropsPopulation(gooeyEffect);
     translatedBlock = createHydratedMessageBlock(message, hydration);
     bubble.appendChild(translatedBlock.wrapper);
   } else if (hasTranslation) {
@@ -2863,31 +2865,112 @@ function createMessageElement(message, animated = false, options = {}) {
   return row;
 }
 
-function createHydratedWaterEffectElement() {
+function createHydratedGooeyDropsEffectElement() {
   const effect = document.createElement("div");
   effect.className = "hydrated-water-effect";
+  effect.dataset.hydratedGooey = "1";
   effect.setAttribute("aria-hidden", "true");
   effect.innerHTML = `
-    <div class="hydrated-liquid">
-      <span class="hydrated-wave wave-back-one"></span>
-      <span class="hydrated-wave wave-mid-one"></span>
-      <span class="hydrated-wave wave-front-one"></span>
+    <div class="hydrated-water-zone">
+      <div class="hydrated-gooey-layer">
+        <div class="hydrated-pool hydrated-pool-top"></div>
+        <div class="hydrated-drops-layer hydrated-drops-down"></div>
+        <div class="hydrated-drops-layer hydrated-drops-up"></div>
+        <div class="hydrated-pool hydrated-pool-bottom"></div>
+      </div>
     </div>
-    <div class="hydrated-boat-layer">
-      <span class="hydrated-boat">
-        <span class="hydrated-boat-wake"></span>
-        <span class="hydrated-boat-hull"></span>
-        <span class="hydrated-boat-mast"></span>
-        <span class="hydrated-boat-sail sail-main"></span>
-        <span class="hydrated-boat-sail sail-back"></span>
-      </span>
-    </div>
-    <div class="hydrated-front-water">
-      <span class="front-strip-one"></span>
-    </div>
+    <div class="hydrated-gooey-gloss"></div>
   `;
   return effect;
 }
+
+const HYDRATED_GOOEY_DROP_SETTINGS = Object.freeze({
+  downCount: 12,
+  upCount: 12,
+  minSize: 12,
+  maxSize: 22,
+  minDuration: 2.5,
+  maxDuration: 4.1,
+  maxDelay: 3.5
+});
+
+function scheduleHydratedGooeyDropsPopulation(effect, attempt = 0) {
+  if (populateHydratedGooeyDrops(effect)) return;
+  if (attempt >= 10) return;
+  requestAnimationFrame(() => scheduleHydratedGooeyDropsPopulation(effect, attempt + 1));
+}
+
+function populateHydratedGooeyDrops(effect) {
+  if (!effect?.isConnected) return false;
+
+  const bubble = effect.closest(".bubble");
+  const topPool = effect.querySelector(".hydrated-pool-top");
+  const bottomPool = effect.querySelector(".hydrated-pool-bottom");
+  const downLayer = effect.querySelector(".hydrated-drops-down");
+  const upLayer = effect.querySelector(".hydrated-drops-up");
+  if (!bubble || !topPool || !bottomPool || !downLayer || !upLayer) return false;
+
+  const bubbleHeight = bubble.clientHeight;
+  const topPoolHeight = topPool.offsetHeight;
+  const bottomPoolHeight = bottomPool.offsetHeight;
+  if (!bubbleHeight || !topPoolHeight || !bottomPoolHeight) return false;
+
+  const downStart = topPoolHeight - 10;
+  const upStart = bubbleHeight - bottomPoolHeight - 10;
+  const downTravel = bubbleHeight - bottomPoolHeight - downStart;
+  const upTravel = upStart - topPoolHeight;
+  if (downTravel <= 0 || upTravel <= 0) return false;
+
+  effect.style.setProperty("--start-down", `${downStart}px`);
+  effect.style.setProperty("--start-up", `${upStart}px`);
+
+  downLayer.innerHTML = "";
+  upLayer.innerHTML = "";
+
+  for (let index = 0; index < HYDRATED_GOOEY_DROP_SETTINGS.downCount; index += 1) {
+    downLayer.appendChild(createHydratedGooeyDrop("down", downTravel));
+  }
+
+  for (let index = 0; index < HYDRATED_GOOEY_DROP_SETTINGS.upCount; index += 1) {
+    upLayer.appendChild(createHydratedGooeyDrop("up", upTravel));
+  }
+
+  return true;
+}
+
+function createHydratedGooeyDrop(direction, travel) {
+  const drop = document.createElement("span");
+  const size =
+    HYDRATED_GOOEY_DROP_SETTINGS.minSize +
+    Math.random() * (HYDRATED_GOOEY_DROP_SETTINGS.maxSize - HYDRATED_GOOEY_DROP_SETTINGS.minSize);
+  const left = 10 + Math.random() * 80;
+  const duration =
+    HYDRATED_GOOEY_DROP_SETTINGS.minDuration +
+    Math.random() * (HYDRATED_GOOEY_DROP_SETTINGS.maxDuration - HYDRATED_GOOEY_DROP_SETTINGS.minDuration);
+  const delay = Math.random() * HYDRATED_GOOEY_DROP_SETTINGS.maxDelay;
+  const opacity = 0.72 + Math.random() * 0.18;
+  const drift = -6 + Math.random() * 12;
+
+  drop.className = `hydrated-gooey-drop is-${direction}`;
+  drop.style.setProperty("--size", `${size}px`);
+  drop.style.setProperty("--left", `${left}%`);
+  drop.style.setProperty("--duration", `${duration}s`);
+  drop.style.setProperty("--delay", `${delay}s`);
+  drop.style.setProperty("--opacity", opacity.toFixed(3));
+  drop.style.setProperty("--drift", `${drift.toFixed(2)}px`);
+  drop.style.setProperty("--travel", `${travel}px`);
+  return drop;
+}
+
+let hydratedGooeyResizeFrame = 0;
+window.addEventListener("resize", () => {
+  if (hydratedGooeyResizeFrame) cancelAnimationFrame(hydratedGooeyResizeFrame);
+  hydratedGooeyResizeFrame = requestAnimationFrame(() => {
+    document
+      .querySelectorAll('.hydrated-water-effect[data-hydrated-gooey="1"]')
+      .forEach((effect) => populateHydratedGooeyDrops(effect));
+  });
+});
 
 function createMessageTopBar(message, isMine, showAuthor = true) {
   const hasAuthor = showAuthor && !isMine && (message.authorNick || message.author);

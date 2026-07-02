@@ -20,6 +20,20 @@
 </head>
 <body class="auth-loading">
   <noscript>Ative o JavaScript para usar o chat.</noscript>
+  <svg class="gooey-filter-defs" width="0" height="0" aria-hidden="true" focusable="false">
+    <defs>
+      <filter id="hydrated-gooey-filter" x="-30%" y="-30%" width="160%" height="160%">
+        <feGaussianBlur in="SourceGraphic" stdDeviation="6" result="blur" />
+        <feColorMatrix
+          in="blur"
+          mode="matrix"
+          values="1 0 0 0 0  0 1 0 0 0  0 0 1 0 0  0 0 0 24 -9"
+          result="gooey"
+        />
+        <feComposite in="SourceGraphic" in2="gooey" operator="atop" />
+      </filter>
+    </defs>
+  </svg>
 
   <section class="splash-screen" id="splashScreen" aria-live="polite" aria-label="Carregando AstroChat">
     <div class="splash-content">
