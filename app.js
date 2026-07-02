@@ -2813,6 +2813,7 @@ function createMessageElement(message, animated = false, options = {}) {
 
   if (hasHydration) {
     bubble.classList.add("is-hydrated-message");
+    bubble.appendChild(createHydratedWaterEffectElement());
     translatedBlock = createHydratedMessageBlock(message, hydration);
     bubble.appendChild(translatedBlock.wrapper);
   } else if (hasTranslation) {
@@ -2860,6 +2861,32 @@ function createMessageElement(message, animated = false, options = {}) {
   row.appendChild(stack);
   setupSwipeReply(row, bubble, message);
   return row;
+}
+
+function createHydratedWaterEffectElement() {
+  const effect = document.createElement("div");
+  effect.className = "hydrated-water-effect";
+  effect.setAttribute("aria-hidden", "true");
+  effect.innerHTML = `
+    <div class="hydrated-liquid">
+      <span class="hydrated-wave wave-back-one"></span>
+      <span class="hydrated-wave wave-mid-one"></span>
+      <span class="hydrated-wave wave-front-one"></span>
+    </div>
+    <div class="hydrated-boat-layer">
+      <span class="hydrated-boat">
+        <span class="hydrated-boat-wake"></span>
+        <span class="hydrated-boat-hull"></span>
+        <span class="hydrated-boat-mast"></span>
+        <span class="hydrated-boat-sail sail-main"></span>
+        <span class="hydrated-boat-sail sail-back"></span>
+      </span>
+    </div>
+    <div class="hydrated-front-water">
+      <span class="front-strip-one"></span>
+    </div>
+  `;
+  return effect;
 }
 
 function createMessageTopBar(message, isMine, showAuthor = true) {
