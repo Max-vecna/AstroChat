@@ -42,6 +42,7 @@ const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
 const USER_STORAGE_KEY = "chat-pwa-user-v1";
 const NOTIFICATIONS_STORAGE_KEY = "chat-pwa-notificacoes-v1";
 const LIVE_TYPING_STORAGE_KEY = "astrochat-live-typing-v1";
+const LEARNING_TEST_STORAGE_KEY = "astrochat-learning-test-v1";
 const PROCESSED_FRIEND_REQUESTS_STORAGE_KEY = "astrochat-friend-requests-processados-v1";
 
 const AI_ROOM_TYPE = "language-ai";
@@ -100,6 +101,7 @@ let pendingRoomInviteFriendIds = new Set();
 let invites = [];
 let notificationState = normalizeNotificationState(loadFromStorage(NOTIFICATIONS_STORAGE_KEY, {}));
 let liveTypingByRoom = loadFromStorage(LIVE_TYPING_STORAGE_KEY, {});
+let learningTestByRoom = loadFromStorage(LEARNING_TEST_STORAGE_KEY, {});
 let processedFriendRequestIds = loadFromStorage(PROCESSED_FRIEND_REQUESTS_STORAGE_KEY, {});
 let activeTypingUsers = [];
 let replyTarget = null;
@@ -268,6 +270,7 @@ const roomSettingsClearChatButton = document.querySelector("#roomSettingsClearCh
 const toastRegion = document.querySelector("#toastRegion");
 const suggestTextButton = document.querySelector("#suggestTextButton");
 const spellcheckButton = document.querySelector("#spellcheckButton");
+const learningTestButton = document.querySelector("#learningTestButton");
 const aiAssistModal = document.querySelector("#aiAssistModal");
 const closeAiAssistButton = document.querySelector("#closeAiAssistButton");
 const aiAssistTitle = document.querySelector("#aiAssistTitle");
@@ -454,14 +457,30 @@ messageForm.addEventListener("submit", async (event) => {
 
   if (!requireFirebaseConnection("enviar mensagem")) return;
 
+  const learningTestEnabled = isLearningTestEnabledForRoom(activeRoom);
+
   try {
     await clearCurrentTypingStatus();
     messageInput.value = "";
-    setMessageSending(true, getRoomLanguage(activeRoom)?.code ? "Traduzindo" : "Enviando");
-    await sendFirebaseMessage(activeRoom, text);
+    setMessageSending(true, learningTestEnabled ? "Verificando" : getRoomLanguage(activeRoom)?.code ? "Traduzindo" : "Enviando");
+
+    if (learningTestEnabled) {
+      const feedbackResult = await checkLearningTestWriting(text, activeRoom);
+      await sendFirebaseMessage(activeRoom, text, {
+        skipTranslation: true,
+        learningTest: true,
+        learningFeedback: createLearningFeedbackFromResult(text, feedbackResult)
+      });
+    } else {
+      await sendFirebaseMessage(activeRoom, text);
+    }
   } catch (error) {
     console.error("Erro ao enviar mensagem.", error);
     messageInput.value = text;
+    if (learningTestEnabled) {
+      window.alert("Nao foi possivel verificar sua frase agora. Verifique sua conexao e tente novamente.");
+      return;
+    }
     window.alert("Não foi possível enviar a mensagem. Verifique sua conexão e as regras do Realtime Database.");
   } finally {
     setMessageSending(false);
@@ -474,6 +493,7 @@ messageInput.addEventListener("input", handleMessageInputTyping);
 messageInput.addEventListener("blur", () => scheduleTypingClear());
 suggestTextButton?.addEventListener("click", openTextSuggestionAssistant);
 spellcheckButton?.addEventListener("click", openSpellcheckAssistant);
+learningTestButton?.addEventListener("click", toggleLearningTestMode);
 closeAiAssistButton?.addEventListener("click", closeAiAssistModal);
 aiAssistModal?.addEventListener("click", (event) => {
   if (event.target === aiAssistModal) closeAiAssistModal();
@@ -792,6 +812,7 @@ function resetRuntimeSessionState() {
   replyTarget = null;
   notificationState = normalizeNotificationState({});
   liveTypingByRoom = {};
+  learningTestByRoom = {};
   processedFriendRequestIds = {};
   firebaseReady = false;
   firebaseInitPromise = null;
@@ -828,6 +849,7 @@ function clearStoredAstroChatData() {
     ROOMS_STORAGE_KEY,
     NOTIFICATIONS_STORAGE_KEY,
     LIVE_TYPING_STORAGE_KEY,
+    LEARNING_TEST_STORAGE_KEY,
     PROCESSED_FRIEND_REQUESTS_STORAGE_KEY
   ].forEach((key) => localStorage.removeItem(key));
 }
@@ -837,6 +859,7 @@ function loadLocalSessionData() {
   friends = loadFromStorage(FRIENDS_STORAGE_KEY, []);
   notificationState = normalizeNotificationState(loadFromStorage(NOTIFICATIONS_STORAGE_KEY, {}));
   liveTypingByRoom = loadFromStorage(LIVE_TYPING_STORAGE_KEY, {});
+  learningTestByRoom = loadFromStorage(LEARNING_TEST_STORAGE_KEY, {});
   processedFriendRequestIds = loadFromStorage(PROCESSED_FRIEND_REQUESTS_STORAGE_KEY, {});
 }
 
@@ -2080,6 +2103,79 @@ function saveLiveTypingSettings() {
   localStorage.setItem(LIVE_TYPING_STORAGE_KEY, JSON.stringify(liveTypingByRoom || {}));
 }
 
+function toggleLearningTestMode() {
+  const activeRoom = getActiveRoom();
+  const language = getRoomLanguage(activeRoom);
+
+  if (!isLearningTestAvailableForRoom(activeRoom)) {
+    showToast("Modo indisponivel", "Defina um idioma na sala para testar seu aprendizado.");
+    updateLearningTestButtonState(activeRoom);
+    return;
+  }
+
+  learningTestByRoom[activeRoom.id] = !isLearningTestEnabledForRoom(activeRoom);
+  if (!learningTestByRoom[activeRoom.id]) delete learningTestByRoom[activeRoom.id];
+
+  saveLearningTestSettings();
+  updateLearningTestButtonState(activeRoom);
+  updateMessageInputPlaceholder(activeRoom);
+
+  const enabled = isLearningTestEnabledForRoom(activeRoom);
+  showToast(
+    enabled ? "Teste ativado" : "Teste desativado",
+    enabled
+      ? `Escreva em ${language.label}. Eu envio como voce digitou e mostro a correcao no balao.`
+      : "As proximas mensagens voltam ao envio normal."
+  );
+}
+
+function isLearningTestAvailableForRoom(room = getActiveRoom()) {
+  return Boolean(room && !isAiRoom(room) && getRoomLanguage(room)?.code);
+}
+
+function isLearningTestEnabledForRoom(room = getActiveRoom()) {
+  return Boolean(room?.id && learningTestByRoom?.[room.id] && isLearningTestAvailableForRoom(room));
+}
+
+function updateLearningTestButtonState(room = getActiveRoom()) {
+  if (!learningTestButton) return;
+
+  const available = isLearningTestAvailableForRoom(room);
+  const enabled = isLearningTestEnabledForRoom(room);
+  const language = getRoomLanguage(room);
+  const title = !room
+    ? "Testar meu aprendizado"
+    : !available
+      ? "Defina um idioma na sala para testar seu aprendizado"
+      : enabled
+        ? `Desativar teste em ${language.label}`
+        : `Testar meu aprendizado em ${language.label}`;
+
+  learningTestButton.disabled = !available;
+  learningTestButton.classList.toggle("is-active", enabled);
+  learningTestButton.setAttribute("aria-pressed", String(enabled));
+  learningTestButton.title = title;
+  learningTestButton.setAttribute("aria-label", title);
+}
+
+function updateMessageInputPlaceholder(room = getActiveRoom()) {
+  if (!messageInput || !room) return;
+
+  const language = getRoomLanguage(room);
+  if (isAiRoom(room)) {
+    messageInput.placeholder = "Pergunte sobre ingles, espanhol, vocabulario, pronuncia...";
+    return;
+  }
+
+  messageInput.placeholder = isLearningTestEnabledForRoom(room) && language?.code
+    ? `Teste em ${language.label}: escreva uma frase`
+    : "Digite uma mensagem";
+}
+
+function saveLearningTestSettings() {
+  localStorage.setItem(LEARNING_TEST_STORAGE_KEY, JSON.stringify(learningTestByRoom || {}));
+}
+
 function openProfileSettingsModal() {
   if (!profileSettingsModal || !currentUser?.nick) return;
 
@@ -2586,6 +2682,7 @@ function renderActiveRoom(forceMessages = false) {
   if (!activeRoom) {
     messages.innerHTML = "";
     messages.dataset.roomId = "";
+    updateLearningTestButtonState(null);
     return;
   }
 
@@ -2607,7 +2704,8 @@ function renderActiveRoom(forceMessages = false) {
     clearChatButton.title = isAi ? "Reiniciar conversa" : "Limpar conversa deste chat";
     clearChatButton.setAttribute("aria-label", isAi ? "Reiniciar conversa" : "Limpar conversa deste chat");
   }
-  messageInput.placeholder = isAi ? "Pergunte sobre inglês, espanhol, vocabulário, pronúncia..." : "Digite uma mensagem";
+  updateMessageInputPlaceholder(activeRoom);
+  updateLearningTestButtonState(activeRoom);
 
   if (forceMessages || messages.dataset.roomId !== activeRoom.id) {
     messages.innerHTML = "";
@@ -2719,7 +2817,7 @@ function addMessage(roomId, message) {
   renderRoomList(searchInput.value);
 }
 
-async function sendFirebaseMessage(room, text) {
+async function sendFirebaseMessage(room, text, options = {}) {
   if (!requireFirebaseConnection("enviar mensagem")) {
     throw new Error("Sem internet ou Firebase desconectado.");
   }
@@ -2731,10 +2829,13 @@ async function sendFirebaseMessage(room, text) {
   const now = Date.now();
   const cleanText = cleanMessageText(text);
   const language = getRoomLanguage(room);
+  const skipTranslation = Boolean(options.skipTranslation);
+  const learningTest = Boolean(options.learningTest);
+  const learningFeedback = normalizeLearningFeedback(options.learningFeedback);
   let translatedText = "";
   let translationError = false;
 
-  if (language?.code) {
+  if (language?.code && !skipTranslation) {
     try {
       translatedText = await translateMessageText(cleanText, language);
     } catch (error) {
@@ -2750,10 +2851,12 @@ async function sendFirebaseMessage(room, text) {
   const message = {
     id: messageRef.key,
     text: displayText,
-    originalText: language?.code ? cleanText : "",
-    translatedText: language?.code ? displayText : "",
+    originalText: language?.code && !skipTranslation ? cleanText : "",
+    translatedText: language?.code && !skipTranslation ? displayText : "",
     targetLanguageCode: language?.code || "",
     targetLanguageName: language?.name || "",
+    learningTest,
+    translationDisabled: skipTranslation,
     translationError,
     authorUid: currentFirebaseUid,
     authorNick: currentUser?.nick || "Você",
@@ -2764,6 +2867,10 @@ async function sendFirebaseMessage(room, text) {
     createdAtMillis: now
   };
 
+  if (learningFeedback) {
+    message.learningFeedback = learningFeedback;
+  }
+
   if (replyPayload) {
     message.replyTo = replyPayload;
   }
@@ -2771,7 +2878,7 @@ async function sendFirebaseMessage(room, text) {
   await update(ref(db), {
     [`rooms/${room.id}/messages/${messageRef.key}`]: message,
     [`rooms/${room.id}/lastMessage`]: displayText,
-    [`rooms/${room.id}/lastOriginalMessage`]: language?.code ? cleanText : "",
+    [`rooms/${room.id}/lastOriginalMessage`]: language?.code && !skipTranslation ? cleanText : "",
     [`rooms/${room.id}/lastMessageAuthorUid`]: currentFirebaseUid,
     [`rooms/${room.id}/lastMessageAuthorNick`]: message.authorNick,
     [`rooms/${room.id}/lastMessageAt`]: now,
@@ -2830,6 +2937,11 @@ function createMessageElement(message, animated = false, options = {}) {
     bubble.appendChild(text);
   }
 
+  const learningFeedback = getVisibleLearningFeedback(message);
+  if (learningFeedback) {
+    bubble.appendChild(createLearningFeedbackElement(learningFeedback));
+  }
+
   if (message.translationError) {
     const warning = document.createElement("span");
     warning.className = "translation-warning";
@@ -2838,7 +2950,11 @@ function createMessageElement(message, animated = false, options = {}) {
   }
 
   footer.className = "message-footer";
-  const messageTools = translatedBlock ? createMessageFooterTools(message, translatedBlock) : null;
+  const messageTools = translatedBlock
+    ? createMessageFooterTools(message, translatedBlock)
+    : isLearningTestMessage(message)
+      ? createLearningTestMessageFooterTools(message)
+      : null;
 
   if (messageTools) {
     footer.classList.add("has-message-tools");
@@ -3130,6 +3246,57 @@ function createMessageFooterTools(message, blockInfo) {
   return tools;
 }
 
+function createLearningTestMessageFooterTools(message) {
+  const tools = document.createElement("div");
+  tools.className = "message-footer-tools";
+  tools.appendChild(createListenMessageButton(message));
+  return tools;
+}
+
+function getVisibleLearningFeedback(message) {
+  if (!isLearningTestMessage(message) || !isMessageMine(message)) return null;
+  return normalizeLearningFeedback(message?.learningFeedback);
+}
+
+function createLearningFeedbackElement(feedback) {
+  const box = document.createElement("article");
+  const corrected = cleanMessageText(feedback?.correctedText || "", 800);
+  const errors = Array.isArray(feedback?.errors) ? feedback.errors : [];
+
+  box.className = "learning-feedback-card";
+
+  const head = document.createElement("div");
+  head.className = "learning-feedback-head";
+  head.innerHTML = `<i class="fa-solid fa-graduation-cap" aria-hidden="true"></i><span>Correção para aprender</span>`;
+  box.appendChild(head);
+
+  if (corrected) {
+    const correctedText = document.createElement("p");
+    correctedText.className = "learning-feedback-corrected";
+    correctedText.textContent = corrected;
+    box.appendChild(correctedText);
+  }
+
+  if (errors.length) {
+    const list = document.createElement("div");
+    list.className = "learning-feedback-errors";
+    errors.forEach((error) => {
+      const item = document.createElement("div");
+      item.className = "learning-feedback-error";
+      item.innerHTML = `
+        <strong>${escapeHtml(error.original || "Trecho")}</strong>
+        <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>
+        <span>${escapeHtml(error.correction || "Correção sugerida")}</span>
+        ${error.explanation ? `<small>${escapeHtml(error.explanation)}</small>` : ""}
+      `;
+      list.appendChild(item);
+    });
+    box.appendChild(list);
+  }
+
+  return box;
+}
+
 function createTranslatedMessageBlock(message, isMine) {
   const wrapper = document.createElement("div");
   const translated = document.createElement("p");
@@ -3314,8 +3481,8 @@ function openMessageMenu(message, row, bubble) {
   }
 
   const activeRoom = getActiveRoom();
-  const hasGlobalHydration = Boolean(message?.hydration?.text || getCurrentUserHydration(message)?.text);
-  const canHydrate = !isMessageMine(message) && activeRoom && !isAiRoom(activeRoom) && Boolean(message?.id);
+  const hasGlobalHydration = !isLearningTestMessage(message) && Boolean(message?.hydration?.text || getCurrentUserHydration(message)?.text);
+  const canHydrate = !isLearningTestMessage(message) && !isMessageMine(message) && activeRoom && !isAiRoom(activeRoom) && Boolean(message?.id);
   const hydrateActionKey = activeRoom && message?.id ? `${activeRoom.id}:${message.id}` : "";
 
   if (hasGlobalHydration && activeRoom && !isAiRoom(activeRoom) && Boolean(message?.id)) {
@@ -3571,6 +3738,8 @@ async function reactToMessage(message, emoji) {
 }
 
 function getCurrentUserHydration(message) {
+  if (isLearningTestMessage(message)) return null;
+
   if (message?.hydration?.text) return message.hydration;
 
   // Compatibilidade com versões antigas: se existir hidratação salva por usuário,
@@ -3641,7 +3810,7 @@ async function ensureHydratedNativeTranslation(message, hydration, translationWr
 
 async function hydrateReceivedMessage(message) {
   const activeRoom = getActiveRoom();
-  if (!activeRoom || isAiRoom(activeRoom) || isMessageMine(message) || !message?.id) return;
+  if (!activeRoom || isAiRoom(activeRoom) || isMessageMine(message) || isLearningTestMessage(message) || !message?.id) return;
 
   if (!requireFirebaseConnection("hidratar mensagem")) return;
 
@@ -3902,6 +4071,10 @@ function getMessageSignature(message) {
     text: message.text || "",
     originalText: message.originalText || "",
     translatedText: message.translatedText || "",
+    targetLanguageCode: message.targetLanguageCode || "",
+    learningTest: Boolean(message.learningTest),
+    translationDisabled: Boolean(message.translationDisabled),
+    learningFeedback: message.learningFeedback || {},
     translationError: Boolean(message.translationError),
     replyTo: message.replyTo || null,
     reactions: message.reactions || {},
@@ -5956,10 +6129,12 @@ function getCurrentNativeLanguage() {
 
 
 function setComposerAiButtonsDisabled(isDisabled) {
-  [suggestTextButton, spellcheckButton].forEach((button) => {
+  [suggestTextButton, spellcheckButton, learningTestButton].forEach((button) => {
     if (!button) return;
     button.disabled = Boolean(isDisabled);
   });
+
+  if (!isDisabled) updateLearningTestButtonState();
 }
 
 function getComposerTextForAiTool() {
@@ -5971,6 +6146,69 @@ function getComposerLanguageHint(room = getActiveRoom()) {
   if (language?.code) return `idioma-alvo da conversa: ${language.name}`;
   if (isAiRoom(room)) return "contexto: conversa com professor de idiomas";
   return "sem idioma-alvo definido; preserve o idioma original do texto";
+}
+
+function createLearningFeedbackFromResult(originalText, result) {
+  if (!hasLearningTestWritingIssues(originalText, result)) return null;
+
+  return normalizeLearningFeedback({
+    correctedText: result?.correctedText || originalText,
+    errors: result?.errors || []
+  });
+}
+
+function hasLearningTestWritingIssues(originalText, result) {
+  const errors = Array.isArray(result?.errors) ? result.errors : [];
+  if (errors.length) return true;
+
+  const corrected = normalizeTextForLearningComparison(result?.correctedText || "");
+  const original = normalizeTextForLearningComparison(originalText);
+  return Boolean(corrected && original && corrected !== original);
+}
+
+function normalizeTextForLearningComparison(value) {
+  return cleanMessageText(value)
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+async function checkLearningTestWriting(text, room) {
+  const language = getRoomLanguage(room);
+  const languageName = language?.name || "o idioma-alvo da sala";
+  const systemPrompt = `Voce e um avaliador de escrita para um app de aprendizado de idiomas chamado AstroChat.
+O usuario deve escrever em ${languageName}.
+Verifique se a frase esta no idioma-alvo, com ortografia, gramatica e uso natural suficientes para chat.
+Se houver erro, retorne a frase corrigida em ${languageName}; nao traduza para o idioma nativo do usuario.
+Se estiver correta, retorne correctedText igual ao texto original e errors como lista vazia.
+Responda em JSON valido no formato: {"correctedText":"...","errors":[{"original":"...","correction":"...","explanation":"..."}]}`;
+  const content = await askPollinationsForJson(systemPrompt, text, 0.15, 700);
+  const parsed = parseJsonFromAi(content);
+  const correctedText = cleanMessageText(parsed?.correctedText || parsed?.corrected || "", 800) || text;
+  const errors = Array.isArray(parsed?.errors)
+    ? parsed.errors.map((item) => ({
+      original: sanitizeText(item?.original || item?.word || item?.erro || "", 80),
+      correction: sanitizeText(item?.correction || item?.correct || item?.correcao || "", 100),
+      explanation: sanitizeText(item?.explanation || item?.reason || item?.explicacao || "", 180)
+    })).filter((item) => item.original || item.correction || item.explanation).slice(0, 8)
+    : [];
+
+  return { correctedText, errors, raw: content };
+}
+
+function normalizeLearningFeedback(feedback) {
+  if (!feedback || typeof feedback !== "object") return null;
+
+  const correctedText = cleanMessageText(feedback.correctedText || feedback.corrected || "", 800);
+  const errors = Array.isArray(feedback.errors)
+    ? feedback.errors.map((item) => ({
+      original: sanitizeText(item?.original || item?.word || item?.erro || "", 80),
+      correction: sanitizeText(item?.correction || item?.correct || item?.correcao || "", 100),
+      explanation: sanitizeText(item?.explanation || item?.reason || item?.explicacao || "", 180)
+    })).filter((item) => item.original || item.correction || item.explanation).slice(0, 8)
+    : [];
+
+  if (!correctedText && !errors.length) return null;
+  return { correctedText, errors };
 }
 
 function openAiAssistModal(mode, originalText) {
@@ -6579,6 +6817,9 @@ function mapMessageSnapshot(messageSnapshot) {
     translatedText: data.translatedText || "",
     targetLanguageCode: data.targetLanguageCode || "",
     targetLanguageName: data.targetLanguageName || "",
+    learningTest: Boolean(data.learningTest),
+    translationDisabled: Boolean(data.translationDisabled),
+    learningFeedback: normalizeLearningFeedback(data.learningFeedback),
     translationError: Boolean(data.translationError),
     replyTo: data.replyTo || null,
     reactions: normalizeMessageReactions(data.reactions),
@@ -6689,6 +6930,10 @@ function createActionButton(className, iconClass, label) {
 
 function isAiRoom(room) {
   return room?.type === AI_ROOM_TYPE;
+}
+
+function isLearningTestMessage(message) {
+  return Boolean(message?.learningTest || message?.translationDisabled);
 }
 
 function getAiRoomId(nick) {
