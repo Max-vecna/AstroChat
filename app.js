@@ -433,7 +433,7 @@ roomForm.addEventListener("submit", async (event) => {
     appShell.classList.add("chat-open");
   } catch (error) {
     console.error("Erro ao criar sala no Firebase.", error);
-    window.alert("Não foi possível criar a sala no Firebase. Verifique se o Realtime Database e o login anônimo estão ativos no console do Firebase.");
+    window.alert("Não foi possível criar a sala agora. Verifique sua conexão e tente novamente.");
   } finally {
     setFormBusy(roomForm, false);
   }
@@ -469,7 +469,7 @@ messageForm.addEventListener("submit", async (event) => {
       await sendFirebaseMessage(activeRoom, text, {
         skipTranslation: true,
         learningTest: true,
-        learningFeedback: createLearningFeedbackFromResult(text, feedbackResult)
+        learningFeedback: await createLearningFeedbackFromResult(text, feedbackResult, activeRoom)
       });
     } else {
       await sendFirebaseMessage(activeRoom, text);
@@ -481,7 +481,7 @@ messageForm.addEventListener("submit", async (event) => {
       window.alert("Nao foi possivel verificar sua frase agora. Verifique sua conexao e tente novamente.");
       return;
     }
-    window.alert("Não foi possível enviar a mensagem. Verifique sua conexão e as regras do Realtime Database.");
+    window.alert("Não foi possível enviar a mensagem. Verifique sua conexão e tente novamente.");
   } finally {
     setMessageSending(false);
   }
@@ -541,9 +541,7 @@ async function handleClearActiveChat() {
 
   if (!requireFirebaseConnection("limpar conversa")) return;
 
-  const confirmClear = window.confirm(`Limpar todas as mensagens da sala ${getRoomDisplayName(activeRoom)}?
-
-Essa ação remove as mensagens salvas no Realtime Database.`);
+  const confirmClear = window.confirm(`Limpar todas as mensagens da sala ${getRoomDisplayName(activeRoom)}?`);
   if (!confirmClear) return;
 
   try {
@@ -552,7 +550,7 @@ Essa ação remove as mensagens salvas no Realtime Database.`);
     showToast("Conversa limpa", "As mensagens desta sala foram removidas.");
   } catch (error) {
     console.error("Erro ao limpar mensagens.", error);
-    window.alert("Não foi possível limpar as mensagens. Verifique as regras do Realtime Database.");
+    window.alert("Não foi possível limpar as mensagens agora. Verifique sua conexão e tente novamente.");
   }
 }
 
@@ -620,7 +618,7 @@ inviteForm.addEventListener("submit", async (event) => {
     renderAll();
   } catch (error) {
     console.error("Erro ao enviar convites.", error);
-    window.alert("Não foi possível enviar os convites. Verifique as regras do Realtime Database.");
+    window.alert("Não foi possível enviar os convites agora. Verifique sua conexão e tente novamente.");
   } finally {
     setFormBusy(inviteForm, false);
   }
@@ -645,7 +643,7 @@ addFriendForm?.addEventListener("submit", async (event) => {
   if (!requireFirebaseConnection("adicionar amigos")) return;
 
   if (!firebaseReady || !currentFirebaseUid) {
-    window.alert("O Firebase ainda não está conectado. Tente novamente em alguns segundos.");
+    window.alert("A conexão ainda está sendo preparada. Tente novamente em alguns segundos.");
     return;
   }
 
@@ -654,7 +652,7 @@ addFriendForm?.addEventListener("submit", async (event) => {
     const foundUsers = await findFirebaseUsersByNick(nick);
 
     if (!foundUsers.length) {
-      window.alert("Não encontrei esse nick no Firebase. Peça para a pessoa entrar no app pelo menos uma vez usando esse nick.");
+      window.alert("Não encontrei esse nick. Peça para a pessoa entrar no app pelo menos uma vez usando esse nick.");
       return;
     }
 
@@ -679,7 +677,7 @@ addFriendForm?.addEventListener("submit", async (event) => {
     }
   } catch (error) {
     console.error("Erro ao buscar usuário no Firebase.", error);
-    window.alert("Não foi possível buscar esse usuário. Verifique sua conexão e as regras do Realtime Database.");
+    window.alert("Não foi possível buscar esse usuário agora. Verifique sua conexão e tente novamente.");
   } finally {
     setFormBusy(addFriendForm, false);
   }
@@ -713,7 +711,7 @@ installButton.addEventListener("click", async () => {
 async function handleSessionLogout() {
   if (logoutInProgress) return;
 
-  const shouldLogout = window.confirm("Sair do AstroChat e voltar para a tela de login?\n\nSuas salas, amigos e dados do Firebase nao serao apagados.");
+  const shouldLogout = window.confirm("Sair do AstroChat e voltar para a tela de login?\n\nSuas salas e amigos não serão apagados.");
   if (!shouldLogout) return;
 
   logoutInProgress = true;
@@ -747,7 +745,7 @@ async function handleEraseUserAndLogout() {
   if (!requireFirebaseConnection("apagar este usuario")) return;
 
   const shouldErase = window.confirm(
-    "Apagar este usuario do navegador e do Firebase?\n\n" +
+    "Apagar este usuario e sair do AstroChat?\n\n" +
     "Isso remove o perfil, nick, convites, conversas privadas para todos e tira voce dos grupos. " +
     "Nos grupos criados por voce, outro membro vira criador; se nao houver outro membro, a sala e apagada."
   );
@@ -755,18 +753,18 @@ async function handleEraseUserAndLogout() {
 
   logoutInProgress = true;
   setLogoutButtonsBusy(true);
-  showToast("Apagando usuario...", "Limpando dados do navegador e vinculos no Firebase.");
+  showToast("Apagando usuario...", "Removendo seu perfil e vínculos do app.");
 
   try {
     await clearCurrentTypingStatus();
     await eraseCurrentUserFromFirebaseSystem();
     await deleteCurrentFirebaseAuthUserOrSignOut();
     finishFullLogout();
-    showToast("Usuario apagado", "Dados locais, perfil, convites e vinculos do Firebase foram limpos.");
+    showToast("Usuario apagado", "Seu perfil, convites e vínculos foram removidos.");
   } catch (error) {
     console.error("Erro ao apagar usuario.", error);
     const leaveOnly = window.confirm(
-      "Nao consegui apagar tudo no Firebase agora.\n\n" +
+      "Nao consegui apagar tudo agora.\n\n" +
       "Deseja apenas sair sem apagar os dados?"
     );
 
@@ -1092,7 +1090,7 @@ function setupConnectivityDetection() {
     firebaseReady = false;
     firebaseInitPromise = null;
     updateUserHeader("Offline");
-    showToast("Sem internet", "Acoes que usam Firebase, traducao ou IA ficam pausadas ate a conexao voltar.");
+    showToast("Sem internet", "Ações online, tradução e IA ficam pausadas até a conexão voltar.");
   });
 }
 
@@ -1183,12 +1181,12 @@ function requireInternet(actionText = "fazer esta acao") {
   return false;
 }
 
-function requireFirebaseConnection(actionText = "usar o Firebase") {
+function requireFirebaseConnection(actionText = "usar recursos online") {
   if (!requireInternet(actionText)) return false;
 
   if (firebaseReady && currentFirebaseUid) return true;
 
-  showToast("Conectando ao Firebase", "Aguarde alguns segundos e tente novamente.");
+  showToast("Conectando...", "Aguarde alguns segundos e tente novamente.");
   return false;
 }
 
@@ -1236,7 +1234,7 @@ async function enterApp() {
   } catch (error) {
     if (isMissingFirebaseUserDataError(error)) {
       const attemptedNick = currentUser?.nick || "";
-      console.warn("Dados do usuario nao encontrados no Firebase. Limpando navegador.", error);
+      console.warn("Dados do usuario nao encontrados. Limpando navegador.", error);
       await clearBrowserDataForMissingFirebaseUser(attemptedNick);
       return;
     }
@@ -1254,10 +1252,10 @@ async function enterApp() {
       return;
     }
 
-    console.error("Falha ao iniciar Firebase.", error);
+    console.error("Falha ao iniciar sessao online.", error);
     firebaseReady = false;
     firebaseInitPromise = null;
-    updateUserHeader("Offline · usando sala IA local");
+    updateUserHeader("Offline · sala IA local");
   }
 
   renderAll(true);
@@ -1406,7 +1404,7 @@ function isMissingFirebaseUserDataError(error) {
 async function ensureCurrentFirebaseUserHasStoredData() {
   if (!currentFirebaseUid || !currentUser?.nick) return;
 
-  showSplash("Verificando dados do usuario no Firebase...");
+  showSplash("Verificando seus dados...");
 
   const nickPathKey = toDatabaseKey(normalize(currentUser.nick));
   const [
@@ -1449,7 +1447,7 @@ async function clearBrowserDataForMissingFirebaseUser(attemptedNick = "") {
   showLogin();
 
   if (nickInput) nickInput.value = attemptedNick;
-  showToast("Sessao removida", "Nao encontrei dados desse usuario no Firebase. O navegador foi limpo para este site.");
+  showToast("Sessao removida", "Não encontrei dados desse usuário. O navegador foi limpo para este site.");
 }
 
 function clearSiteLocalStorage() {
@@ -1605,7 +1603,7 @@ function attachFirebaseListeners(options = {}) {
     },
     (error) => {
       console.error("Erro ao escutar salas no Realtime Database.", error);
-      updateUserHeader("Realtime Database sem permissão para salas");
+      updateUserHeader("Sem permissão para carregar salas");
     }
   );
 
@@ -1805,7 +1803,7 @@ function subscribeToActiveRoomMessages() {
     },
     (error) => {
       console.error("Erro ao escutar mensagens no Realtime Database.", error);
-      window.alert("Não foi possível carregar as mensagens desta sala. Verifique as regras do Realtime Database.");
+      window.alert("Não foi possível carregar as mensagens desta sala agora.");
     }
   );
 }
@@ -2911,7 +2909,12 @@ function createMessageElement(message, animated = false, options = {}) {
 
   const hydration = getCurrentUserHydration(message);
   const hasHydration = Boolean(hydration?.text);
+  const learningFeedback = getVisibleLearningFeedback(message);
   let translatedBlock = null;
+
+  if (learningFeedback) {
+    bubble.classList.add("has-learning-feedback");
+  }
 
   const topBar = createMessageTopBar(message, isMine, !groupedWithPrevious);
   if (topBar) bubble.appendChild(topBar);
@@ -2937,7 +2940,6 @@ function createMessageElement(message, animated = false, options = {}) {
     bubble.appendChild(text);
   }
 
-  const learningFeedback = getVisibleLearningFeedback(message);
   if (learningFeedback) {
     bubble.appendChild(createLearningFeedbackElement(learningFeedback));
   }
@@ -3254,13 +3256,16 @@ function createLearningTestMessageFooterTools(message) {
 }
 
 function getVisibleLearningFeedback(message) {
-  if (!isLearningTestMessage(message) || !isMessageMine(message)) return null;
+  if (!isLearningTestMessage(message)) return null;
   return normalizeLearningFeedback(message?.learningFeedback);
 }
 
 function createLearningFeedbackElement(feedback) {
   const box = document.createElement("article");
   const corrected = cleanMessageText(feedback?.correctedText || "", 800);
+  const nativeTranslation = cleanMessageText(feedback?.nativeTranslationText || "", 800);
+  const targetLabel = feedback?.targetLanguageLabel || feedback?.targetLanguageName || "idioma da sala";
+  const nativeLabel = feedback?.nativeLanguageLabel || feedback?.nativeLanguageName || "seu idioma";
   const errors = Array.isArray(feedback?.errors) ? feedback.errors : [];
 
   box.className = "learning-feedback-card";
@@ -3271,10 +3276,16 @@ function createLearningFeedbackElement(feedback) {
   box.appendChild(head);
 
   if (corrected) {
-    const correctedText = document.createElement("p");
-    correctedText.className = "learning-feedback-corrected";
-    correctedText.textContent = corrected;
-    box.appendChild(correctedText);
+    box.appendChild(createLearningFeedbackTextBlock(`Correção em ${targetLabel}`, corrected, "learning-feedback-corrected"));
+  }
+
+  if (nativeTranslation) {
+    box.appendChild(createLearningFeedbackTextBlock(`Tradução em ${nativeLabel}`, nativeTranslation, "learning-feedback-native"));
+  } else if (feedback?.nativeTranslationError) {
+    const unavailable = document.createElement("small");
+    unavailable.className = "learning-feedback-native-unavailable";
+    unavailable.textContent = `Nao consegui traduzir a correcao para ${nativeLabel} agora.`;
+    box.appendChild(unavailable);
   }
 
   if (errors.length) {
@@ -3282,12 +3293,16 @@ function createLearningFeedbackElement(feedback) {
     list.className = "learning-feedback-errors";
     errors.forEach((error) => {
       const item = document.createElement("div");
+      const explanationEnglish = error.explanationEnglish || error.explanation || "";
+      const explanationTranslation = error.explanationTranslation || "";
       item.className = "learning-feedback-error";
       item.innerHTML = `
         <strong>${escapeHtml(error.original || "Trecho")}</strong>
         <i class="fa-solid fa-arrow-right" aria-hidden="true"></i>
         <span>${escapeHtml(error.correction || "Correção sugerida")}</span>
-        ${error.explanation ? `<small>${escapeHtml(error.explanation)}</small>` : ""}
+        ${explanationEnglish ? `<small class="learning-error-explanation-en">${escapeHtml(explanationEnglish)}</small>` : ""}
+        ${explanationTranslation ? `<small class="learning-error-explanation-native">${escapeHtml(explanationTranslation)}</small>` : ""}
+        ${!explanationTranslation && error.explanationTranslationError ? `<small class="learning-error-explanation-native">Nao consegui traduzir esta explicacao agora.</small>` : ""}
       `;
       list.appendChild(item);
     });
@@ -3295,6 +3310,18 @@ function createLearningFeedbackElement(feedback) {
   }
 
   return box;
+}
+
+function createLearningFeedbackTextBlock(label, text, className) {
+  const wrap = document.createElement("div");
+  const title = document.createElement("small");
+  const value = document.createElement("p");
+
+  wrap.className = `learning-feedback-text-block ${className}`;
+  title.textContent = label;
+  value.textContent = text;
+  wrap.append(title, value);
+  return wrap;
 }
 
 function createTranslatedMessageBlock(message, isMine) {
@@ -3733,7 +3760,7 @@ async function reactToMessage(message, emoji) {
     });
   } catch (error) {
     console.error("Erro ao reagir à mensagem.", error);
-    showToast("Não foi possível reagir", "Verifique sua conexão com o Firebase.");
+    showToast("Não foi possível reagir", "Verifique sua conexão e tente novamente.");
   }
 }
 
@@ -3815,7 +3842,7 @@ async function hydrateReceivedMessage(message) {
   if (!requireFirebaseConnection("hidratar mensagem")) return;
 
   if (!firebaseReady || !currentFirebaseUid) {
-    showToast("Firebase desconectado", "Não foi possível hidratar a mensagem agora.");
+    showToast("Conexão indisponível", "Não foi possível hidratar a mensagem agora.");
     return;
   }
 
@@ -3868,7 +3895,7 @@ async function dehydrateMessage(message) {
   if (!requireFirebaseConnection("desidratar mensagem")) return;
 
   if (!firebaseReady || !currentFirebaseUid) {
-    showToast("Firebase desconectado", "Não foi possível desidratar a mensagem agora.");
+    showToast("Conexão indisponível", "Não foi possível desidratar a mensagem agora.");
     return;
   }
 
@@ -4293,7 +4320,7 @@ function renderFriendsList() {
       const item = document.createElement("article");
       const activeRoom = getActiveRoom();
       const canInvite = Boolean(friend.uid && activeRoom && !isAiRoom(activeRoom) && !isFriendAlreadyLinkedToActiveRoom(friend.uid));
-      const label = friend.uid ? "Usuário Firebase" : "Amigo local antigo · adicione novamente pelo nick";
+      const label = friend.uid ? "Usuário encontrado" : "Amigo antigo · adicione novamente pelo nick";
 
       item.className = "friend-item";
       item.innerHTML = `
@@ -4600,7 +4627,7 @@ async function inviteFriendToActiveRoom(friend) {
   }
 
   if (!friend.uid) {
-    window.alert("Esse amigo é local antigo. Adicione o nick novamente para vincular ao Firebase.");
+    window.alert("Esse amigo é antigo. Adicione o nick novamente para atualizar o cadastro.");
     return;
   }
 
@@ -4615,7 +4642,7 @@ async function inviteFriendToActiveRoom(friend) {
     renderAll();
   } catch (error) {
     console.error("Erro ao convidar amigo.", error);
-    window.alert("Não foi possível enviar o convite pelo Firebase.");
+    window.alert("Não foi possível enviar o convite agora.");
   }
 }
 
@@ -4659,7 +4686,7 @@ async function acceptInvite(inviteId) {
     subscribeToActiveRoomMessages();
   } catch (error) {
     console.error("Erro ao aceitar convite.", error);
-    window.alert("Não foi possível aceitar o convite. Verifique as regras do Realtime Database.");
+    window.alert("Não foi possível aceitar o convite agora.");
   }
 }
 
@@ -5050,13 +5077,13 @@ function openPrivateModal() {
   if (!requireFirebaseConnection("criar conversas privadas")) return;
 
   if (!firebaseReady) {
-    window.alert("Aguarde a conexão com o Firebase antes de criar conversas privadas.");
+    window.alert("Aguarde a conexão ficar pronta antes de criar conversas privadas.");
     return;
   }
 
   privateNickInput.value = "";
   privateSearchResult.innerHTML = "";
-  if (privateLanguageSelect) privateLanguageSelect.value = "";
+  if (privateLanguageSelect) privateLanguageSelect.value = "en";
   renderPrivateFriendsList();
   privateModal.hidden = false;
   privateModal.setAttribute("aria-hidden", "false");
@@ -5138,7 +5165,7 @@ Isso remove a amizade para os dois usuários e apaga a conversa privada inteira.
     showToast("Amigo removido", `${friend.nick} foi removido dos dois usuários e a conversa privada foi apagada.`);
   } catch (error) {
     console.error("Erro ao remover amigo para os dois usuários.", error);
-    window.alert("Não foi possível remover o amigo agora. Verifique a conexão e as regras do Realtime Database.");
+    window.alert("Não foi possível remover o amigo agora. Verifique sua conexão e tente novamente.");
   }
 }
 
@@ -5350,7 +5377,7 @@ async function searchFirebaseUserAndRender({ nick, resultContainer, actionLabel,
   }
 
   if (!firebaseReady || !currentFirebaseUid) {
-    showInlineResult(resultContainer, "O Firebase ainda não está conectado.");
+    showInlineResult(resultContainer, "A conexão ainda está sendo preparada.");
     return;
   }
 
@@ -5805,7 +5832,7 @@ function openRoomModal() {
   if (!requireFirebaseConnection("criar salas")) return;
 
   if (!firebaseReady) {
-    window.alert("Aguarde a conexão com o Firebase antes de criar salas entre usuários.");
+    window.alert("Aguarde a conexão ficar pronta antes de criar salas entre usuários.");
     return;
   }
 
@@ -6080,7 +6107,7 @@ function getRoomStatus(room) {
 
   if (isPrivateRoom(room)) {
     const languagePart = language?.code ? ` · tradução para ${language.label}` : "";
-    return `Conversa privada · Firebase${languagePart}`;
+    return `Conversa privada${languagePart}`;
   }
 
   const languagePart = language?.code ? ` · tradução para ${language.label}` : "";
@@ -6088,10 +6115,10 @@ function getRoomStatus(room) {
   const pendingCount = invites.filter((invite) => invite.roomId === room.id && invite.status === "pendente").length;
 
   if (pendingCount > 0) {
-    return `Firebase${languagePart} · ${memberCount} participante${memberCount > 1 ? "s" : ""} · ${pendingCount} convite${pendingCount > 1 ? "s" : ""} pendente${pendingCount > 1 ? "s" : ""}`;
+    return `Sala online${languagePart} · ${memberCount} participante${memberCount > 1 ? "s" : ""} · ${pendingCount} convite${pendingCount > 1 ? "s" : ""} pendente${pendingCount > 1 ? "s" : ""}`;
   }
 
-  return `Firebase${languagePart} · ${memberCount} participante${memberCount > 1 ? "s" : ""}`;
+  return `Sala online${languagePart} · ${memberCount} participante${memberCount > 1 ? "s" : ""}`;
 }
 
 function getLastTime(room) {
@@ -6148,13 +6175,68 @@ function getComposerLanguageHint(room = getActiveRoom()) {
   return "sem idioma-alvo definido; preserve o idioma original do texto";
 }
 
-function createLearningFeedbackFromResult(originalText, result) {
+async function createLearningFeedbackFromResult(originalText, result, room) {
   if (!hasLearningTestWritingIssues(originalText, result)) return null;
 
+  const correctedText = cleanMessageText(result?.correctedText || originalText, 800) || originalText;
+  const roomLanguage = getRoomLanguage(room);
+  const nativeLanguage = getCurrentNativeLanguage();
+  const errors = await translateLearningErrorExplanations(result?.errors || [], nativeLanguage);
+  let nativeTranslationText = "";
+  let nativeTranslationError = false;
+
+  if (correctedText) {
+    try {
+      nativeTranslationText = roomLanguage?.code && nativeLanguage?.code === roomLanguage.code
+        ? correctedText
+        : await translateMessageText(correctedText, nativeLanguage);
+    } catch (error) {
+      console.warn("Nao foi possivel traduzir a correcao para o idioma nativo.", error);
+      nativeTranslationError = true;
+    }
+  }
+
   return normalizeLearningFeedback({
-    correctedText: result?.correctedText || originalText,
-    errors: result?.errors || []
+    correctedText,
+    nativeTranslationText,
+    nativeTranslationError,
+    targetLanguageCode: roomLanguage?.code || "",
+    targetLanguageName: roomLanguage?.name || "",
+    targetLanguageLabel: roomLanguage?.label || "",
+    nativeLanguageCode: nativeLanguage?.code || "",
+    nativeLanguageName: nativeLanguage?.name || "",
+    nativeLanguageLabel: nativeLanguage?.label || "",
+    errors
   });
+}
+
+async function translateLearningErrorExplanations(errors, nativeLanguage) {
+  const normalizedErrors = Array.isArray(errors) ? errors : [];
+  const shouldTranslate = nativeLanguage?.code && nativeLanguage.code !== "en";
+
+  return Promise.all(normalizedErrors.map(async (error) => {
+    const explanationEnglish = sanitizeText(error?.explanationEnglish || error?.explanation || error?.reason || "", 240);
+    let explanationTranslation = sanitizeText(error?.explanationTranslation || error?.explanationNativeTranslation || "", 240);
+    let explanationTranslationError = false;
+
+    if (explanationEnglish && shouldTranslate && !explanationTranslation) {
+      try {
+        explanationTranslation = sanitizeText(await translateMessageText(explanationEnglish, nativeLanguage), 240);
+      } catch (translationError) {
+        console.warn("Nao foi possivel traduzir a explicacao da correcao.", translationError);
+        explanationTranslationError = true;
+      }
+    } else if (explanationEnglish && !shouldTranslate) {
+      explanationTranslation = explanationEnglish;
+    }
+
+    return {
+      ...error,
+      explanationEnglish,
+      explanationTranslation,
+      explanationTranslationError
+    };
+  }));
 }
 
 function hasLearningTestWritingIssues(originalText, result) {
@@ -6179,8 +6261,9 @@ async function checkLearningTestWriting(text, room) {
 O usuario deve escrever em ${languageName}.
 Verifique se a frase esta no idioma-alvo, com ortografia, gramatica e uso natural suficientes para chat.
 Se houver erro, retorne a frase corrigida em ${languageName}; nao traduza para o idioma nativo do usuario.
+Explique cada erro em ingles simples no campo explanationEnglish.
 Se estiver correta, retorne correctedText igual ao texto original e errors como lista vazia.
-Responda em JSON valido no formato: {"correctedText":"...","errors":[{"original":"...","correction":"...","explanation":"..."}]}`;
+Responda em JSON valido no formato: {"correctedText":"...","errors":[{"original":"...","correction":"...","explanationEnglish":"..."}]}`;
   const content = await askPollinationsForJson(systemPrompt, text, 0.15, 700);
   const parsed = parseJsonFromAi(content);
   const correctedText = cleanMessageText(parsed?.correctedText || parsed?.corrected || "", 800) || text;
@@ -6188,8 +6271,8 @@ Responda em JSON valido no formato: {"correctedText":"...","errors":[{"original"
     ? parsed.errors.map((item) => ({
       original: sanitizeText(item?.original || item?.word || item?.erro || "", 80),
       correction: sanitizeText(item?.correction || item?.correct || item?.correcao || "", 100),
-      explanation: sanitizeText(item?.explanation || item?.reason || item?.explicacao || "", 180)
-    })).filter((item) => item.original || item.correction || item.explanation).slice(0, 8)
+      explanationEnglish: sanitizeText(item?.explanationEnglish || item?.explanation || item?.reason || item?.explicacao || "", 240)
+    })).filter((item) => item.original || item.correction || item.explanationEnglish).slice(0, 8)
     : [];
 
   return { correctedText, errors, raw: content };
@@ -6199,16 +6282,30 @@ function normalizeLearningFeedback(feedback) {
   if (!feedback || typeof feedback !== "object") return null;
 
   const correctedText = cleanMessageText(feedback.correctedText || feedback.corrected || "", 800);
+  const nativeTranslationText = cleanMessageText(feedback.nativeTranslationText || feedback.translationText || "", 800);
   const errors = Array.isArray(feedback.errors)
     ? feedback.errors.map((item) => ({
       original: sanitizeText(item?.original || item?.word || item?.erro || "", 80),
       correction: sanitizeText(item?.correction || item?.correct || item?.correcao || "", 100),
-      explanation: sanitizeText(item?.explanation || item?.reason || item?.explicacao || "", 180)
-    })).filter((item) => item.original || item.correction || item.explanation).slice(0, 8)
+      explanationEnglish: sanitizeText(item?.explanationEnglish || item?.explanation || item?.reason || item?.explicacao || "", 240),
+      explanationTranslation: sanitizeText(item?.explanationTranslation || item?.explanationNativeTranslation || "", 240),
+      explanationTranslationError: Boolean(item?.explanationTranslationError)
+    })).filter((item) => item.original || item.correction || item.explanationEnglish || item.explanationTranslation).slice(0, 8)
     : [];
 
-  if (!correctedText && !errors.length) return null;
-  return { correctedText, errors };
+  if (!correctedText && !nativeTranslationText && !errors.length) return null;
+  return {
+    correctedText,
+    nativeTranslationText,
+    nativeTranslationError: Boolean(feedback.nativeTranslationError),
+    targetLanguageCode: sanitizeText(feedback.targetLanguageCode || "", 16),
+    targetLanguageName: sanitizeText(feedback.targetLanguageName || "", 48),
+    targetLanguageLabel: sanitizeText(feedback.targetLanguageLabel || "", 48),
+    nativeLanguageCode: sanitizeText(feedback.nativeLanguageCode || "", 16),
+    nativeLanguageName: sanitizeText(feedback.nativeLanguageName || "", 48),
+    nativeLanguageLabel: sanitizeText(feedback.nativeLanguageLabel || "", 48),
+    errors
+  };
 }
 
 function openAiAssistModal(mode, originalText) {
@@ -7475,7 +7572,18 @@ async function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
 
   try {
-    await navigator.serviceWorker.register("service-worker.js");
+    const hadController = Boolean(navigator.serviceWorker.controller);
+    let refreshingForUpdate = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (!hadController) return;
+      if (refreshingForUpdate) return;
+      refreshingForUpdate = true;
+      window.location.reload();
+    });
+
+    const registration = await navigator.serviceWorker.register("service-worker.js", { updateViaCache: "none" });
+    registration.waiting?.postMessage({ type: "SKIP_WAITING" });
+    await registration.update();
   } catch (error) {
     console.warn("Service worker não registrado.", error);
   }

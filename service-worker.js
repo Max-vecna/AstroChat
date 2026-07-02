@@ -1,4 +1,4 @@
-const CACHE_NAME = "astrochat-cache-v61";
+const CACHE_NAME = "astrochat-cache-v65";
 const APP_FILES = [
   "./",
   "./index.html",
@@ -18,19 +18,34 @@ self.addEventListener("install", (event) => {
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
-    caches.keys().then((keys) =>
-      Promise.all(
-        keys
-          .filter((key) => key !== CACHE_NAME)
-          .map((key) => caches.delete(key))
-      )
-    )
+    activateLatestWorker()
   );
-  self.clients.claim();
 });
+
+async function activateLatestWorker() {
+  const keys = await caches.keys();
+  const oldKeys = keys.filter((key) => key.startsWith("astrochat-cache-") && key !== CACHE_NAME);
+
+  await Promise.all(oldKeys.map((key) => caches.delete(key)));
+  await self.clients.claim();
+
+  if (!oldKeys.length) return;
+
+  const clientList = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+  await Promise.all(
+    clientList
+      .filter((client) => client.url && new URL(client.url).origin === self.location.origin)
+      .map((client) => client.navigate(client.url))
+  );
+}
 
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
+
+  if (isAppShellRequest(event.request)) {
+    event.respondWith(fetchAndRefreshCache(event.request).catch(() => caches.match(event.request).then((cached) => cached || caches.match("./index.html"))));
+    return;
+  }
 
   event.respondWith(
     caches.match(event.request).then((cachedResponse) => {
@@ -53,6 +68,29 @@ self.addEventListener("fetch", (event) => {
     })
   );
 });
+
+self.addEventListener("message", (event) => {
+  if (event.data?.type === "SKIP_WAITING") {
+    self.skipWaiting();
+  }
+});
+
+function isAppShellRequest(request) {
+  const url = new URL(request.url);
+  if (url.origin !== self.location.origin) return false;
+
+  return url.pathname.endsWith("/") ||
+    ["/index.html", "/app.js", "/style.css", "/manifest.json", "/service-worker.js"].some((path) => url.pathname.endsWith(path));
+}
+
+async function fetchAndRefreshCache(request) {
+  const response = await fetch(request, { cache: "reload" });
+  if (response && response.ok) {
+    const cache = await caches.open(CACHE_NAME);
+    await cache.put(request, response.clone());
+  }
+  return response;
+}
 
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();

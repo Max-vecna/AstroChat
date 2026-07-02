@@ -103,7 +103,7 @@
         <i class="fa-solid fa-arrow-right-to-bracket" aria-hidden="true"></i>
       </button>
 
-      <small>O nick, idioma nativo e ícone ficam salvos neste navegador. O app usa login anônimo do Firebase para sincronizar salas.</small>
+      <small>Seu perfil fica salvo neste navegador para você entrar mais rápido.</small>
     </form>
   </section>
 
@@ -168,7 +168,7 @@
         <div class="avatar" id="activeAvatar">S</div>
         <div class="chat-title-wrap">
           <strong id="activeName">Sala</strong>
-          <span id="activeStatus">Sala Firebase</span>
+          <span id="activeStatus">Sala online</span>
         </div>
         <button class="icon-button live-typing-button" id="liveTypingButton" hidden title="Compartilhar texto digitado em tempo real" aria-label="Compartilhar texto digitado em tempo real">
           <i class="fa-solid fa-keyboard" aria-hidden="true"></i>
@@ -233,7 +233,7 @@
       <header class="modal-header">
         <div>
           <strong>Criar Sala</strong>
-          <span>Monte uma sala sincronizada pelo Firebase e escolha amigos para convidar.</span>
+          <span>Monte uma sala e escolha amigos para convidar.</span>
         </div>
         <button class="icon-button" id="closeRoomModalButton" type="button" aria-label="Fechar">
           <i class="fa-solid fa-xmark" aria-hidden="true"></i>
@@ -258,7 +258,7 @@
         <option value="ko">Coreano</option>
         <option value="zh">Chinês</option>
       </select>
-      <small class="field-hint">As mensagens serão traduzidas pelo aparelho de quem envia antes de serem salvas no Firebase.</small>
+      <small class="field-hint">Escolha um idioma para ajudar a conversa e os estudos.</small>
 
       <div class="modal-section-title room-friends-heading">
         <span>Convidar amigos</span>
@@ -338,7 +338,7 @@
       <label for="privateLanguageSelect">Idioma para tradução da conversa</label>
       <select id="privateLanguageSelect">
         <option value="">Sem tradução automática</option>
-        <option value="en">Inglês</option>
+        <option value="en" selected>Inglês</option>
         <option value="es">Espanhol</option>
         <option value="fr">Francês</option>
         <option value="it">Italiano</option>
@@ -347,7 +347,7 @@
         <option value="ko">Coreano</option>
         <option value="zh">Chinês</option>
       </select>
-      <small class="field-hint">Nas conversas privadas, quem envia traduz antes de salvar no Firebase. Quem recebe apenas escuta a mensagem já traduzida.</small>
+      <small class="field-hint">Escolha se esta conversa terá apoio de tradução.</small>
 
       <form class="mini-form modal-mini-form" id="privateSearchForm">
         <label for="privateNickInput">Buscar usuário por nick</label>
@@ -373,7 +373,7 @@
       <header class="modal-header">
         <div>
           <strong>Notificações</strong>
-          <span>Pedidos e convites recebidos ou enviados pelo Firebase.</span>
+          <span>Pedidos, convites e mensagens novas aparecem aqui.</span>
         </div>
         <button class="icon-button" id="closeNotificationsButton" type="button" aria-label="Fechar notificações">
           <i class="fa-solid fa-xmark" aria-hidden="true"></i>
