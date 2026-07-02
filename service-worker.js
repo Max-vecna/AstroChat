@@ -1,4 +1,4 @@
-const CACHE_NAME = "astrochat-cache-v35";
+const CACHE_NAME = "astrochat-cache-v37";
 const APP_FILES = [
   "./",
   "./index.html",

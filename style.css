@@ -3494,6 +3494,61 @@ button:disabled,
   border-radius: 20px;
 }
 
+.profile-notification-action {
+  width: calc(100% - 40px);
+  min-height: 58px;
+  margin: 0 20px 16px;
+  padding: 10px 12px;
+  border: 1px solid rgba(157, 255, 224, 0.16);
+  border-radius: 20px;
+  display: grid;
+  grid-template-columns: 42px minmax(0, 1fr);
+  align-items: center;
+  gap: 12px;
+  color: var(--text);
+  background: linear-gradient(135deg, rgba(11, 143, 111, 0.14), rgba(255, 255, 255, 0.04));
+  text-align: left;
+}
+
+.profile-notification-action > i {
+  width: 42px;
+  height: 42px;
+  display: grid;
+  place-items: center;
+  border-radius: 15px;
+  color: #9dffe0;
+  background: rgba(157, 255, 224, 0.11);
+}
+
+.profile-notification-action span,
+.profile-notification-action strong,
+.profile-notification-action small {
+  min-width: 0;
+  display: block;
+}
+
+.profile-notification-action strong {
+  font-size: 0.9rem;
+  line-height: 1.15;
+}
+
+.profile-notification-action small {
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  line-height: 1.3;
+}
+
+.profile-notification-action.is-enabled {
+  border-color: rgba(157, 255, 224, 0.34);
+  background: linear-gradient(135deg, rgba(11, 143, 111, 0.24), rgba(157, 255, 224, 0.08));
+}
+
+.profile-notification-action.is-blocked {
+  border-color: rgba(239, 107, 115, 0.26);
+  background: linear-gradient(135deg, rgba(239, 107, 115, 0.12), rgba(255, 255, 255, 0.035));
+}
+
 .profile-panel-actions {
   padding: 16px 20px;
   border-top: 1px solid rgba(255, 255, 255, 0.075);
@@ -3560,9 +3615,14 @@ button:disabled,
 
   .profile-panel-preview,
   .profile-panel-avatars,
-  .profile-panel-note {
+  .profile-panel-note,
+  .profile-notification-action {
     margin-left: 16px;
     margin-right: 16px;
+  }
+
+  .profile-notification-action {
+    width: calc(100% - 32px);
   }
 
   .profile-panel-actions {
@@ -4055,9 +4115,14 @@ button:disabled,
 
   .profile-panel-preview,
   .profile-panel-avatars,
-  .profile-panel-note {
+  .profile-panel-note,
+  .profile-notification-action {
     margin-left: 14px;
     margin-right: 14px;
+  }
+
+  .profile-notification-action {
+    width: calc(100% - 28px);
   }
 
   .profile-panel-actions {

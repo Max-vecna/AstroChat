@@ -124,6 +124,8 @@ let notificationAudioContext = null;
 let notificationSoundUnlocked = false;
 let notificationSoundPrimed = false;
 let pendingNotificationSound = false;
+let activeToastElement = null;
+let activeToastTimer = null;
 const roomMessagesById = new Map();
 const renderedMessageIdsByRoom = new Map();
 const revealedOriginalMessageIds = new Set();
@@ -194,6 +196,8 @@ const profileAvatarSelectPreview = document.querySelector("#profileAvatarSelectP
 const closeProfileSettingsButton = document.querySelector("#closeProfileSettingsButton");
 const cancelProfileSettingsButton = document.querySelector("#cancelProfileSettingsButton");
 const resetLocalProfileButton = document.querySelector("#resetLocalProfileButton");
+const profileNotificationsButton = document.querySelector("#profileNotificationsButton");
+const profileNotificationsStatus = document.querySelector("#profileNotificationsStatus");
 const roomItemTemplate = document.querySelector("#roomItemTemplate");
 
 const createRoomButton = document.querySelector("#createRoomButton");
@@ -293,13 +297,11 @@ loginForm.addEventListener("submit", async (event) => {
   saveUser(currentUser);
   activeRoomId = null;
   await enterApp();
-  await requestBrowserNotificationPermission();
 });
 
 notificationsButton.addEventListener("click", async () => {
   unlockNotificationSound();
   openNotificationsModal();
-  await requestBrowserNotificationPermission();
 
   const totalNotifications = getPendingReceivedInvites().length + getTotalUnreadCount();
   if (!totalNotifications) {
@@ -342,6 +344,7 @@ resetLocalProfileButton?.addEventListener("click", () => {
   closeProfileSettingsModal();
   handleLogout();
 });
+profileNotificationsButton?.addEventListener("click", handleProfileNotificationsButtonClick);
 
 profileNickInput?.addEventListener("input", updateProfileSettingsPreview);
 profileNativeLanguageSelect?.addEventListener("change", updateProfileSettingsPreview);
@@ -1664,6 +1667,7 @@ function openProfileSettingsModal() {
   if (profileNativeLanguageSelect) profileNativeLanguageSelect.value = getCurrentNativeLanguage().code;
   selectProfileSpaceAvatar(currentUser.avatarIcon || DEFAULT_SPACE_AVATAR_ICON);
   updateProfileSettingsPreview();
+  updateProfileNotificationsButtonState();
   profileSettingsModal.hidden = false;
   profileSettingsModal.setAttribute("aria-hidden", "false");
 }
@@ -1672,6 +1676,106 @@ function closeProfileSettingsModal() {
   if (!profileSettingsModal) return;
   profileSettingsModal.hidden = true;
   profileSettingsModal.setAttribute("aria-hidden", "true");
+}
+
+async function handleProfileNotificationsButtonClick() {
+  unlockNotificationSound();
+
+  if (!profileNotificationsButton) return;
+
+  const status = getBrowserNotificationStatus();
+  if (status === "unsupported") {
+    showToast("Notificações indisponíveis", "Este navegador não oferece notificações do sistema para este app.");
+    updateProfileNotificationsButtonState();
+    return;
+  }
+
+  if (status === "insecure") {
+    showToast("Ambiente sem permissão", "Abra o app em HTTPS ou localhost para habilitar notificações.");
+    updateProfileNotificationsButtonState();
+    return;
+  }
+
+  if (status === "granted") {
+    showToast("Notificações já ativadas", "O AstroChat já pode mostrar avisos deste navegador.");
+    updateProfileNotificationsButtonState();
+    return;
+  }
+
+  if (status === "denied") {
+    showToast("Notificações bloqueadas", "Libere as notificações nas configurações do navegador para este site.");
+    updateProfileNotificationsButtonState();
+    return;
+  }
+
+  profileNotificationsButton.disabled = true;
+  updateProfileNotificationsButtonState("Solicitando permissão...");
+
+  const permission = await requestBrowserNotificationPermission();
+  updateProfileNotificationsButtonState();
+
+  if (permission === "granted") {
+    showToast("Notificações ativadas", "Você receberá avisos de mensagens, convites e pedidos.");
+  } else if (permission === "denied") {
+    showToast("Permissão negada", "As notificações ficaram bloqueadas neste navegador.");
+  } else {
+    showToast("Permissão pendente", "Você pode habilitar as notificações por este botão quando quiser.");
+  }
+}
+
+function getBrowserNotificationStatus() {
+  if (!("Notification" in window)) return "unsupported";
+  if (!window.isSecureContext && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") return "insecure";
+  return Notification.permission;
+}
+
+function updateProfileNotificationsButtonState(statusOverride = "") {
+  if (!profileNotificationsButton || !profileNotificationsStatus) return;
+
+  const status = getBrowserNotificationStatus();
+  const labels = {
+    unsupported: {
+      title: "Notificações indisponíveis",
+      detail: "Este navegador não oferece notificações do sistema.",
+      icon: "fa-solid fa-bell-slash",
+      disabled: true
+    },
+    insecure: {
+      title: "Notificações indisponíveis",
+      detail: "Use HTTPS ou localhost para pedir permissão.",
+      icon: "fa-solid fa-lock",
+      disabled: true
+    },
+    granted: {
+      title: "Notificações ativadas",
+      detail: "Mensagens, convites e pedidos podem gerar avisos.",
+      icon: "fa-solid fa-bell",
+      disabled: false
+    },
+    denied: {
+      title: "Notificações bloqueadas",
+      detail: "Libere nas configurações do navegador para este site.",
+      icon: "fa-solid fa-bell-slash",
+      disabled: false
+    },
+    default: {
+      title: "Habilitar notificações",
+      detail: "Clique para permitir avisos do AstroChat.",
+      icon: "fa-solid fa-bell",
+      disabled: false
+    }
+  };
+
+  const config = labels[status] || labels.default;
+  const icon = profileNotificationsButton.querySelector("i");
+  const title = profileNotificationsButton.querySelector("strong");
+
+  if (icon) icon.className = config.icon;
+  if (title) title.textContent = config.title;
+  profileNotificationsStatus.textContent = statusOverride || config.detail;
+  profileNotificationsButton.disabled = Boolean(statusOverride) ? true : config.disabled;
+  profileNotificationsButton.classList.toggle("is-enabled", status === "granted");
+  profileNotificationsButton.classList.toggle("is-blocked", status === "denied" || status === "unsupported" || status === "insecure");
 }
 
 async function saveProfileSettings(event) {
@@ -6154,15 +6258,16 @@ function playNotificationSound() {
 }
 
 async function requestBrowserNotificationPermission() {
-  if (!("Notification" in window)) return;
-  if (!window.isSecureContext && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") return;
+  if (!("Notification" in window)) return "unsupported";
+  if (!window.isSecureContext && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") return "insecure";
   if (Notification.permission === "default") {
     try {
-      await Notification.requestPermission();
+      return await Notification.requestPermission();
     } catch (error) {
       console.warn("Permissão de notificação não concedida.", error);
     }
   }
+  return Notification.permission;
 }
 
 function showBrowserNotification(title, body) {
@@ -6180,8 +6285,25 @@ function showBrowserNotification(title, body) {
   }
 }
 
+function dismissToast(toast = activeToastElement) {
+  if (toast && toast !== activeToastElement) {
+    toast.remove();
+    return;
+  }
+
+  if (activeToastTimer) {
+    window.clearTimeout(activeToastTimer);
+    activeToastTimer = null;
+  }
+
+  activeToastElement?.remove();
+  activeToastElement = null;
+}
+
 function showToast(title, message, actionLabel = "", action = null) {
   if (!toastRegion) return;
+
+  dismissToast();
 
   const toast = document.createElement("article");
   toast.className = "toast-card";
@@ -6201,15 +6323,19 @@ function showToast(title, message, actionLabel = "", action = null) {
     actionButton.type = "button";
     actionButton.innerHTML = `<span>${escapeHtml(actionLabel)}</span>`;
     actionButton.addEventListener("click", () => {
-      action();
-      toast.remove();
+      try {
+        action();
+      } finally {
+        dismissToast(toast);
+      }
     });
     toast.appendChild(actionButton);
   }
 
-  toast.querySelector(".icon-button").addEventListener("click", () => toast.remove());
-  toastRegion.appendChild(toast);
-  window.setTimeout(() => toast.remove(), 7000);
+  toast.querySelector(".icon-button").addEventListener("click", () => dismissToast(toast));
+  activeToastElement = toast;
+  toastRegion.replaceChildren(toast);
+  activeToastTimer = window.setTimeout(() => dismissToast(toast), 7000);
 }
 
 function formatStatus(status) {
