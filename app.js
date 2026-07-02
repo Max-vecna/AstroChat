@@ -3079,18 +3079,27 @@ function createHydratedGooeyDrop(direction, travel) {
   drop.style.setProperty("--opacity", opacity.toFixed(3));
   drop.style.setProperty("--drift", `${drift.toFixed(2)}px`);
   drop.style.setProperty("--travel", `${travel}px`);
+  drop.style.setProperty("--travel-up", `${(travel * -1).toFixed(2)}px`);
+  drop.style.setProperty("--travel-up-squash", `${(travel * -1 - 6).toFixed(2)}px`);
+  drop.style.setProperty("--travel-up-end", `${(travel * -1 - 12).toFixed(2)}px`);
+  drop.style.setProperty("--dehydrate-shrink", `${(travel * 0.12).toFixed(2)}px`);
+  drop.style.setProperty("--dehydrate-lift", `${(travel * -0.08).toFixed(2)}px`);
   return drop;
 }
 
-const DEHYDRATE_EFFECT_DURATION_MS = 760;
+const DEHYDRATE_EFFECT_DURATION_MS = 980;
 const DEHYDRATED_DUST_SETTINGS = Object.freeze({
-  count: 22,
-  minSize: 2,
-  maxSize: 5,
-  maxDelay: 0.18,
-  minRise: 16,
-  maxRise: 48,
-  maxDrift: 42
+  count: 20,
+  minSize: 5,
+  maxSize: 12,
+  maxDelay: 0.28,
+  minRise: 12,
+  maxRise: 34,
+  maxDrift: 30,
+  minBlur: 4,
+  maxBlur: 11,
+  minScale: 0.12,
+  maxScale: 0.38
 });
 
 function startMessageDehydrateEffect(message) {
@@ -3141,11 +3150,17 @@ function getRenderedMessageBubble(message) {
 
 function createDehydratedDustEffectElement() {
   const effect = document.createElement("div");
+  const sun = document.createElement("div");
+  const heat = document.createElement("div");
   const layer = document.createElement("div");
 
   effect.className = "dehydrated-dust-effect";
   effect.setAttribute("aria-hidden", "true");
+  sun.className = "dehydrated-sun";
+  heat.className = "dehydrated-heat-haze";
   layer.className = "dehydrated-dust-layer";
+  effect.appendChild(sun);
+  effect.appendChild(heat);
   effect.appendChild(layer);
   return effect;
 }
@@ -3173,14 +3188,25 @@ function createDehydratedDustGrain() {
   const rise =
     DEHYDRATED_DUST_SETTINGS.minRise +
     Math.random() * (DEHYDRATED_DUST_SETTINGS.maxRise - DEHYDRATED_DUST_SETTINGS.minRise);
+  const blur =
+    DEHYDRATED_DUST_SETTINGS.minBlur +
+    Math.random() * (DEHYDRATED_DUST_SETTINGS.maxBlur - DEHYDRATED_DUST_SETTINGS.minBlur);
+  const scale =
+    DEHYDRATED_DUST_SETTINGS.minScale +
+    Math.random() * (DEHYDRATED_DUST_SETTINGS.maxScale - DEHYDRATED_DUST_SETTINGS.minScale);
 
-  grain.className = "dehydrated-dust-grain";
+  grain.className = "dehydrated-dust-grain dehydrated-dry-drop";
   grain.style.setProperty("--size", `${size.toFixed(2)}px`);
+  grain.style.setProperty("--drop-height", `${(size * 1.32).toFixed(2)}px`);
   grain.style.setProperty("--left", `${left.toFixed(2)}%`);
   grain.style.setProperty("--top", `${top.toFixed(2)}%`);
   grain.style.setProperty("--delay", `${delay.toFixed(3)}s`);
   grain.style.setProperty("--drift-x", `${driftX.toFixed(2)}px`);
+  grain.style.setProperty("--drift-mid", `${(driftX * 0.45).toFixed(2)}px`);
   grain.style.setProperty("--rise", `${rise.toFixed(2)}px`);
+  grain.style.setProperty("--rise-mid", `${(rise * 0.45).toFixed(2)}px`);
+  grain.style.setProperty("--blur-end", `${blur.toFixed(2)}px`);
+  grain.style.setProperty("--scale-end", scale.toFixed(2));
   return grain;
 }
 

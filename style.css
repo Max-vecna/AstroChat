@@ -3329,49 +3329,50 @@ button:disabled,
   }
 
   88% {
-    transform: translateX(calc(-50% + var(--drift))) translateY(calc(var(--travel) * -1)) scale(1);
+    transform: translateX(calc(-50% + var(--drift))) translateY(var(--travel-up)) scale(1);
     opacity: var(--opacity);
   }
 
   96% {
-    transform: translateX(calc(-50% + var(--drift))) translateY(calc((var(--travel) * -1) - 6px)) scale(1.15, 0.78);
+    transform: translateX(calc(-50% + var(--drift))) translateY(var(--travel-up-squash)) scale(1.15, 0.78);
     opacity: var(--opacity);
   }
 
   100% {
-    transform: translateX(calc(-50% + var(--drift))) translateY(calc((var(--travel) * -1) - 12px)) scale(1.3, 0.55);
+    transform: translateX(calc(-50% + var(--drift))) translateY(var(--travel-up-end)) scale(1.3, 0.55);
     opacity: 0;
   }
 }
 
 .bubble.is-dehydrating-message {
-  animation: dehydratedBubbleDry 760ms ease-in forwards;
+  --dehydrate-duration: 980ms;
+  animation: dehydratedBubbleDry var(--dehydrate-duration) ease-in forwards;
 }
 
 .bubble.is-dehydrating-message .hydrated-block,
 .bubble.is-dehydrating-message .message-footer,
 .bubble.is-dehydrating-message .reply-quote,
 .bubble.is-dehydrating-message .message-bubble-top {
-  animation: dehydratedContentFade 760ms ease-in forwards;
+  animation: dehydratedContentFade var(--dehydrate-duration) ease-in forwards;
 }
 
 .bubble.is-dehydrating-message .hydrated-water-effect {
   opacity: 0.28;
-  animation: dehydratedWaterFade 760ms ease-in forwards;
+  animation: dehydratedWaterFade var(--dehydrate-duration) ease-in forwards;
 }
 
 .bubble.is-dehydrating-message .hydrated-pool-top {
   transform-origin: center top;
-  animation: dehydratedPoolTop 760ms cubic-bezier(0.5, 0, 0.9, 0.45) forwards;
+  animation: dehydratedPoolTop var(--dehydrate-duration) cubic-bezier(0.5, 0, 0.9, 0.45) forwards;
 }
 
 .bubble.is-dehydrating-message .hydrated-pool-bottom {
   transform-origin: center bottom;
-  animation: dehydratedPoolBottom 760ms cubic-bezier(0.5, 0, 0.9, 0.45) forwards;
+  animation: dehydratedPoolBottom var(--dehydrate-duration) cubic-bezier(0.5, 0, 0.9, 0.45) forwards;
 }
 
 .bubble.is-dehydrating-message .hydrated-gooey-drop {
-  animation: dehydratedDropVanish 760ms ease-in forwards !important;
+  animation: dehydratedDropVanish var(--dehydrate-duration) ease-in forwards !important;
   animation-delay: 0s;
   animation-iteration-count: 1;
 }
@@ -3388,6 +3389,65 @@ button:disabled,
 .dehydrated-dust-layer {
   position: absolute;
   inset: 0;
+  z-index: 2;
+}
+
+.dehydrated-sun {
+  position: absolute;
+  top: 7px;
+  right: 9px;
+  width: 34px;
+  height: 34px;
+  border-radius: 999px;
+  opacity: 0;
+  transform: translate(14px, -14px) scale(0.35) rotate(-12deg);
+  animation: dehydratedSunRise var(--dehydrate-duration) cubic-bezier(0.2, 0.9, 0.2, 1) forwards;
+  filter: drop-shadow(0 6px 12px rgba(245, 158, 11, 0.28));
+  z-index: 3;
+}
+
+.dehydrated-sun::before,
+.dehydrated-sun::after {
+  content: "";
+  position: absolute;
+  border-radius: inherit;
+}
+
+.dehydrated-sun::before {
+  inset: -10px;
+  background: repeating-conic-gradient(
+    from 8deg,
+    rgba(255, 214, 94, 0.88) 0deg 10deg,
+    transparent 10deg 24deg
+  );
+  opacity: 0.7;
+  animation: dehydratedSunRays var(--dehydrate-duration) ease-out forwards;
+}
+
+.dehydrated-sun::after {
+  inset: 0;
+  background:
+    radial-gradient(circle at 32% 28%, rgba(255, 255, 225, 0.96) 0 20%, transparent 21%),
+    radial-gradient(circle at 50% 50%, #ffe27a 0 35%, #fbbf24 58%, #f97316 100%);
+  box-shadow:
+    0 0 0 1px rgba(255, 247, 173, 0.45) inset,
+    0 0 22px rgba(251, 191, 36, 0.42);
+}
+
+.dehydrated-heat-haze {
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    circle at calc(100% - 25px) 25px,
+    rgba(255, 217, 116, 0.28) 0 12%,
+    rgba(255, 217, 116, 0.12) 27%,
+    transparent 58%
+  );
+  opacity: 0;
+  filter: blur(2px);
+  transform: scale(0.8);
+  animation: dehydratedHeatHaze var(--dehydrate-duration) ease-out forwards;
+  z-index: 1;
 }
 
 .dehydrated-dust-grain {
@@ -3395,13 +3455,18 @@ button:disabled,
   left: var(--left);
   top: var(--top);
   width: var(--size);
-  height: var(--size);
-  border-radius: 999px;
-  background: rgba(255, 225, 168, 0.82);
-  box-shadow: 0 0 8px rgba(255, 205, 116, 0.32);
+  height: var(--drop-height);
+  border-radius: 999px 999px 70% 70%;
+  background:
+    radial-gradient(circle at 34% 24%, rgba(255, 255, 255, 0.96) 0 18%, transparent 19%),
+    linear-gradient(160deg, rgba(125, 211, 252, 0.9), rgba(45, 169, 235, 0.66) 56%, rgba(255, 213, 128, 0.72));
+  box-shadow:
+    0 0 7px rgba(45, 169, 235, 0.24),
+    0 0 11px rgba(255, 205, 116, 0.18);
   opacity: 0;
-  transform: translate(-50%, -50%) scale(0.45);
-  animation: dehydratedDustFloat 760ms ease-out forwards;
+  filter: blur(0);
+  transform: translate(-50%, -50%) scale(0.65) rotate(8deg);
+  animation: dehydratedDropDry var(--dehydrate-duration) cubic-bezier(0.36, 0, 0.28, 1) forwards;
   animation-delay: var(--delay);
 }
 
@@ -3471,32 +3536,99 @@ button:disabled,
   0% {
     transform: translateX(-50%) translateY(0) scale(1);
     opacity: var(--opacity);
+    filter: blur(0);
   }
 
   55% {
-    transform: translateX(calc(-50% + var(--drift))) translateY(calc(var(--travel) * 0.12)) scale(0.58);
+    transform: translateX(calc(-50% + var(--drift))) translateY(var(--dehydrate-shrink)) scale(0.58);
     opacity: 0.58;
+    filter: blur(2px);
   }
 
   100% {
-    transform: translateX(calc(-50% + var(--drift))) translateY(calc(var(--travel) * -0.08)) scale(0.12);
+    transform: translateX(calc(-50% + var(--drift))) translateY(var(--dehydrate-lift)) scale(0.12);
     opacity: 0;
+    filter: blur(8px);
   }
 }
 
-@keyframes dehydratedDustFloat {
+@keyframes dehydratedSunRise {
   0% {
     opacity: 0;
-    transform: translate(-50%, -50%) scale(0.4);
+    transform: translate(14px, -14px) scale(0.35) rotate(-12deg);
+    filter: blur(2px) drop-shadow(0 6px 12px rgba(245, 158, 11, 0.18));
   }
 
-  22% {
-    opacity: 0.82;
+  38% {
+    opacity: 1;
+    transform: translate(0, 0) scale(1.06) rotate(0deg);
+    filter: blur(0) drop-shadow(0 8px 16px rgba(245, 158, 11, 0.35));
+  }
+
+  100% {
+    opacity: 0.9;
+    transform: translate(0, 0) scale(1) rotate(0deg);
+    filter: blur(0) drop-shadow(0 7px 14px rgba(245, 158, 11, 0.28));
+  }
+}
+
+@keyframes dehydratedSunRays {
+  0% {
+    transform: scale(0.6) rotate(-18deg);
+    opacity: 0;
+  }
+
+  42% {
+    transform: scale(1.08) rotate(5deg);
+    opacity: 0.72;
+  }
+
+  100% {
+    transform: scale(1) rotate(18deg);
+    opacity: 0.48;
+  }
+}
+
+@keyframes dehydratedHeatHaze {
+  0% {
+    opacity: 0;
+    transform: scale(0.78);
+  }
+
+  40% {
+    opacity: 0.85;
+    transform: scale(1);
   }
 
   100% {
     opacity: 0;
-    transform: translate(calc(-50% + var(--drift-x)), calc(-50% - var(--rise))) scale(1);
+    transform: scale(1.18);
+  }
+}
+
+@keyframes dehydratedDropDry {
+  0% {
+    opacity: 0;
+    filter: blur(0);
+    transform: translate(-50%, -50%) scale(0.6) rotate(8deg);
+  }
+
+  18% {
+    opacity: 0.92;
+    filter: blur(0);
+    transform: translate(-50%, -50%) scale(1) rotate(8deg);
+  }
+
+  58% {
+    opacity: 0.58;
+    filter: blur(2px);
+    transform: translate(calc(-50% + var(--drift-mid)), calc(-50% - var(--rise-mid))) scale(0.72) rotate(18deg);
+  }
+
+  100% {
+    opacity: 0;
+    filter: blur(var(--blur-end));
+    transform: translate(calc(-50% + var(--drift-x)), calc(-50% - var(--rise))) scale(var(--scale-end)) rotate(28deg);
   }
 }
 
