@@ -138,6 +138,7 @@ const roomMessagesById = new Map();
 const renderedMessageIdsByRoom = new Map();
 const revealedOriginalMessageIds = new Set();
 const hydratingMessageIds = new Set();
+const dehydratingMessageIds = new Set();
 const hydratedTranslationCache = new Map();
 const remoteRoomMap = new Map();
 const roomMetadataUnsubscribers = new Map();
@@ -800,6 +801,7 @@ function resetRuntimeSessionState() {
   renderedMessageIdsByRoom.clear();
   revealedOriginalMessageIds.clear();
   hydratingMessageIds.clear();
+  dehydratingMessageIds.clear();
   hydratedTranslationCache.clear();
   remoteRoomMap.clear();
   inviteSnapshotBuckets.received = [];
@@ -2962,6 +2964,108 @@ function createHydratedGooeyDrop(direction, travel) {
   return drop;
 }
 
+const DEHYDRATE_EFFECT_DURATION_MS = 760;
+const DEHYDRATED_DUST_SETTINGS = Object.freeze({
+  count: 22,
+  minSize: 2,
+  maxSize: 5,
+  maxDelay: 0.18,
+  minRise: 16,
+  maxRise: 48,
+  maxDrift: 42
+});
+
+function startMessageDehydrateEffect(message) {
+  const bubble = getRenderedMessageBubble(message);
+  if (!bubble) {
+    return {
+      ready: Promise.resolve(),
+      cancel() {},
+      complete() {}
+    };
+  }
+
+  bubble.classList.add("is-dehydrating-message");
+  bubble.querySelector(".dehydrated-dust-effect")?.remove();
+
+  const dustEffect = createDehydratedDustEffectElement();
+  bubble.appendChild(dustEffect);
+  populateDehydratedDust(dustEffect);
+
+  let cleanupTimer = window.setTimeout(cleanup, DEHYDRATE_EFFECT_DURATION_MS + 6000);
+  const ready = new Promise((resolve) => window.setTimeout(resolve, DEHYDRATE_EFFECT_DURATION_MS));
+
+  function cleanup() {
+    if (cleanupTimer) {
+      window.clearTimeout(cleanupTimer);
+      cleanupTimer = 0;
+    }
+    dustEffect.remove();
+    bubble.classList.remove("is-dehydrating-message");
+  }
+
+  return {
+    ready,
+    cancel: cleanup,
+    complete() {
+      if (cleanupTimer) window.clearTimeout(cleanupTimer);
+      cleanupTimer = window.setTimeout(cleanup, 1200);
+    }
+  };
+}
+
+function getRenderedMessageBubble(message) {
+  const messageId = message?.id || "";
+  if (!messageId || !messages) return null;
+
+  return messages.querySelector(`.message-row[data-message-id="${CSS.escape(messageId)}"] .bubble`);
+}
+
+function createDehydratedDustEffectElement() {
+  const effect = document.createElement("div");
+  const layer = document.createElement("div");
+
+  effect.className = "dehydrated-dust-effect";
+  effect.setAttribute("aria-hidden", "true");
+  layer.className = "dehydrated-dust-layer";
+  effect.appendChild(layer);
+  return effect;
+}
+
+function populateDehydratedDust(effect) {
+  const layer = effect?.querySelector(".dehydrated-dust-layer");
+  if (!layer) return;
+
+  layer.innerHTML = "";
+
+  for (let index = 0; index < DEHYDRATED_DUST_SETTINGS.count; index += 1) {
+    layer.appendChild(createDehydratedDustGrain());
+  }
+}
+
+function createDehydratedDustGrain() {
+  const grain = document.createElement("span");
+  const size =
+    DEHYDRATED_DUST_SETTINGS.minSize +
+    Math.random() * (DEHYDRATED_DUST_SETTINGS.maxSize - DEHYDRATED_DUST_SETTINGS.minSize);
+  const left = 8 + Math.random() * 84;
+  const top = 16 + Math.random() * 68;
+  const delay = Math.random() * DEHYDRATED_DUST_SETTINGS.maxDelay;
+  const driftX = (Math.random() - 0.5) * DEHYDRATED_DUST_SETTINGS.maxDrift;
+  const rise =
+    DEHYDRATED_DUST_SETTINGS.minRise +
+    Math.random() * (DEHYDRATED_DUST_SETTINGS.maxRise - DEHYDRATED_DUST_SETTINGS.minRise);
+
+  grain.className = "dehydrated-dust-grain";
+  grain.style.setProperty("--size", `${size.toFixed(2)}px`);
+  grain.style.setProperty("--left", `${left.toFixed(2)}%`);
+  grain.style.setProperty("--top", `${top.toFixed(2)}%`);
+  grain.style.setProperty("--delay", `${delay.toFixed(3)}s`);
+  grain.style.setProperty("--drift-x", `${driftX.toFixed(2)}px`);
+  grain.style.setProperty("--rise", `${rise.toFixed(2)}px`);
+  return grain;
+}
+
 let hydratedGooeyResizeFrame = 0;
 window.addEventListener("resize", () => {
   if (hydratedGooeyResizeFrame) cancelAnimationFrame(hydratedGooeyResizeFrame);
@@ -3212,12 +3316,19 @@ function openMessageMenu(message, row, bubble) {
   const activeRoom = getActiveRoom();
   const hasGlobalHydration = Boolean(message?.hydration?.text || getCurrentUserHydration(message)?.text);
   const canHydrate = !isMessageMine(message) && activeRoom && !isAiRoom(activeRoom) && Boolean(message?.id);
+  const hydrateActionKey = activeRoom && message?.id ? `${activeRoom.id}:${message.id}` : "";
 
   if (hasGlobalHydration && activeRoom && !isAiRoom(activeRoom) && Boolean(message?.id)) {
-    menu.appendChild(createMenuButton("fa-solid fa-droplet-slash", "Desidratar", () => dehydrateMessage(message)));
+    const isDehydrating = hydrateActionKey && dehydratingMessageIds.has(hydrateActionKey);
+    const dehydrateAction = createMenuButton(
+      isDehydrating ? "fa-solid fa-spinner fa-spin" : "fa-solid fa-droplet-slash",
+      isDehydrating ? "Desidratando..." : "Desidratar",
+      () => dehydrateMessage(message)
+    );
+    dehydrateAction.disabled = isDehydrating;
+    menu.appendChild(dehydrateAction);
   } else if (canHydrate) {
-    const hydrateKey = `${activeRoom.id}:${message.id}`;
-    const isHydrating = hydratingMessageIds.has(hydrateKey);
+    const isHydrating = hydratingMessageIds.has(hydrateActionKey);
     const hydrateAction = createMenuButton(
       isHydrating ? "fa-solid fa-spinner fa-spin" : "fa-solid fa-droplet",
       isHydrating ? "Hidratando..." : "Hidratar",
@@ -3592,16 +3703,26 @@ async function dehydrateMessage(message) {
     return;
   }
 
+  const dehydrateKey = `${activeRoom.id}:${message.id}`;
+  if (dehydratingMessageIds.has(dehydrateKey)) return;
+
+  dehydratingMessageIds.add(dehydrateKey);
   closeMessageMenus();
+  const dehydrateEffect = startMessageDehydrateEffect(message);
 
   try {
+    await dehydrateEffect.ready;
     await update(ref(db), {
       [`rooms/${activeRoom.id}/messages/${message.id}/hydration`]: null
     });
+    dehydrateEffect.complete();
     showToast("Mensagem desidratada", "A mensagem voltou ao formato original para todos nesta conversa.");
   } catch (error) {
+    dehydrateEffect.cancel();
     console.error("Erro ao desidratar mensagem.", error);
     showToast("Não foi possível desidratar", "Verifique sua conexão e tente novamente.");
+  } finally {
+    dehydratingMessageIds.delete(dehydrateKey);
   }
 }
 
