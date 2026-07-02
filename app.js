@@ -1,6 +1,7 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
   getAuth,
+  deleteUser,
   onAuthStateChanged,
   signInAnonymously,
   signOut
@@ -14,6 +15,7 @@ import {
   push,
   query,
   ref,
+  runTransaction,
   serverTimestamp,
   update
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
@@ -46,6 +48,8 @@ const AI_ROOM_TYPE = "language-ai";
 const USER_ROOM_TYPE = "user-room";
 const PRIVATE_ROOM_TYPE = "private-room";
 const FRIEND_REQUEST_TYPE = "friend-request";
+const NICK_TAKEN_ERROR_CODE = "nick-taken";
+const MISSING_FIREBASE_USER_DATA_ERROR_CODE = "missing-firebase-user-data";
 const AI_TEACHER_NAME = "Professor IA";
 const POLLINATIONS_CHAT_ENDPOINT = "https://text.pollinations.ai/openai";
 const POLLINATIONS_TEXT_ENDPOINT = "https://text.pollinations.ai/";
@@ -283,20 +287,42 @@ loginForm.addEventListener("submit", async (event) => {
     return;
   }
 
-  const nativeLanguage = getSelectedNativeLanguage(nativeLanguageSelect?.value || "pt");
-  currentUser = {
-    nick,
-    avatar: getInitials(nick),
-    avatarIcon: getSelectedSpaceAvatarIcon(),
-    nativeLanguageCode: nativeLanguage.code,
-    nativeLanguageName: nativeLanguage.name,
-    nativeLanguageLabel: nativeLanguage.label,
-    createdAt: Date.now()
-  };
+  if (!requireInternet("validar este nick")) return;
 
-  saveUser(currentUser);
-  activeRoomId = null;
-  await enterApp();
+  const nativeLanguage = getSelectedNativeLanguage(nativeLanguageSelect?.value || "pt");
+  setFormBusy(loginForm, true);
+
+  try {
+    await ensureFirebaseIdentity();
+    await reserveNickForCurrentFirebaseUser(nick);
+
+    currentUser = {
+      nick,
+      avatar: getInitials(nick),
+      avatarIcon: getSelectedSpaceAvatarIcon(),
+      nativeLanguageCode: nativeLanguage.code,
+      nativeLanguageName: nativeLanguage.name,
+      nativeLanguageLabel: nativeLanguage.label,
+      createdAt: Date.now()
+    };
+
+    saveUser(currentUser);
+    activeRoomId = null;
+    await enterApp();
+  } catch (error) {
+    currentUser = null;
+    localStorage.removeItem(USER_STORAGE_KEY);
+    firebaseInitPromise = null;
+
+    if (isNickTakenError(error)) {
+      showToast("Nick em uso", "Escolha outro nick. Esse ja esta sendo usado por outro usuario.");
+    } else {
+      console.warn("Nao foi possivel validar o nick.", error);
+      showToast("Nao consegui validar", "Verifique sua conexao e tente entrar novamente.");
+    }
+  } finally {
+    setFormBusy(loginForm, false);
+  }
 });
 
 notificationsButton.addEventListener("click", async () => {
@@ -342,7 +368,7 @@ profileSettingsModal?.addEventListener("click", (event) => {
 profileSettingsForm?.addEventListener("submit", saveProfileSettings);
 resetLocalProfileButton?.addEventListener("click", () => {
   closeProfileSettingsModal();
-  handleLogout();
+  handleEraseUserAndLogout();
 });
 profileNotificationsButton?.addEventListener("click", handleProfileNotificationsButtonClick);
 
@@ -355,7 +381,7 @@ profileAvatarSelect?.addEventListener("change", () => {
 });
 spaceAvatarSelect?.addEventListener("change", updateLoginAvatarPreview);
 
-logoutButton.addEventListener("click", handleLogout);
+logoutButton.addEventListener("click", handleSessionLogout);
 
 createRoomButton.addEventListener("click", openRoomModal);
 emptyCreateRoomButton.addEventListener("click", openRoomModal);
@@ -656,58 +682,93 @@ installButton.addEventListener("click", async () => {
   installButton.hidden = true;
 });
 
-async function handleLogout() {
+async function handleSessionLogout() {
   if (logoutInProgress) return;
 
-  const shouldLogout = window.confirm("Sair do AstroChat e voltar para a tela de login?");
+  const shouldLogout = window.confirm("Sair do AstroChat e voltar para a tela de login?\n\nSuas salas, amigos e dados do Firebase nao serao apagados.");
   if (!shouldLogout) return;
 
-  const canEraseCloud = Boolean(firebaseReady && currentFirebaseUid);
-  const shouldEraseCloud = canEraseCloud && window.confirm(
-    "Deseja apagar também este usuário do sistema?\n\n" +
-    "Isso remove seu perfil, nick, convites, conversas privadas para todos e tira você dos grupos. " +
-    "Nos grupos criados por você, outro membro vira criador; se não houver outro membro, a sala é apagada."
-  );
-
   logoutInProgress = true;
-  if (logoutButton) logoutButton.disabled = true;
-  showToast(shouldEraseCloud ? "Removendo usuário..." : "Saindo...", shouldEraseCloud ? "Limpando vínculos no Firebase antes de voltar ao login." : "Limpando dados locais deste navegador.");
+  setLogoutButtonsBusy(true);
+  showToast("Saindo...", "Nenhuma conversa, sala ou amigo sera apagado.");
 
   try {
-    if (shouldEraseCloud) {
-      await eraseCurrentUserFromFirebaseSystem();
-      await safeSignOutFirebase();
-    }
-
-    finishLocalLogout();
-
-    if (shouldEraseCloud) {
-      showToast("Usuário removido", "Perfil, convites, conversas privadas e vínculos foram limpos.");
-    }
+    await clearCurrentTypingStatus();
+    finishSessionLogout();
+    showToast("Voce saiu", "Seus dados foram preservados. Entre novamente para continuar.");
   } catch (error) {
-    console.error("Erro ao sair/remover usuário.", error);
-    const continueLocal = window.confirm(
-      "Não consegui apagar tudo no Firebase agora.\n\n" +
-      "Deseja sair apenas deste navegador mesmo assim?"
-    );
-
-    if (continueLocal) {
-      finishLocalLogout();
-      showToast("Logout local concluído", "Os dados do Firebase podem continuar existindo até você tentar novamente.");
-    } else {
-      showToast("Logout cancelado", "Nada foi apagado localmente.");
-    }
+    console.error("Erro ao sair.", error);
+    showToast("Nao consegui sair", "Tente novamente em alguns segundos.");
   } finally {
     logoutInProgress = false;
-    if (logoutButton) logoutButton.disabled = false;
+    setLogoutButtonsBusy(false);
   }
 }
 
-function finishLocalLogout() {
+function finishFullLogout() {
   detachFirebaseListeners();
   stopSpeaking();
+  closeUserSessionModals();
   clearStoredAstroChatData();
+  resetRuntimeSessionState();
+  showLogin();
+}
 
+async function handleEraseUserAndLogout() {
+  if (logoutInProgress) return;
+  if (!requireFirebaseConnection("apagar este usuario")) return;
+
+  const shouldErase = window.confirm(
+    "Apagar este usuario do navegador e do Firebase?\n\n" +
+    "Isso remove o perfil, nick, convites, conversas privadas para todos e tira voce dos grupos. " +
+    "Nos grupos criados por voce, outro membro vira criador; se nao houver outro membro, a sala e apagada."
+  );
+  if (!shouldErase) return;
+
+  logoutInProgress = true;
+  setLogoutButtonsBusy(true);
+  showToast("Apagando usuario...", "Limpando dados do navegador e vinculos no Firebase.");
+
+  try {
+    await clearCurrentTypingStatus();
+    await eraseCurrentUserFromFirebaseSystem();
+    await deleteCurrentFirebaseAuthUserOrSignOut();
+    finishFullLogout();
+    showToast("Usuario apagado", "Dados locais, perfil, convites e vinculos do Firebase foram limpos.");
+  } catch (error) {
+    console.error("Erro ao apagar usuario.", error);
+    const leaveOnly = window.confirm(
+      "Nao consegui apagar tudo no Firebase agora.\n\n" +
+      "Deseja apenas sair sem apagar os dados?"
+    );
+
+    if (leaveOnly) {
+      finishSessionLogout();
+      showToast("Voce saiu", "Nada foi apagado. Tente apagar o usuario novamente quando a conexao estiver estavel.");
+    } else {
+      showToast("Exclusao cancelada", "Nenhum dado local foi removido.");
+    }
+  } finally {
+    logoutInProgress = false;
+    setLogoutButtonsBusy(false);
+  }
+}
+
+function setLogoutButtonsBusy(isBusy) {
+  if (logoutButton) logoutButton.disabled = isBusy;
+  if (resetLocalProfileButton) resetLocalProfileButton.disabled = isBusy;
+}
+
+function finishSessionLogout() {
+  detachFirebaseListeners();
+  stopSpeaking();
+  closeUserSessionModals();
+  localStorage.removeItem(USER_STORAGE_KEY);
+  resetRuntimeSessionState();
+  showLogin();
+}
+
+function resetRuntimeSessionState() {
   currentUser = null;
   currentFirebaseUser = null;
   currentFirebaseUid = null;
@@ -721,15 +782,32 @@ function finishLocalLogout() {
   replyTarget = null;
   notificationState = normalizeNotificationState({});
   liveTypingByRoom = {};
+  processedFriendRequestIds = {};
   firebaseReady = false;
   firebaseInitPromise = null;
+  aiReplyInProgress = false;
+  pendingRoomInviteFriendIds.clear();
   roomMessagesById.clear();
   renderedMessageIdsByRoom.clear();
   revealedOriginalMessageIds.clear();
   hydratingMessageIds.clear();
+  hydratedTranslationCache.clear();
+  remoteRoomMap.clear();
+  inviteSnapshotBuckets.received = [];
+  inviteSnapshotBuckets.sent = [];
+  appShell.classList.remove("chat-open");
+  if (messageInput) messageInput.disabled = false;
+  if (sendButton) sendButton.disabled = false;
+}
 
-  renderAll(true);
-  showLogin();
+function closeUserSessionModals() {
+  closeNotificationsModal();
+  closeProfileSettingsModal();
+  closeRoomSettingsModal();
+  closePrivateModal();
+  closeRoomModal();
+  closeInviteModal();
+  closeAiAssistModal();
 }
 
 function clearStoredAstroChatData() {
@@ -738,8 +816,17 @@ function clearStoredAstroChatData() {
     FRIENDS_STORAGE_KEY,
     ROOMS_STORAGE_KEY,
     NOTIFICATIONS_STORAGE_KEY,
-    LIVE_TYPING_STORAGE_KEY
+    LIVE_TYPING_STORAGE_KEY,
+    PROCESSED_FRIEND_REQUESTS_STORAGE_KEY
   ].forEach((key) => localStorage.removeItem(key));
+}
+
+function loadLocalSessionData() {
+  rooms = loadFromStorage(ROOMS_STORAGE_KEY, []).filter((room) => room?.type === AI_ROOM_TYPE);
+  friends = loadFromStorage(FRIENDS_STORAGE_KEY, []);
+  notificationState = normalizeNotificationState(loadFromStorage(NOTIFICATIONS_STORAGE_KEY, {}));
+  liveTypingByRoom = loadFromStorage(LIVE_TYPING_STORAGE_KEY, {});
+  processedFriendRequestIds = loadFromStorage(PROCESSED_FRIEND_REQUESTS_STORAGE_KEY, {});
 }
 
 async function safeSignOutFirebase() {
@@ -747,6 +834,22 @@ async function safeSignOutFirebase() {
     await signOut(auth);
   } catch (error) {
     console.warn("Não foi possível encerrar a sessão anônima do Firebase.", error);
+  }
+}
+
+async function deleteCurrentFirebaseAuthUserOrSignOut() {
+  const authUser = auth.currentUser;
+
+  if (!authUser) {
+    await safeSignOutFirebase();
+    return;
+  }
+
+  try {
+    await deleteUser(authUser);
+  } catch (error) {
+    console.warn("Nao foi possivel apagar o usuario anonimo do Firebase Auth. Encerrando a sessao.", error);
+    await safeSignOutFirebase();
   }
 }
 
@@ -772,9 +875,27 @@ async function eraseCurrentUserFromFirebaseSystem() {
   await addInviteCleanupUpdates(updates, uid);
   await addProfileCleanupUpdates(updates, uid);
 
-  if (Object.keys(updates).length) {
-    await update(ref(db), updates);
+  const compactUpdates = compactFirebaseUpdates(updates);
+  if (Object.keys(compactUpdates).length) {
+    await update(ref(db), compactUpdates);
   }
+}
+
+function compactFirebaseUpdates(updates) {
+  const compactEntries = [];
+
+  Object.entries(updates)
+    .sort(([pathA], [pathB]) => pathA.split("/").length - pathB.split("/").length)
+    .forEach(([path, value]) => {
+      const hasAncestor = compactEntries.some(([ancestorPath]) => isFirebaseAncestorPath(ancestorPath, path));
+      if (!hasAncestor) compactEntries.push([path, value]);
+    });
+
+  return Object.fromEntries(compactEntries);
+}
+
+function isFirebaseAncestorPath(parentPath, childPath) {
+  return childPath !== parentPath && childPath.startsWith(`${parentPath}/`);
 }
 
 async function collectCurrentUserRoomIds(uid) {
@@ -884,7 +1005,6 @@ async function addInviteCleanupUpdates(updates, uid) {
     }
   }));
 
-  updates[`userInvites/${uid}`] = null;
 }
 
 async function addProfileCleanupUpdates(updates, uid) {
@@ -908,12 +1028,14 @@ async function addProfileCleanupUpdates(updates, uid) {
   if (knownProfile?.displayName) nickKeys.add(normalize(knownProfile.displayName));
 
   nickKeys.forEach((nickKey) => {
-    if (nickKey) updates[`nickIndex/${toDatabaseKey(nickKey)}/${uid}`] = null;
+    if (!nickKey) return;
+
+    const nickPathKey = toDatabaseKey(nickKey);
+    updates[`nickIndex/${nickPathKey}/${uid}`] = null;
+    updates[`nickOwners/${nickPathKey}`] = null;
   });
 
   updates[`users/${uid}`] = null;
-  updates[`userRooms/${uid}`] = null;
-  updates[`userInvites/${uid}`] = null;
 }
 
 function setupConnectivityDetection() {
@@ -996,12 +1118,33 @@ function showLogin() {
 
 async function enterApp() {
   showSplash("Carregando conversas e dados...");
+  loadLocalSessionData();
   ensureUserAiRoom();
   updateUserHeader("Conectando...");
   renderAll(true);
   try {
     await initFirebaseSession();
   } catch (error) {
+    if (isMissingFirebaseUserDataError(error)) {
+      const attemptedNick = currentUser?.nick || "";
+      console.warn("Dados do usuario nao encontrados no Firebase. Limpando navegador.", error);
+      await clearBrowserDataForMissingFirebaseUser(attemptedNick);
+      return;
+    }
+
+    if (isNickTakenError(error)) {
+      const attemptedNick = currentUser?.nick || "";
+      console.warn("Nick ja esta em uso.", error);
+      localStorage.removeItem(USER_STORAGE_KEY);
+      currentUser = null;
+      firebaseReady = false;
+      firebaseInitPromise = null;
+      showLogin();
+      nickInput.value = attemptedNick;
+      showToast("Nick em uso", "Escolha outro nick. Esse ja esta sendo usado por outro usuario.");
+      return;
+    }
+
     console.error("Falha ao iniciar Firebase.", error);
     firebaseReady = false;
     firebaseInitPromise = null;
@@ -1040,6 +1183,7 @@ async function initFirebaseSession() {
     currentFirebaseUid = user.uid;
     firebaseReady = true;
 
+    await ensureCurrentFirebaseUserHasStoredData();
     await saveFirebaseUserProfile();
     await preloadFirebaseInitialData();
     attachFirebaseListeners({ preserveCachedData: true });
@@ -1108,12 +1252,190 @@ function waitForAuthState() {
   });
 }
 
+async function ensureFirebaseIdentity() {
+  if (!isInternetAvailable()) {
+    throw new Error("Sem internet para validar nick.");
+  }
+
+  let user = currentFirebaseUser || auth.currentUser || await waitForAuthState();
+
+  if (!user) {
+    const credential = await signInAnonymously(auth);
+    user = credential.user;
+  }
+
+  currentFirebaseUser = user;
+  currentFirebaseUid = user.uid;
+  firebaseReady = true;
+  return user;
+}
+
+function createNickTakenError(nick, owner = null) {
+  const error = new Error(`Nick em uso: ${nick}`);
+  error.code = NICK_TAKEN_ERROR_CODE;
+  error.nick = nick;
+  error.owner = owner;
+  return error;
+}
+
+function isNickTakenError(error) {
+  return error?.code === NICK_TAKEN_ERROR_CODE;
+}
+
+function createMissingFirebaseUserDataError(uid, nick) {
+  const error = new Error(`Usuario sem dados no Firebase: ${uid || nick || "desconhecido"}`);
+  error.code = MISSING_FIREBASE_USER_DATA_ERROR_CODE;
+  error.uid = uid;
+  error.nick = nick;
+  return error;
+}
+
+function isMissingFirebaseUserDataError(error) {
+  return error?.code === MISSING_FIREBASE_USER_DATA_ERROR_CODE;
+}
+
+async function ensureCurrentFirebaseUserHasStoredData() {
+  if (!currentFirebaseUid || !currentUser?.nick) return;
+
+  showSplash("Verificando dados do usuario no Firebase...");
+
+  const nickPathKey = toDatabaseKey(normalize(currentUser.nick));
+  const [
+    profileSnapshot,
+    nickOwnerSnapshot,
+    nickIndexSnapshot,
+    roomIndexSnapshot,
+    inviteIndexSnapshot
+  ] = await Promise.all([
+    get(ref(db, `users/${currentFirebaseUid}`)),
+    get(ref(db, `nickOwners/${nickPathKey}`)),
+    get(ref(db, `nickIndex/${nickPathKey}/${currentFirebaseUid}`)),
+    get(ref(db, `userRooms/${currentFirebaseUid}`)),
+    get(ref(db, `userInvites/${currentFirebaseUid}`))
+  ]);
+
+  const nickOwner = nickOwnerSnapshot.val() || null;
+  const hasFirebaseData = profileSnapshot.exists()
+    || nickOwner?.uid === currentFirebaseUid
+    || nickIndexSnapshot.exists()
+    || roomIndexSnapshot.exists()
+    || inviteIndexSnapshot.exists();
+
+  if (!hasFirebaseData) {
+    throw createMissingFirebaseUserDataError(currentFirebaseUid, currentUser.nick);
+  }
+}
+
+async function clearBrowserDataForMissingFirebaseUser(attemptedNick = "") {
+  detachFirebaseListeners();
+  stopSpeaking();
+  closeUserSessionModals();
+
+  await safeSignOutFirebase();
+  clearStoredAstroChatData();
+  clearSiteLocalStorage();
+  clearSiteSessionStorage();
+  await clearSiteCaches();
+  resetRuntimeSessionState();
+  showLogin();
+
+  if (nickInput) nickInput.value = attemptedNick;
+  showToast("Sessao removida", "Nao encontrei dados desse usuario no Firebase. O navegador foi limpo para este site.");
+}
+
+function clearSiteLocalStorage() {
+  try {
+    localStorage.clear();
+  } catch (error) {
+    console.warn("Nao foi possivel limpar localStorage.", error);
+  }
+}
+
+function clearSiteSessionStorage() {
+  try {
+    sessionStorage.clear();
+  } catch (error) {
+    console.warn("Nao foi possivel limpar sessionStorage.", error);
+  }
+}
+
+async function clearSiteCaches() {
+  if (!("caches" in window)) return;
+
+  try {
+    const cacheNames = await caches.keys();
+    await Promise.all(cacheNames.map((cacheName) => caches.delete(cacheName)));
+  } catch (error) {
+    console.warn("Nao foi possivel limpar caches do site.", error);
+  }
+}
+
+async function reserveNickForCurrentFirebaseUser(nick) {
+  if (!currentFirebaseUid) {
+    throw new Error("Sem usuario Firebase para reservar nick.");
+  }
+
+  const nickKey = normalize(nick);
+  if (!nickKey) return;
+
+  const nickPathKey = toDatabaseKey(nickKey);
+  const now = Date.now();
+  let existingOwner = null;
+
+  const result = await runTransaction(
+    ref(db, `nickOwners/${nickPathKey}`),
+    (currentOwner) => {
+      if (!currentOwner || currentOwner.uid === currentFirebaseUid) {
+        return {
+          uid: currentFirebaseUid,
+          nick,
+          nickKey,
+          nickPathKey,
+          updatedAtMillis: now
+        };
+      }
+
+      existingOwner = currentOwner;
+      return;
+    },
+    { applyLocally: false }
+  );
+
+  if (!result.committed) {
+    throw createNickTakenError(nick, existingOwner || result.snapshot?.val() || null);
+  }
+}
+
+async function releaseNickOwnerIfCurrent(nickPathKey) {
+  if (!nickPathKey || !currentFirebaseUid) return;
+
+  try {
+    await runTransaction(
+      ref(db, `nickOwners/${nickPathKey}`),
+      (currentOwner) => {
+        if (!currentOwner || currentOwner.uid === currentFirebaseUid) return null;
+        return currentOwner;
+      },
+      { applyLocally: false }
+    );
+  } catch (error) {
+    console.warn("Nao foi possivel liberar o nick antigo.", error);
+  }
+}
+
 async function saveFirebaseUserProfile() {
   if (!currentFirebaseUid || !currentUser?.nick) return;
 
   const now = Date.now();
   const nickKey = normalize(currentUser.nick);
   const nickPathKey = toDatabaseKey(nickKey);
+  const snapshot = await get(ref(db, `users/${currentFirebaseUid}`));
+  const previousProfile = snapshot.val() || {};
+  const previousNickSource = previousProfile.nickPathKey || previousProfile.nickKey || previousProfile.nick || "";
+  const previousNickPathKey = previousNickSource ? toDatabaseKey(previousNickSource) : "";
+
+  await reserveNickForCurrentFirebaseUser(currentUser.nick);
+
   const profile = {
     uid: currentFirebaseUid,
     nick: currentUser.nick,
@@ -1130,13 +1452,12 @@ async function saveFirebaseUserProfile() {
     lastSeenAtMillis: now
   };
 
-  const snapshot = await get(ref(db, `users/${currentFirebaseUid}`));
   if (!snapshot.exists()) {
     profile.createdAt = serverTimestamp();
     profile.createdAtMillis = now;
   }
 
-  await update(ref(db), {
+  const updates = {
     [`users/${currentFirebaseUid}`]: profile,
     [`nickIndex/${nickPathKey}/${currentFirebaseUid}`]: {
       uid: currentFirebaseUid,
@@ -1150,7 +1471,17 @@ async function saveFirebaseUserProfile() {
       nativeLanguageLabel: profile.nativeLanguageLabel,
       updatedAtMillis: now
     }
-  });
+  };
+
+  if (previousNickPathKey && previousNickPathKey !== nickPathKey) {
+    updates[`nickIndex/${previousNickPathKey}/${currentFirebaseUid}`] = null;
+  }
+
+  await update(ref(db), updates);
+
+  if (previousNickPathKey && previousNickPathKey !== nickPathKey) {
+    await releaseNickOwnerIfCurrent(previousNickPathKey);
+  }
 }
 
 function attachFirebaseListeners(options = {}) {
@@ -1790,8 +2121,26 @@ async function saveProfileSettings(event) {
     return;
   }
 
+  const previousUser = { ...currentUser };
   const previousNick = currentUser.nick;
-  const previousNickPathKey = toDatabaseKey(normalize(previousNick));
+  const nickChanged = normalize(nextNick) !== normalize(previousNick);
+
+  if (nickChanged) {
+    if (!requireInternet("validar este nick")) return;
+
+    try {
+      await ensureFirebaseIdentity();
+      await reserveNickForCurrentFirebaseUser(nextNick);
+    } catch (error) {
+      if (isNickTakenError(error)) {
+        showToast("Nick em uso", "Escolha outro nick. Esse ja esta sendo usado por outro usuario.");
+      } else {
+        console.warn("Nao foi possivel validar o nick.", error);
+        showToast("Nao consegui validar", "Verifique sua conexao e tente salvar novamente.");
+      }
+      return;
+    }
+  }
 
   currentUser = {
     ...currentUser,
@@ -1812,14 +2161,20 @@ async function saveProfileSettings(event) {
   try {
     if (firebaseReady && currentFirebaseUid && requireInternet("sincronizar perfil")) {
       await saveFirebaseUserProfile();
-      if (previousNickPathKey && previousNickPathKey !== toDatabaseKey(normalize(nextNick))) {
-        await update(ref(db), { [`nickIndex/${previousNickPathKey}/${currentFirebaseUid}`]: null });
-      }
       await syncCurrentUserNameIntoLoadedRooms();
     }
     showToast("Perfil atualizado", "Seu nick, ícone espacial e idioma nativo foram salvos.");
     closeProfileSettingsModal();
   } catch (error) {
+    if (isNickTakenError(error)) {
+      currentUser = previousUser;
+      saveUser(currentUser);
+      updateUserHeader();
+      renderAll(true);
+      showToast("Nick em uso", "Escolha outro nick. Esse ja esta sendo usado por outro usuario.");
+      return;
+    }
+
     console.warn("Não foi possível sincronizar perfil no Firebase.", error);
     showToast("Perfil salvo localmente", "Não consegui sincronizar agora, mas o perfil ficou salvo neste navegador.");
     closeProfileSettingsModal();
@@ -2690,6 +3045,13 @@ function positionFloatingMenu(menu, anchor) {
 
 function closeMessageMenus() {
   document.querySelectorAll(".message-menu").forEach((menu) => menu.remove());
+}
+
+function stopSpeaking() {
+  if (!("speechSynthesis" in window)) return;
+
+  window.speechSynthesis.cancel();
+  activeSpeechUtterance = null;
 }
 
 function speakMessage(message) {
