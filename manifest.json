@@ -1,0 +1,25 @@
+{
+  "name": "AstroChat",
+  "short_name": "AstroChat",
+  "description": "AstroChat: bate-papo PWA com tradução, IA de idiomas, amigos e conversas em tempo real.",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#101b20",
+  "theme_color": "#0b8f6f",
+  "orientation": "portrait-primary",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

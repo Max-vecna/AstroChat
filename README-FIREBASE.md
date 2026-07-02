@@ -75,3 +75,7 @@ O botão de três pontos no topo do chat abre o menu da sala:
 - sair/remover sala da própria lista para participantes comuns.
 
 As regras incluídas são para desenvolvimento. Antes de publicar, revise permissões para garantir que só o criador possa excluir salas e remover usuários.
+
+## Remoção de amizade
+
+Ao remover um amigo, o app agora marca o pedido de amizade como `removido`, remove a amizade dos dois usuários localmente quando cada cliente sincroniza, apaga a sala privada `rooms/{roomId}` e remove `userRooms/{uid}/{roomId}` dos dois participantes.

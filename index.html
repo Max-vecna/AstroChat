@@ -1,0 +1,598 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="theme-color" content="#0b8f6f" />
+  <meta name="description" content="AstroChat: PWA de bate-papo com tradução, IA de idiomas, amigos e conversas em tempo real." />
+  <title>AstroChat</title>
+
+  <link rel="manifest" href="manifest.json" />
+  <link rel="icon" href="icons/icon-192.png" />
+  <link rel="apple-touch-icon" href="icons/icon-192.png" />
+  <link
+    rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css"
+    crossorigin="anonymous"
+    referrerpolicy="no-referrer"
+  />
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body class="auth-loading">
+  <noscript>Ative o JavaScript para usar o chat.</noscript>
+
+  <section class="splash-screen" id="splashScreen" aria-live="polite" aria-label="Carregando AstroChat">
+    <div class="splash-content">
+      <div class="splash-logo" aria-hidden="true">
+        <i class="fa-solid fa-meteor"></i>
+      </div>
+      <strong>AstroChat</strong>
+      <span id="splashStatus">Carregando conversas e dados...</span>
+      <div class="splash-loader" aria-hidden="true">
+        <span></span>
+        <span></span>
+        <span></span>
+      </div>
+    </div>
+  </section>
+
+  <section class="login-screen" id="loginScreen" aria-label="Tela de login">
+    <form class="login-card" id="loginForm">
+      <div class="login-logo" aria-hidden="true">
+        <i class="fa-solid fa-meteor"></i>
+      </div>
+      <h1>Entrar no AstroChat</h1>
+      <p>Escolha um nick, um idioma nativo e um ícone espacial para usar no app. Eles serão salvos neste navegador.</p>
+
+      <label for="nickInput">Seu nick</label>
+      <input
+        id="nickInput"
+        type="text"
+        placeholder="Ex: Max"
+        autocomplete="nickname"
+        maxlength="24"
+        required
+      />
+
+      <label for="nativeLanguageSelect">Seu idioma nativo</label>
+      <select id="nativeLanguageSelect" class="native-language-select" autocomplete="language">
+        <option value="pt" selected>Português</option>
+        <option value="en">Inglês</option>
+        <option value="es">Espanhol</option>
+        <option value="fr">Francês</option>
+        <option value="it">Italiano</option>
+        <option value="de">Alemão</option>
+        <option value="ja">Japonês</option>
+        <option value="ko">Coreano</option>
+        <option value="zh">Chinês</option>
+      </select>
+
+      <div class="space-avatar-picker select-avatar-picker">
+        <label for="spaceAvatarSelect">Ícone espacial</label>
+        <div class="avatar-select-row">
+          <div class="avatar-select-preview" id="spaceAvatarPreview" aria-hidden="true">
+            <i class="fa-solid fa-user-astronaut"></i>
+          </div>
+          <select id="spaceAvatarSelect" class="space-avatar-select" aria-label="Selecionar ícone espacial">
+            <option value="fa-solid fa-user-astronaut" selected>Astronauta</option>
+            <option value="fa-solid fa-rocket">Foguete</option>
+            <option value="fa-solid fa-moon">Lua</option>
+            <option value="fa-solid fa-star">Estrela</option>
+            <option value="fa-solid fa-satellite">Satélite</option>
+            <option value="fa-solid fa-earth-americas">Planeta</option>
+          </select>
+        </div>
+      </div>
+
+      <button class="login-button" type="submit">
+        <span>Entrar no AstroChat</span>
+        <i class="fa-solid fa-arrow-right-to-bracket" aria-hidden="true"></i>
+      </button>
+
+      <small>O nick, idioma nativo e ícone ficam salvos neste navegador. O app usa login anônimo do Firebase para sincronizar salas.</small>
+    </form>
+  </section>
+
+  <main class="app-shell" id="appShell" aria-hidden="true">
+    <aside class="sidebar" id="sidebar">
+      <header class="sidebar-header">
+        <div class="profile-pill" id="profileSettingsButton" role="button" tabindex="0" title="Abrir configurações do perfil">
+          <div class="avatar avatar-user" id="userAvatar">M</div>
+          <div>
+            <strong id="userNick">AstroChat</strong>
+            <span id="userSubtitle">Conectando...</span>
+          </div>
+        </div>
+
+        <button class="icon-button notification-button" id="notificationsButton" title="Pedidos e convites" aria-label="Pedidos e convites">
+          <i class="fa-solid fa-bell" aria-hidden="true"></i>
+          <span class="notification-badge" id="notificationBadge" hidden>0</span>
+        </button>
+
+        <button class="icon-button" id="logoutButton" title="Limpar dados locais / sair" aria-label="Limpar dados locais e sair">
+          <i class="fa-solid fa-broom" aria-hidden="true"></i>
+        </button>
+
+        <button class="icon-button" id="installButton" hidden title="Instalar app" aria-label="Instalar app">
+          <i class="fa-solid fa-download" aria-hidden="true"></i>
+        </button>
+      </header>
+
+      <section class="search-box" id="searchBox">
+        <input id="searchInput" type="search" placeholder="Pesquisar sala" autocomplete="off" />
+        <button class="primary-action compact-icon-action" id="createRoomButton" type="button" title="Criar sala" aria-label="Criar sala">
+          <i class="fa-solid fa-plus" aria-hidden="true"></i>
+        </button>
+      </section>
+
+      <section class="chat-list" id="chatList" aria-label="Lista de salas"></section>
+
+      <section class="friends-panel" id="friendsPanel" hidden aria-label="Lista de amigos">
+        <form class="mini-form" id="addFriendForm">
+          <label for="friendNickInput">Adicionar amigo</label>
+          <div class="inline-input">
+            <input id="friendNickInput" type="text" maxlength="24" placeholder="Nick do amigo" autocomplete="off" />
+            <button type="submit" aria-label="Adicionar amigo">
+              <i class="fa-solid fa-user-plus" aria-hidden="true"></i>
+            </button>
+          </div>
+          <div class="inline-result" id="friendSearchResult"></div>
+        </form>
+        <div class="friends-list" id="friendsList"></div>
+      </section>
+
+      <button class="fab-button" id="privateChatButton" type="button" title="Nova conversa privada" aria-label="Nova conversa privada">
+        <i class="fa-solid fa-plus" aria-hidden="true"></i>
+      </button>
+    </aside>
+
+    <section class="chat-panel" id="chatPanel">
+      <header class="chat-header" id="chatHeader" hidden>
+        <button class="back-button" id="backButton" aria-label="Voltar para salas">
+          <i class="fa-solid fa-chevron-left" aria-hidden="true"></i>
+        </button>
+        <div class="avatar" id="activeAvatar">S</div>
+        <div class="chat-title-wrap">
+          <strong id="activeName">Sala</strong>
+          <span id="activeStatus">Sala Firebase</span>
+        </div>
+        <button class="icon-button live-typing-button" id="liveTypingButton" hidden title="Compartilhar texto digitado em tempo real" aria-label="Compartilhar texto digitado em tempo real">
+          <i class="fa-solid fa-keyboard" aria-hidden="true"></i>
+        </button>
+        <button class="icon-button" id="inviteButton" title="Convidar amigos" aria-label="Convidar amigos">
+          <i class="fa-solid fa-user-plus" aria-hidden="true"></i>
+        </button>
+        <button class="icon-button" id="roomMenuButton" title="Menu da sala" aria-label="Menu da sala">
+          <i class="fa-solid fa-ellipsis-vertical" aria-hidden="true"></i>
+        </button>
+        <button class="icon-button" id="clearChatButton" hidden title="Limpar sala" aria-label="Limpar sala">
+          <i class="fa-solid fa-trash-can" aria-hidden="true"></i>
+        </button>
+      </header>
+
+      <div class="messages" id="messages" aria-live="polite" hidden></div>
+
+      <section class="typing-preview-panel" id="typingPreviewPanel" hidden aria-live="polite"></section>
+
+      <form class="message-form" id="messageForm" hidden>
+        <div class="reply-preview" id="replyPreview" hidden>
+          <div>
+            <strong id="replyPreviewAuthor">Respondendo</strong>
+            <span id="replyPreviewText"></span>
+          </div>
+          <button class="icon-button" id="cancelReplyButton" type="button" aria-label="Cancelar resposta">
+            <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+          </button>
+        </div>
+        <input id="messageInput" type="text" placeholder="Digite uma mensagem" autocomplete="off" />
+        <div class="composer-ai-actions" aria-label="Ferramentas de escrita com IA">
+          <button class="composer-tool-button" id="suggestTextButton" type="button" title="Sugerir textos melhores" aria-label="Sugerir textos melhores">
+            <i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>
+          </button>
+          <button class="composer-tool-button" id="spellcheckButton" type="button" title="Verificar ortografia" aria-label="Verificar ortografia">
+            <i class="fa-solid fa-spell-check" aria-hidden="true"></i>
+          </button>
+        </div>
+        <button class="send-button" type="submit" title="Enviar mensagem" aria-label="Enviar mensagem">
+          <i class="fa-solid fa-paper-plane" aria-hidden="true"></i>
+        </button>
+      </form>
+
+      <section class="empty-chat-panel" id="emptyChatPanel">
+        <div class="empty-chat-card">
+          <i class="fa-solid fa-door-open" aria-hidden="true"></i>
+          <strong>Nenhuma sala aberta</strong>
+          <span>Abra o Professor IA para estudar idiomas ou crie uma sala para conversar com amigos.</span>
+          <button class="primary-action" id="emptyCreateRoomButton" type="button" title="Criar sala" aria-label="Criar sala">
+            <i class="fa-solid fa-plus" aria-hidden="true"></i>
+          </button>
+        </div>
+      </section>
+    </section>
+  </main>
+
+  <section class="modal-backdrop" id="roomModal" hidden aria-hidden="true">
+    <form class="modal-card" id="roomForm">
+      <header class="modal-header">
+        <div>
+          <strong>Criar Sala</strong>
+          <span>Monte uma sala sincronizada pelo Firebase e escolha amigos para convidar.</span>
+        </div>
+        <button class="icon-button" id="closeRoomModalButton" type="button" aria-label="Fechar">
+          <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+        </button>
+      </header>
+
+      <label for="roomNameInput">Nome da sala</label>
+      <input id="roomNameInput" type="text" maxlength="32" placeholder="Ex: Grupo RPG" required />
+
+      <label for="roomDescriptionInput">Descrição opcional</label>
+      <input id="roomDescriptionInput" type="text" maxlength="80" placeholder="Ex: Conversa da campanha" />
+
+      <label for="roomLanguageSelect">Idioma da sala</label>
+      <select id="roomLanguageSelect">
+        <option value="">Sem tradução automática</option>
+        <option value="en">Inglês</option>
+        <option value="es">Espanhol</option>
+        <option value="fr">Francês</option>
+        <option value="it">Italiano</option>
+        <option value="de">Alemão</option>
+        <option value="ja">Japonês</option>
+        <option value="ko">Coreano</option>
+        <option value="zh">Chinês</option>
+      </select>
+      <small class="field-hint">As mensagens serão traduzidas pelo aparelho de quem envia antes de serem salvas no Firebase.</small>
+
+      <div class="modal-section-title room-friends-heading">
+        <span>Convidar amigos</span>
+        <small id="roomFriendsCounter">Opcional</small>
+      </div>
+      <div class="room-friend-filter">
+        <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+        <input id="roomFriendFilterInput" type="text" maxlength="24" placeholder="Buscar amigo" autocomplete="off" />
+      </div>
+      <div class="select-list room-friends-picker" id="roomFriendsList"></div>
+
+      <footer class="modal-actions">
+        <button class="ghost-button" id="cancelRoomButton" type="button">Cancelar</button>
+        <button class="login-button compact" type="submit">
+          <span>Criar sala</span>
+          <i class="fa-solid fa-check" aria-hidden="true"></i>
+        </button>
+      </footer>
+    </form>
+  </section>
+
+  <section class="modal-backdrop" id="inviteModal" hidden aria-hidden="true">
+    <form class="modal-card" id="inviteForm">
+      <header class="modal-header">
+        <div>
+          <strong>Convidar para a sala</strong>
+          <span id="inviteModalSubtitle">Escolha amigos para convidar.</span>
+        </div>
+        <button class="icon-button" id="closeInviteModalButton" type="button" aria-label="Fechar">
+          <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+        </button>
+      </header>
+
+      <div class="mini-form modal-mini-form" id="inviteUserSearchForm">
+        <label for="inviteNickInput">Buscar usuário por nick</label>
+        <div class="inline-input">
+          <input id="inviteNickInput" type="text" maxlength="24" placeholder="Nick do usuário" autocomplete="off" />
+          <button type="button" aria-label="Buscar usuário">
+            <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+          </button>
+        </div>
+        <div class="inline-result" id="inviteSearchResult"></div>
+      </div>
+
+      <div class="modal-section-title compact-title">
+        <span>Meus amigos disponíveis</span>
+        <small>Selecione um ou mais</small>
+      </div>
+      <div class="select-list" id="inviteFriendsList"></div>
+
+      <footer class="modal-actions">
+        <button class="ghost-button" id="cancelInviteButton" type="button">Cancelar</button>
+        <button class="login-button compact" type="submit">
+          <span>Enviar convites</span>
+          <i class="fa-solid fa-paper-plane" aria-hidden="true"></i>
+        </button>
+      </footer>
+    </form>
+  </section>
+
+
+
+  <section class="modal-backdrop" id="privateModal" hidden aria-hidden="true">
+    <div class="modal-card">
+      <header class="modal-header">
+        <div>
+          <strong>Nova conversa privada</strong>
+          <span>Escolha um amigo, busque um usuário pelo nick e defina se a conversa terá tradução.</span>
+        </div>
+        <button class="icon-button" id="closePrivateModalButton" type="button" aria-label="Fechar">
+          <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+        </button>
+      </header>
+
+
+
+      <label for="privateLanguageSelect">Idioma para tradução da conversa</label>
+      <select id="privateLanguageSelect">
+        <option value="">Sem tradução automática</option>
+        <option value="en">Inglês</option>
+        <option value="es">Espanhol</option>
+        <option value="fr">Francês</option>
+        <option value="it">Italiano</option>
+        <option value="de">Alemão</option>
+        <option value="ja">Japonês</option>
+        <option value="ko">Coreano</option>
+        <option value="zh">Chinês</option>
+      </select>
+      <small class="field-hint">Nas conversas privadas, quem envia traduz antes de salvar no Firebase. Quem recebe apenas escuta a mensagem já traduzida.</small>
+
+      <form class="mini-form modal-mini-form" id="privateSearchForm">
+        <label for="privateNickInput">Buscar usuário por nick</label>
+        <div class="inline-input">
+          <input id="privateNickInput" type="text" maxlength="24" placeholder="Nick do usuário" autocomplete="off" />
+          <button type="submit" aria-label="Buscar usuário">
+            <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+          </button>
+        </div>
+        <div class="inline-result" id="privateSearchResult"></div>
+      </form>
+
+      <div class="modal-section-title compact-title">
+        <span>Meus amigos</span>
+      </div>
+      <div class="private-friends-list" id="privateFriendsList"></div>
+    </div>
+  </section>
+
+
+  <section class="modal-backdrop" id="notificationsModal" hidden aria-hidden="true">
+    <div class="modal-card notification-card">
+      <header class="modal-header">
+        <div>
+          <strong>Notificações</strong>
+          <span>Pedidos e convites recebidos ou enviados pelo Firebase.</span>
+        </div>
+        <button class="icon-button" id="closeNotificationsButton" type="button" aria-label="Fechar notificações">
+          <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+        </button>
+      </header>
+
+      <div class="panel-note">
+        <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
+        <span>Convites e mensagens não lidas aparecem aqui. Para notificações do sistema, permita notificações no navegador.</span>
+      </div>
+
+      <div class="modal-section-title compact-title">
+        <span>Mensagens não lidas</span>
+        <small>Toque para abrir</small>
+      </div>
+      <div class="unread-list notification-unread-list" id="unreadList"></div>
+
+      <div class="modal-section-title compact-title">
+        <span>Convites</span>
+        <small>Pedidos recebidos e enviados</small>
+      </div>
+      <div class="invites-list notification-invites-list" id="invitesList"></div>
+    </div>
+  </section>
+
+  <section class="modal-backdrop" id="roomSettingsModal" hidden aria-hidden="true">
+    <div class="modal-card room-settings-card">
+      <header class="modal-header">
+        <div>
+          <strong>Menu da sala</strong>
+          <span id="roomSettingsSubtitle">Usuários, idioma e opções da conversa.</span>
+        </div>
+        <button class="icon-button" id="closeRoomSettingsButton" type="button" aria-label="Fechar menu da sala">
+          <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+        </button>
+      </header>
+
+      <div class="room-settings-section room-quick-actions-section" id="roomQuickActionsSection">
+        <div class="modal-section-title compact-title">
+          <span>Ações rápidas</span>
+          <small>Controles deste chat</small>
+        </div>
+        <div class="room-menu-action-grid">
+          <button class="room-menu-action" id="roomSettingsLiveTypingButton" type="button">
+            <i class="fa-solid fa-keyboard" aria-hidden="true"></i>
+            <span>Desativado</span>
+            <small>Digitação ao vivo</small>
+          </button>
+          <button class="room-menu-action" id="roomSettingsClearChatButton" type="button">
+            <i class="fa-solid fa-broom" aria-hidden="true"></i>
+            <span>Limpar</span>
+            <small>Conversa</small>
+          </button>
+        </div>
+      </div>
+
+      <div class="room-settings-section" id="roomLanguageSettingsSection">
+        <div class="modal-section-title compact-title">
+          <span>Idioma padrão</span>
+          <small>Afeta novas mensagens enviadas</small>
+        </div>
+        <div class="room-language-row">
+          <select id="roomSettingsLanguageSelect">
+            <option value="">Sem tradução automática</option>
+            <option value="en">Inglês</option>
+            <option value="es">Espanhol</option>
+            <option value="fr">Francês</option>
+            <option value="it">Italiano</option>
+            <option value="de">Alemão</option>
+            <option value="ja">Japonês</option>
+            <option value="ko">Coreano</option>
+            <option value="zh">Chinês</option>
+          </select>
+          <button class="small-action" id="saveRoomLanguageButton" type="button">
+            <i class="fa-solid fa-check" aria-hidden="true"></i>
+            <span class="sr-only">Salvar</span>
+          </button>
+        </div>
+      </div>
+
+      <div class="room-settings-section" id="roomMembersSettingsSection">
+        <div class="modal-section-title compact-title">
+          <span>Usuários da sala</span>
+          <small>O criador pode remover participantes</small>
+        </div>
+        <div class="room-members-list" id="roomMembersList"></div>
+      </div>
+
+      <div class="room-settings-section danger-zone" id="roomDangerSettingsSection">
+        <!--<div class="modal-section-title compact-title">
+          <span>Área da sala</span>
+          <small id="roomDeleteHint">Apenas o criador pode excluir a sala para todos.</small>
+        </div> -->
+        <button class="danger-action full-width-action" id="deleteRoomButton" type="button">
+          <i class="fa-solid fa-trash-can" aria-hidden="true"></i>
+          <span>Excluir sala</span>
+        </button>
+      </div>
+    </div>
+  </section>
+
+
+
+  <section class="modal-backdrop" id="profileSettingsModal" hidden aria-hidden="true">
+    <form class="modal-card profile-settings-card profile-panel-card" id="profileSettingsForm">
+      <header class="profile-panel-hero">
+        <div class="profile-panel-orbit" aria-hidden="true">
+          <i class="fa-solid fa-user-astronaut"></i>
+        </div>
+        <div class="profile-panel-title">
+          <small>Configurações</small>
+          <strong>Seu perfil no AstroChat</strong>
+          <span>Troque nick, ícone espacial e idioma nativo usado nas traduções temporárias.</span>
+        </div>
+        <button class="icon-button profile-close-button" id="closeProfileSettingsButton" type="button" aria-label="Fechar configurações">
+          <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+        </button>
+      </header>
+
+      <section class="profile-preview-card profile-panel-preview" aria-label="Prévia do perfil">
+        <div class="profile-preview-avatar" id="profilePreviewAvatar">
+          <i class="fa-solid fa-user-astronaut" aria-hidden="true"></i>
+        </div>
+        <div class="profile-preview-info">
+          <small>Como você aparece</small>
+          <strong id="profilePreviewNick">Astro</strong>
+          <span id="profilePreviewLanguage">Idioma nativo: Português</span>
+        </div>
+      </section>
+
+      <section class="profile-settings-grid enhanced-profile-grid">
+        <div class="profile-field-block">
+          <label for="profileNickInput">
+            <i class="fa-solid fa-signature" aria-hidden="true"></i>
+            <span>Nick</span>
+          </label>
+          <input id="profileNickInput" type="text" maxlength="24" placeholder="Ex: Max" autocomplete="nickname" required />
+        </div>
+
+        <div class="profile-field-block">
+          <label for="profileNativeLanguageSelect">
+            <i class="fa-solid fa-language" aria-hidden="true"></i>
+            <span>Idioma nativo</span>
+          </label>
+          <select id="profileNativeLanguageSelect" class="native-language-select">
+            <option value="pt">Português</option>
+            <option value="en">Inglês</option>
+            <option value="es">Espanhol</option>
+            <option value="fr">Francês</option>
+            <option value="it">Italiano</option>
+            <option value="de">Alemão</option>
+            <option value="ja">Japonês</option>
+            <option value="ko">Coreano</option>
+            <option value="zh">Chinês</option>
+          </select>
+        </div>
+      </section>
+
+      <div class="space-avatar-picker profile-avatar-picker enhanced-profile-avatar-picker profile-panel-avatars select-avatar-picker">
+        <label for="profileAvatarSelect">
+          <i class="fa-solid fa-sparkles" aria-hidden="true"></i>
+          <span>Ícone espacial</span>
+        </label>
+        <div class="avatar-select-row profile-avatar-select-row">
+          <div class="avatar-select-preview" id="profileAvatarSelectPreview" aria-hidden="true">
+            <i class="fa-solid fa-user-astronaut"></i>
+          </div>
+          <select id="profileAvatarSelect" class="space-avatar-select" aria-label="Selecionar ícone espacial do perfil">
+            <option value="fa-solid fa-user-astronaut" selected>Astronauta</option>
+            <option value="fa-solid fa-rocket">Foguete</option>
+            <option value="fa-solid fa-moon">Lua</option>
+            <option value="fa-solid fa-star">Estrela</option>
+            <option value="fa-solid fa-satellite">Satélite</option>
+            <option value="fa-solid fa-earth-americas">Planeta</option>
+          </select>
+        </div>
+      </div>
+
+      <section class="profile-menu-note profile-panel-note">
+        <i class="fa-solid fa-circle-info" aria-hidden="true"></i>
+        <div>
+          <strong>Idioma nativo</strong>
+          <span>Ao clicar em “ver tradução” numa mensagem hidratada, a IA traduz a versão hidratada para este idioma apenas na sua tela.</span>
+        </div>
+      </section>
+
+      <footer class="modal-actions split-actions profile-panel-actions">
+        <button class="ghost-button" id="cancelProfileSettingsButton" type="button">Cancelar</button>
+        <button class="login-button compact" type="submit">
+          <span>Salvar alterações</span>
+          <i class="fa-solid fa-check" aria-hidden="true"></i>
+        </button>
+      </footer>
+
+      <button class="danger-action full-width-action reset-local-button profile-danger-button" id="resetLocalProfileButton" type="button">
+        <i class="fa-solid fa-right-from-bracket" aria-hidden="true"></i>
+        <span>Sair ou apagar este usuário</span>
+      </button>
+    </form>
+  </section>
+
+  <section class="modal-backdrop" id="aiAssistModal" hidden aria-hidden="true">
+    <div class="modal-card ai-assist-card">
+      <header class="modal-header">
+        <div>
+          <strong id="aiAssistTitle">Assistente de escrita</strong>
+          <span id="aiAssistSubtitle">Sugestões e correções com IA para o texto que você está digitando.</span>
+        </div>
+        <button class="icon-button" id="closeAiAssistButton" type="button" aria-label="Fechar assistente de escrita">
+          <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+        </button>
+      </header>
+
+      <section class="ai-assist-original" aria-label="Texto analisado">
+        <small>Texto atual</small>
+        <p id="aiAssistOriginalText"></p>
+      </section>
+
+      <section class="ai-assist-content" id="aiAssistContent" aria-live="polite"></section>
+    </div>
+  </section>
+
+  <section class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="false"></section>
+  <template id="roomItemTemplate">
+    <button class="chat-item" type="button">
+      <div class="avatar"></div>
+      <div class="chat-item-content">
+        <div class="chat-item-top">
+          <strong class="chat-name"></strong>
+          <time class="chat-time"></time>
+        </div>
+        <p class="chat-preview"></p>
+      </div>
+    </button>
+  </template>
+
+  <script type="module" src="app.js"></script>
+</body>
+</html>
