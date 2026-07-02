@@ -1,4 +1,4 @@
-const CACHE_NAME = "astrochat-cache-v37";
+const CACHE_NAME = "astrochat-cache-v46";
 const APP_FILES = [
   "./",
   "./index.html",
@@ -53,3 +53,51 @@ self.addEventListener("fetch", (event) => {
     })
   );
 });
+
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+
+  const targetUrl = event.notification.data?.url || "./";
+  event.waitUntil(
+    clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
+      const sameOriginClient = clientList.find((client) => new URL(client.url).origin === self.location.origin);
+
+      if (sameOriginClient) {
+        sameOriginClient.focus();
+        return;
+      }
+
+      if (clients.openWindow) {
+        return clients.openWindow(targetUrl);
+      }
+    })
+  );
+});
+
+self.addEventListener("push", (event) => {
+  const payload = readPushPayload(event);
+  const title = payload.title || "AstroChat";
+  const options = {
+    body: payload.body || "Nova atividade no AstroChat.",
+    icon: payload.icon || "icons/icon-192.png",
+    badge: payload.badge || "icons/icon-192.png",
+    tag: payload.tag || "astrochat-background",
+    renotify: true,
+    data: {
+      url: payload.url || "./",
+      ...payload.data
+    }
+  };
+
+  event.waitUntil(self.registration.showNotification(title, options));
+});
+
+function readPushPayload(event) {
+  if (!event.data) return {};
+
+  try {
+    return event.data.json();
+  } catch (error) {
+    return { body: event.data.text() };
+  }
+}

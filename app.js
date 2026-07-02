@@ -50,6 +50,7 @@ const PRIVATE_ROOM_TYPE = "private-room";
 const FRIEND_REQUEST_TYPE = "friend-request";
 const NICK_TAKEN_ERROR_CODE = "nick-taken";
 const MISSING_FIREBASE_USER_DATA_ERROR_CODE = "missing-firebase-user-data";
+const BACKGROUND_REFRESH_INTERVAL_MS = 45000;
 const AI_TEACHER_NAME = "Professor IA";
 const POLLINATIONS_CHAT_ENDPOINT = "https://text.pollinations.ai/openai";
 const POLLINATIONS_TEXT_ENDPOINT = "https://text.pollinations.ai/";
@@ -106,6 +107,7 @@ let currentUser = loadUser();
 let currentFirebaseUser = null;
 let currentFirebaseUid = null;
 let activeRoomId = null;
+let suppressAutoRoomSelection = false;
 let activeView = "rooms";
 let deferredInstallPrompt = null;
 let aiReplyInProgress = false;
@@ -130,6 +132,8 @@ let notificationSoundPrimed = false;
 let pendingNotificationSound = false;
 let activeToastElement = null;
 let activeToastTimer = null;
+let backgroundRefreshTimer = null;
+let backgroundRefreshInProgress = false;
 const roomMessagesById = new Map();
 const renderedMessageIdsByRoom = new Map();
 const revealedOriginalMessageIds = new Set();
@@ -271,6 +275,7 @@ const aiAssistOriginalText = document.querySelector("#aiAssistOriginalText");
 const aiAssistContent = document.querySelector("#aiAssistContent");
 
 setupConnectivityDetection();
+setupBackgroundRuntime();
 setupNotificationSoundUnlock();
 bootApp().catch((error) => {
   console.error("Falha ao iniciar o app.", error);
@@ -308,6 +313,7 @@ loginForm.addEventListener("submit", async (event) => {
 
     saveUser(currentUser);
     activeRoomId = null;
+    suppressAutoRoomSelection = false;
     await enterApp();
   } catch (error) {
     currentUser = null;
@@ -415,6 +421,7 @@ roomForm.addEventListener("submit", async (event) => {
     const newRoom = await createFirebaseRoom(roomName, description, selectedFriends, language);
     remoteRooms = [newRoom, ...remoteRooms.filter((room) => room.id !== newRoom.id)];
     activeRoomId = newRoom.id;
+    suppressAutoRoomSelection = false;
     subscribeToActiveRoomMessages();
     closeRoomModal();
     setActiveView("rooms");
@@ -471,6 +478,8 @@ aiAssistModal?.addEventListener("click", (event) => {
   if (event.target === aiAssistModal) closeAiAssistModal();
 });
 window.addEventListener("beforeunload", clearCurrentTypingStatus);
+document.addEventListener("visibilitychange", markVisibleActiveRoomAsRead);
+window.addEventListener("focus", markVisibleActiveRoomAsRead);
 
 liveTypingButton?.addEventListener("click", toggleLiveTypingForActiveRoom);
 roomMenuButton?.addEventListener("click", openRoomSettingsModal);
@@ -487,9 +496,7 @@ searchInput.addEventListener("input", () => {
   renderRoomList(searchInput.value);
 });
 
-backButton.addEventListener("click", () => {
-  appShell.classList.remove("chat-open");
-});
+backButton.addEventListener("click", closeMobileConversationToMenu);
 
 clearChatButton?.addEventListener("click", handleClearActiveChat);
 
@@ -769,10 +776,12 @@ function finishSessionLogout() {
 }
 
 function resetRuntimeSessionState() {
+  stopBackgroundRefresh();
   currentUser = null;
   currentFirebaseUser = null;
   currentFirebaseUid = null;
   activeRoomId = null;
+  suppressAutoRoomSelection = false;
   activeView = "rooms";
   remoteRooms = [];
   friends = [];
@@ -1060,6 +1069,81 @@ function setupConnectivityDetection() {
     updateUserHeader("Offline");
     showToast("Sem internet", "Acoes que usam Firebase, traducao ou IA ficam pausadas ate a conexao voltar.");
   });
+}
+
+function setupBackgroundRuntime() {
+  document.addEventListener("visibilitychange", handleBackgroundVisibilityChange);
+  window.addEventListener("pagehide", startBackgroundRefresh);
+  window.addEventListener("pageshow", handleForegroundResume);
+  window.addEventListener("focus", handleForegroundResume);
+}
+
+function handleBackgroundVisibilityChange() {
+  if (document.hidden) {
+    startBackgroundRefresh();
+    if (currentUser?.nick && firebaseReady) updateUserHeader("Em segundo plano");
+    return;
+  }
+
+  handleForegroundResume();
+}
+
+function startBackgroundRefresh() {
+  if (backgroundRefreshTimer || !currentUser?.nick || logoutInProgress) return;
+
+  backgroundRefreshTimer = window.setInterval(runBackgroundRefresh, BACKGROUND_REFRESH_INTERVAL_MS);
+  window.setTimeout(runBackgroundRefresh, 1200);
+}
+
+function stopBackgroundRefresh() {
+  if (!backgroundRefreshTimer) return;
+
+  window.clearInterval(backgroundRefreshTimer);
+  backgroundRefreshTimer = null;
+}
+
+function handleForegroundResume() {
+  stopBackgroundRefresh();
+  if (!currentUser?.nick || logoutInProgress) return;
+
+  runBackgroundRefresh({ foreground: true });
+  markVisibleActiveRoomAsRead();
+}
+
+async function runBackgroundRefresh(options = {}) {
+  if (backgroundRefreshInProgress || !currentUser?.nick || logoutInProgress || !isInternetAvailable()) return;
+
+  backgroundRefreshInProgress = true;
+
+  try {
+    if (!firebaseReady || !currentFirebaseUid) {
+      await initFirebaseSession();
+    }
+
+    if (!currentFirebaseUid) return;
+
+    const [roomIndexSnapshot, receivedIndexSnapshot, sentIndexSnapshot] = await Promise.all([
+      get(ref(db, `userRooms/${currentFirebaseUid}`)),
+      get(ref(db, `userInvites/${currentFirebaseUid}/received`)),
+      get(ref(db, `userInvites/${currentFirebaseUid}/sent`))
+    ]);
+
+    syncRoomSubscriptions(Object.keys(roomIndexSnapshot.val() || {}));
+    syncInviteSubscriptions("received", Object.keys(receivedIndexSnapshot.val() || {}));
+    syncInviteSubscriptions("sent", Object.keys(sentIndexSnapshot.val() || {}));
+
+    if (options.foreground) {
+      updateUserHeader("Online");
+      renderAll();
+    } else if (document.hidden) {
+      updateUserHeader("Em segundo plano");
+    }
+  } catch (error) {
+    firebaseInitPromise = null;
+    console.warn("Nao foi possivel atualizar em segundo plano.", error);
+  } finally {
+    backgroundRefreshInProgress = false;
+  }
 }
 
 function isInternetAvailable() {
@@ -1580,9 +1664,10 @@ function syncRoomSubscriptions(roomIds) {
       ref(db, `rooms/${roomId}`),
       (snapshot) => {
         if (snapshot.exists()) {
+          const initialSnapshot = !remoteRoomMap.has(roomId);
           const mappedRoom = mapRoomSnapshot(snapshot);
           remoteRoomMap.set(roomId, mappedRoom);
-          handleRoomMessageNotification(mappedRoom);
+          handleRoomMessageNotification(mappedRoom, { initialSnapshot });
         } else {
           remoteRoomMap.delete(roomId);
         }
@@ -1686,7 +1771,9 @@ function subscribeToActiveRoomMessages() {
 
       if (activeRoomId === activeRoom.id) {
         const updatedRoom = getActiveRoom();
-        markRoomAsRead(updatedRoom);
+        if (isRoomCurrentlyVisible(activeRoom.id)) {
+          markRoomAsRead(updatedRoom);
+        }
         renderRoomMessages(updatedRoom);
         renderRoomList(searchInput.value);
       }
@@ -2324,7 +2411,7 @@ function ensureUserAiRoom() {
   aiRoom.status = "Professor de idiomas · Pollinations.ai";
   aiRoom.color = "linear-gradient(135deg, #6d5dfc, #10b486)";
 
-  if (!activeRoomId || !getVisibleRooms().some((room) => room.id === activeRoomId)) {
+  if (!suppressAutoRoomSelection && (!activeRoomId || !getVisibleRooms().some((room) => room.id === activeRoomId))) {
     activeRoomId = aiRoom.id;
   }
 
@@ -2335,6 +2422,10 @@ function ensureUserAiRoom() {
 function validateActiveRoom() {
   const visibleRooms = getVisibleRooms();
   if (activeRoomId && visibleRooms.some((room) => room.id === activeRoomId)) return;
+  if (suppressAutoRoomSelection) {
+    activeRoomId = null;
+    return;
+  }
   activeRoomId = ensureUserAiRoom()?.id || visibleRooms[0]?.id || null;
 }
 
@@ -2352,6 +2443,7 @@ function updateBadges() {
   notificationsButton.title = totalNotifications
     ? `${totalNotifications} notificação${totalNotifications > 1 ? "es" : ""}: ${pendingInvites} convite${pendingInvites !== 1 ? "s" : ""}, ${unreadMessages} mensagem${unreadMessages !== 1 ? "s" : ""} não lida${unreadMessages !== 1 ? "s" : ""}`
     : "Pedidos e convites";
+  refreshNotificationsModalIfOpen();
 }
 
 function setActiveView(view) {
@@ -2389,6 +2481,13 @@ function closeNotificationsModal() {
   if (!notificationsModal) return;
   notificationsModal.hidden = true;
   notificationsModal.setAttribute("aria-hidden", "true");
+}
+
+function refreshNotificationsModalIfOpen() {
+  if (!notificationsModal || notificationsModal.hidden) return;
+
+  renderUnreadNotificationsList();
+  renderInvitesList();
 }
 
 function getVisibleRooms() {
@@ -2441,6 +2540,7 @@ function renderRoomList(filter = "") {
       item.addEventListener("click", () => {
         clearCurrentTypingStatus();
         activeRoomId = room.id;
+        suppressAutoRoomSelection = false;
         markRoomAsRead(room);
         clearReplyTarget();
         forceMessageRerender(room.id);
@@ -2492,7 +2592,9 @@ function renderActiveRoom(forceMessages = false) {
   paintRoomAvatar(activeAvatar, activeRoom);
   activeName.textContent = getRoomDisplayName(activeRoom);
   activeStatus.textContent = getRoomStatus(activeRoom);
-  markRoomAsRead(activeRoom);
+  if (isRoomCurrentlyVisible(activeRoom.id)) {
+    markRoomAsRead(activeRoom);
+  }
   renderReplyPreview();
   inviteButton.hidden = isAi;
   roomMenuButton.hidden = isAi;
@@ -2512,6 +2614,20 @@ function renderActiveRoom(forceMessages = false) {
   }
 
   renderRoomMessages(activeRoom);
+}
+
+async function closeMobileConversationToMenu() {
+  appShell.classList.remove("chat-open");
+
+  if (!isMobileLayout()) return;
+
+  await clearCurrentTypingStatus();
+  activeRoomId = null;
+  suppressAutoRoomSelection = true;
+  clearReplyTarget();
+  subscribeToActiveRoomMessages();
+  renderRoomList(searchInput.value);
+  renderActiveRoom(true);
 }
 
 function renderRoomMessages(room) {
@@ -4134,6 +4250,7 @@ async function acceptInvite(inviteId) {
     });
 
     activeRoomId = invite.roomId;
+    suppressAutoRoomSelection = false;
     setActiveView("rooms");
     subscribeToActiveRoomMessages();
   } catch (error) {
@@ -5272,6 +5389,7 @@ async function startPrivateConversation(friend, options = {}) {
 
   await update(ref(db), updates);
   activeRoomId = roomId;
+  suppressAutoRoomSelection = false;
   closePrivateModal();
   setActiveView("rooms");
   subscribeToActiveRoomMessages();
@@ -6422,7 +6540,7 @@ function handleInviteNotifications() {
         openNotificationsModal();
       }
     );
-    showBrowserNotification(title, body);
+    showBrowserNotification(title, body, { tag: `invite:${invite.id}` });
     playNotificationSound();
     seen.add(invite.id);
   });
@@ -6432,13 +6550,13 @@ function handleInviteNotifications() {
   updateBadges();
 }
 
-function handleRoomMessageNotification(room) {
+function handleRoomMessageNotification(room, options = {}) {
   if (!room || isAiRoom(room) || !currentFirebaseUid) return;
 
   const lastMessageAt = Number(room.lastMessageAt || 0);
   if (!lastMessageAt) return;
 
-  if (room.id === activeRoomId) {
+  if (isRoomCurrentlyVisible(room.id)) {
     markRoomAsRead(room);
     return;
   }
@@ -6450,22 +6568,16 @@ function handleRoomMessageNotification(room) {
 
   const lastSeen = Number(notificationState.lastSeenByRoom?.[room.id] || 0);
 
-  if (!lastSeen) {
-    notificationState.lastSeenByRoom[room.id] = lastMessageAt;
-    notificationState.unreadByRoom[room.id] = 0;
-    saveNotificationState();
-    return;
-  }
-
   if (lastMessageAt <= lastSeen) return;
 
   const key = `${room.id}:${lastMessageAt}:${room.lastMessageAuthorUid || "user"}`;
   const notified = new Set(notificationState.notifiedMessageKeys || []);
   const wasAlreadyNotified = notified.has(key);
+  const isInitialSnapshot = options.initialSnapshot === true;
 
   notificationState.unreadByRoom[room.id] = Math.max(1, Number(notificationState.unreadByRoom?.[room.id] || 0) + (wasAlreadyNotified ? 0 : 1));
 
-  if (!wasAlreadyNotified) {
+  if (!wasAlreadyNotified && !isInitialSnapshot) {
     const author = room.lastMessageAuthorNick || "Alguém";
     const text = truncateText(room.lastMessage || "Nova mensagem", 120);
     showToast(
@@ -6474,10 +6586,14 @@ function handleRoomMessageNotification(room) {
       "Abrir",
       () => openRoomFromNotification(room.id)
     );
-    showBrowserNotification(`Nova mensagem de ${author}`, `${getRoomDisplayName(room)}: ${text}`);
+    showBrowserNotification(`Nova mensagem de ${author}`, `${getRoomDisplayName(room)}: ${text}`, {
+      tag: key,
+      roomId: room.id
+    });
     playNotificationSound();
-    notified.add(key);
   }
+
+  if (!wasAlreadyNotified) notified.add(key);
 
   notificationState.notifiedMessageKeys = Array.from(notified).slice(-200);
   saveNotificationState();
@@ -6490,6 +6606,7 @@ function openRoomFromNotification(roomId) {
 
   clearCurrentTypingStatus();
   activeRoomId = room.id;
+  suppressAutoRoomSelection = false;
   markRoomAsRead(room);
   clearReplyTarget();
   forceMessageRerender(room.id);
@@ -6507,6 +6624,25 @@ function markRoomAsRead(room) {
   notificationState.unreadByRoom[room.id] = 0;
   saveNotificationState();
   updateBadges();
+}
+
+function markVisibleActiveRoomAsRead() {
+  const activeRoom = getActiveRoom();
+  if (!activeRoom || !isRoomCurrentlyVisible(activeRoom.id)) return;
+
+  markRoomAsRead(activeRoom);
+  renderRoomList(searchInput.value);
+}
+
+function isRoomCurrentlyVisible(roomId) {
+  if (!roomId || roomId !== activeRoomId) return false;
+  if (document.hidden || document.visibilityState !== "visible") return false;
+
+  return !isMobileLayout() || appShell.classList.contains("chat-open");
+}
+
+function isMobileLayout() {
+  return window.matchMedia("(max-width: 820px)").matches;
 }
 
 function getUnreadCount(roomId) {
@@ -6632,19 +6768,52 @@ async function requestBrowserNotificationPermission() {
   return Notification.permission;
 }
 
-function showBrowserNotification(title, body) {
+function showBrowserNotification(title, body, data = {}) {
   if (!("Notification" in window)) return;
   if (Notification.permission !== "granted") return;
 
-  try {
-    new Notification(title, {
-      body,
-      icon: "icons/icon-192.png",
-      badge: "icons/icon-192.png"
-    });
-  } catch (error) {
-    console.warn("Não foi possível mostrar notificação do navegador.", error);
+  const options = {
+    body,
+    icon: "icons/icon-192.png",
+    badge: "icons/icon-192.png",
+    tag: data.tag || title,
+    renotify: true,
+    data: {
+      url: window.location.href,
+      ...data
+    }
+  };
+
+  const showWindowNotification = () => {
+    try {
+      const notification = new Notification(title, options);
+      notification.onclick = () => {
+        window.focus();
+        notification.close();
+      };
+    } catch (error) {
+      console.warn("Nao foi possivel mostrar notificacao do navegador.", error);
+    }
+  };
+
+  if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.ready
+      .then((registration) => {
+        if (registration?.showNotification) {
+          return registration.showNotification(title, options);
+        }
+
+        showWindowNotification();
+        return null;
+      })
+      .catch((error) => {
+        console.warn("Service worker indisponivel para notificacao.", error);
+        showWindowNotification();
+      });
+    return;
   }
+
+  showWindowNotification();
 }
 
 function dismissToast(toast = activeToastElement) {
