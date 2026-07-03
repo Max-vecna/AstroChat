@@ -49,6 +49,7 @@ const DATABASE_URL = "https://astro-chat-7d044-default-rtdb.firebaseio.com";
 const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
+const CHAT_VERSION = "v70";
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
 const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
@@ -208,6 +209,8 @@ const installButton = document.querySelector("#installButton");
 const logoutButton = document.querySelector("#logoutButton");
 const notificationsButton = document.querySelector("#notificationsButton");
 const notificationBadge = document.querySelector("#notificationBadge");
+const mobileNotificationsButton = document.querySelector("#mobileNotificationsButton");
+const mobileNotificationBadge = document.querySelector("#mobileNotificationBadge");
 const notificationsModal = document.querySelector("#notificationsModal");
 const closeNotificationsButton = document.querySelector("#closeNotificationsButton");
 const userAvatar = document.querySelector("#userAvatar");
@@ -229,6 +232,7 @@ const cancelProfileSettingsButton = document.querySelector("#cancelProfileSettin
 const resetLocalProfileButton = document.querySelector("#resetLocalProfileButton");
 const profileNotificationsButton = document.querySelector("#profileNotificationsButton");
 const profileNotificationsStatus = document.querySelector("#profileNotificationsStatus");
+const profileVersionLabel = document.querySelector("#profileVersionLabel");
 const roomItemTemplate = document.querySelector("#roomItemTemplate");
 
 const createRoomButton = document.querySelector("#createRoomButton");
@@ -298,6 +302,10 @@ const aiAssistSubtitle = document.querySelector("#aiAssistSubtitle");
 const aiAssistOriginalText = document.querySelector("#aiAssistOriginalText");
 const aiAssistContent = document.querySelector("#aiAssistContent");
 
+if (profileVersionLabel) {
+  profileVersionLabel.textContent = `AstroChat ${CHAT_VERSION}`;
+}
+
 setupConnectivityDetection();
 setupBackgroundRuntime();
 setupNotificationSoundUnlock();
@@ -363,6 +371,16 @@ notificationsButton.addEventListener("click", async () => {
   const totalNotifications = getPendingReceivedInvites().length + getTotalUnreadCount();
   if (!totalNotifications) {
     showToast("Sem notificações", "Convites e mensagens não lidas aparecem neste painel.");
+  }
+});
+
+mobileNotificationsButton?.addEventListener("click", async () => {
+  unlockNotificationSound();
+  openNotificationsModal();
+
+  const totalNotifications = getPendingReceivedInvites().length + getTotalUnreadCount();
+  if (!totalNotifications) {
+    showToast("Sem notificacoes", "Convites e mensagens nao lidas aparecem neste painel.");
   }
 });
 
@@ -2650,6 +2668,14 @@ function updateBadges() {
   notificationsButton.title = totalNotifications
     ? `${totalNotifications} notificação${totalNotifications > 1 ? "es" : ""}: ${pendingInvites} convite${pendingInvites !== 1 ? "s" : ""}, ${unreadMessages} mensagem${unreadMessages !== 1 ? "s" : ""} não lida${unreadMessages !== 1 ? "s" : ""}`
     : "Pedidos e convites";
+  if (mobileNotificationBadge) {
+    mobileNotificationBadge.textContent = totalNotifications > 99 ? "99+" : String(totalNotifications);
+    mobileNotificationBadge.hidden = totalNotifications === 0;
+  }
+  if (mobileNotificationsButton) {
+    mobileNotificationsButton.classList.toggle("has-pending", totalNotifications > 0);
+    mobileNotificationsButton.title = notificationsButton?.title || "Notificacoes";
+  }
   refreshNotificationsModalIfOpen();
 }
 
@@ -3023,19 +3049,20 @@ async function sendFirebaseMessage(room, text, options = {}) {
       translatedText = await translateMessageText(cleanText, language);
     } catch (error) {
       console.warn("Não foi possível traduzir a mensagem antes de salvar.", error);
-      translatedText = cleanText;
-      translationError = true;
+      translatedText = "";
+      translationError = false;
     }
   }
 
   const displayText = translatedText || cleanText;
+  const hasDeliveredTranslation = Boolean(language?.code && !skipTranslation && translatedText && translatedText !== cleanText);
   const replyPayload = getReplyPayloadForMessage();
   const messageRef = push(ref(db, `rooms/${room.id}/messages`));
   const message = {
     id: messageRef.key,
     text: displayText,
-    originalText: language?.code && !skipTranslation ? cleanText : "",
-    translatedText: language?.code && !skipTranslation ? displayText : "",
+    originalText: hasDeliveredTranslation ? cleanText : "",
+    translatedText: hasDeliveredTranslation ? displayText : "",
     targetLanguageCode: language?.code || "",
     targetLanguageName: language?.name || "",
     learningTest,
@@ -3061,7 +3088,7 @@ async function sendFirebaseMessage(room, text, options = {}) {
   await update(ref(db), {
     [`rooms/${room.id}/messages/${messageRef.key}`]: message,
     [`rooms/${room.id}/lastMessage`]: displayText,
-    [`rooms/${room.id}/lastOriginalMessage`]: language?.code && !skipTranslation ? cleanText : "",
+    [`rooms/${room.id}/lastOriginalMessage`]: hasDeliveredTranslation ? cleanText : "",
     [`rooms/${room.id}/lastMessageAuthorUid`]: currentFirebaseUid,
     [`rooms/${room.id}/lastMessageAuthorNick`]: message.authorNick,
     [`rooms/${room.id}/lastMessageAt`]: now,

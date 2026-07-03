@@ -1063,6 +1063,10 @@ body.is-authenticated .login-screen {
   position: relative;
 }
 
+.mobile-notification-button {
+  display: none;
+}
+
 .notification-button.has-pending {
   color: #fff;
   background: rgba(16, 180, 134, 0.22);
@@ -4183,6 +4187,24 @@ button:disabled,
   /* margin: 0 20px 20px; */
 }
 
+.profile-version-footer {
+  padding: 4px 20px 18px;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+  text-align: center;
+}
+
+.profile-version-footer span {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  justify-content: center;
+  padding: 0 10px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.045);
+}
+
 .hydration-translation-text.is-loading,
 .hydration-translation-text:empty::after {
   content: "Traduzindo...";
@@ -5797,6 +5819,10 @@ body {
 
   .app-shell.chat-open .chat-panel {
     display: flex !important;
+  }
+
+  .mobile-notification-button {
+    display: grid;
   }
 
   .sidebar-header {
