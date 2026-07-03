@@ -81,3 +81,14 @@ Confira estes pontos:
 - A mensagem de teste foi enviada por outro usuario/UID; o remetente nao recebe push da propria mensagem.
 - O navegador receptor esta com permissao de notificacao concedida para o dominio atual.
 - Depois de alterar `service-worker.js`, recarregue a pagina para instalar a versao nova do service worker.
+
+## 6. Quando funciona no PC, mas quebra no celular publicado
+
+Se o app funciona em `localhost` e para quando sobe para GitHub Pages ou outro dominio, verifique:
+
+- Em Firebase Console > Authentication > Settings > Authorized domains, adicione o dominio publicado, por exemplo `seu-usuario.github.io`.
+- Git push para GitHub Pages nao implanta Cloud Functions. Para push em segundo plano, rode `firebase deploy --only functions`.
+- O site publicado precisa abrir em HTTPS.
+- No celular, remova o PWA antigo da tela inicial, feche o navegador e abra a URL publicada novamente para pegar o service worker/cache novo.
+- Em iPhone/iOS, teste instalado na tela inicial; alguns navegadores nao entregam Web Push/FCM como o Chrome Android.
+- Se aparecer "Sem permissao no Firebase", mescle as regras de `fcmTokens` acima com as regras existentes do Realtime Database.

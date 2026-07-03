@@ -49,7 +49,7 @@ const DATABASE_URL = "https://astro-chat-7d044-default-rtdb.firebaseio.com";
 const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
-const CHAT_VERSION = "v71";
+const CHAT_VERSION = "v73";
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
 const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
@@ -356,8 +356,9 @@ loginForm.addEventListener("submit", async (event) => {
     if (isNickTakenError(error)) {
       showToast("Nick em uso", "Escolha outro nick. Esse ja esta sendo usado por outro usuario.");
     } else {
+      const notice = getFirebaseConnectionErrorNotice(error);
       console.warn("Nao foi possivel validar o nick.", error);
-      showToast("Nao consegui validar", "Verifique sua conexao e tente entrar novamente.");
+      showToast(notice.title, notice.message);
     }
   } finally {
     setFormBusy(loginForm, false);
@@ -1243,6 +1244,81 @@ function requireFirebaseConnection(actionText = "usar recursos online") {
   return false;
 }
 
+function getFirebaseConnectionErrorNotice(error = {}) {
+  const code = String(error?.code || "");
+  const message = String(error?.message || "");
+  const hostname = location.hostname || "este dominio";
+
+  if (code === "auth/unauthorized-domain") {
+    return {
+      title: "Dominio nao autorizado",
+      message: `Adicione ${hostname} em Firebase Console > Authentication > Settings > Authorized domains.`,
+      status: "Firebase bloqueado"
+    };
+  }
+
+  if (code === "auth/admin-restricted-operation" || code === "auth/operation-not-allowed") {
+    return {
+      title: "Login anonimo desativado",
+      message: "Ative Anonymous em Firebase Console > Authentication > Sign-in method.",
+      status: "Firebase bloqueado"
+    };
+  }
+
+  if (code.includes("permission-denied") || message.toLowerCase().includes("permission denied")) {
+    return {
+      title: "Sem permissao no Firebase",
+      message: "Confira as regras do Realtime Database para users, rooms, userRooms, userInvites e fcmTokens.",
+      status: "Sem permissao"
+    };
+  }
+
+  return {
+    title: "Firebase nao conectou",
+    message: `No site publicado (${hostname}), confira HTTPS, dominio autorizado no Auth e regras do Realtime Database.`,
+    status: "Offline - sala IA local"
+  };
+}
+
+function getFcmRegistrationErrorNotice(error = {}) {
+  const code = String(error?.code || "");
+  const message = String(error?.message || "");
+  const lowerMessage = message.toLowerCase();
+
+  if (code.includes("failed-service-worker-registration") || lowerMessage.includes("service worker")) {
+    return {
+      title: "Service worker falhou",
+      message: "No celular, feche o PWA, abra a pagina publicada de novo e atualize para instalar a versao nova."
+    };
+  }
+
+  if (code.includes("unsupported") || lowerMessage.includes("not supported")) {
+    return {
+      title: "FCM indisponivel",
+      message: "Este navegador nao suporta Firebase Cloud Messaging para Web Push."
+    };
+  }
+
+  if (code.includes("permission") || lowerMessage.includes("permission")) {
+    return {
+      title: "Notificacao sem permissao",
+      message: "Libere notificacoes nas configuracoes do navegador para este site e tente registrar de novo."
+    };
+  }
+
+  if (code.includes("token") || lowerMessage.includes("token")) {
+    return {
+      title: "Token FCM nao gerado",
+      message: "Confira a chave VAPID publica e se fcmTokens pode ser gravado no Realtime Database."
+    };
+  }
+
+  return {
+    title: "FCM nao registrou",
+    message: "Confira HTTPS, permissao de notificacao, chave VAPID, service worker e regras de fcmTokens."
+  };
+}
+
 async function bootApp() {
   showSplash("Verificando login salvo...");
 
@@ -1282,6 +1358,8 @@ async function enterApp() {
   ensureUserAiRoom();
   updateUserHeader("Conectando...");
   renderAll(true);
+  let startupNotice = null;
+
   try {
     await initFirebaseSession();
   } catch (error) {
@@ -1306,9 +1384,10 @@ async function enterApp() {
     }
 
     console.error("Falha ao iniciar sessao online.", error);
+    startupNotice = getFirebaseConnectionErrorNotice(error);
     firebaseReady = false;
     firebaseInitPromise = null;
-    updateUserHeader("Offline · sala IA local");
+    updateUserHeader(startupNotice.status);
   }
 
   renderAll(true);
@@ -1320,6 +1399,10 @@ async function enterApp() {
 
   if (activeRoomId) {
     subscribeToActiveRoomMessages();
+  }
+
+  if (startupNotice) {
+    showToast(startupNotice.title, startupNotice.message);
   }
 }
 
@@ -2328,39 +2411,53 @@ async function handleProfileNotificationsButtonClickWithFcm() {
   }
 
   if (status === "granted") {
+    profileNotificationsButton.disabled = true;
     updateProfileNotificationsButtonState("Registrando este navegador...");
-    const token = await ensureFcmTokenRegistration({ force: true, showErrors: true });
-    showToast(
-      token ? "Notificacoes ja ativadas" : "Permissao ativada",
-      token
-        ? "Este navegador ja pode receber avisos pelo Firebase Cloud Messaging."
-        : "O navegador permitiu notificacoes, mas o FCM ainda precisa da chave VAPID."
-    );
-    updateProfileNotificationsButtonState();
+    try {
+      const token = await ensureFcmTokenRegistration({ force: true, showErrors: true });
+      showToast(
+        token ? "Notificacoes ja ativadas" : "Permissao ativada",
+        token
+          ? "Este navegador ja pode receber avisos pelo Firebase Cloud Messaging."
+          : "O navegador permitiu notificacoes, mas o FCM ainda nao retornou token."
+      );
+    } catch (error) {
+      const notice = getFcmRegistrationErrorNotice(error);
+      console.warn("Nao foi possivel registrar FCM.", error);
+      showToast(notice.title, notice.message);
+    } finally {
+      updateProfileNotificationsButtonState();
+    }
     return;
   }
 
   profileNotificationsButton.disabled = true;
   updateProfileNotificationsButtonState("Solicitando permissao...");
 
-  const permission = await requestBrowserNotificationPermission();
+  try {
+    const permission = await requestBrowserNotificationPermission();
 
-  if (permission === "granted") {
-    updateProfileNotificationsButtonState("Registrando este navegador...");
-    const token = await ensureFcmTokenRegistration({ force: true, showErrors: true });
-    showToast(
-      token ? "Notificacoes ativadas" : "Permissao ativada",
-      token
-        ? "Voce recebera avisos de mensagens pelo Firebase Cloud Messaging."
-        : "Cole a chave VAPID do Firebase para ativar o envio em segundo plano."
-    );
-  } else if (permission === "denied") {
-    showToast("Permissao negada", "As notificacoes ficaram bloqueadas neste navegador.");
-  } else {
-    showToast("Permissao pendente", "Voce pode habilitar as notificacoes por este botao quando quiser.");
+    if (permission === "granted") {
+      updateProfileNotificationsButtonState("Registrando este navegador...");
+      const token = await ensureFcmTokenRegistration({ force: true, showErrors: true });
+      showToast(
+        token ? "Notificacoes ativadas" : "Permissao ativada",
+        token
+          ? "Voce recebera avisos de mensagens pelo Firebase Cloud Messaging."
+          : "O navegador permitiu notificacoes, mas o FCM ainda nao retornou token."
+      );
+    } else if (permission === "denied") {
+      showToast("Permissao negada", "As notificacoes ficaram bloqueadas neste navegador.");
+    } else {
+      showToast("Permissao pendente", "Voce pode habilitar as notificacoes por este botao quando quiser.");
+    }
+  } catch (error) {
+    const notice = getFcmRegistrationErrorNotice(error);
+    console.warn("Nao foi possivel habilitar notificacoes FCM.", error);
+    showToast(notice.title, notice.message);
+  } finally {
+    updateProfileNotificationsButtonState();
   }
-
-  updateProfileNotificationsButtonState();
 }
 
 function updateProfileNotificationsButtonState(statusOverride = "") {

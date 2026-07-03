@@ -1,4 +1,4 @@
-const CACHE_NAME = "astrochat-cache-v71";
+const CACHE_NAME = "astrochat-cache-v73";
 const FIREBASE_MESSAGING_SDK_VERSION = "10.12.2";
 const FIREBASE_CONFIG = {
   apiKey: "AIzaSyC0eXt2QukMgcAJRzgflenD46JvRBfmczg",
@@ -10,6 +10,7 @@ const FIREBASE_CONFIG = {
   measurementId: "G-HTNLE1C4P4"
 };
 let firebaseMessagingReady = false;
+const RECENT_NOTIFICATION_KEYS = new Map();
 const APP_FILES = [
   "./",
   "./index.html",
@@ -21,11 +22,24 @@ const APP_FILES = [
 ];
 
 self.addEventListener("install", (event) => {
-  event.waitUntil(
-    caches.open(CACHE_NAME).then((cache) => cache.addAll(APP_FILES))
-  );
+  event.waitUntil(installAppShell());
   self.skipWaiting();
 });
+
+async function installAppShell() {
+  const cache = await caches.open(CACHE_NAME);
+
+  await Promise.all(APP_FILES.map(async (file) => {
+    try {
+      const response = await fetch(file, { cache: "reload" });
+      if (response && response.ok) {
+        await cache.put(file, response);
+      }
+    } catch (error) {
+      console.warn("Nao foi possivel salvar arquivo no cache do app.", file, error);
+    }
+  }));
+}
 
 self.addEventListener("activate", (event) => {
   event.waitUntil(
@@ -129,8 +143,7 @@ self.addEventListener("notificationclick", (event) => {
 
 self.addEventListener("push", (event) => {
   const payload = readPushPayload(event);
-  const { title, options } = createNotificationFromPushPayload(payload);
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil(showAstroChatNotification(payload, "push"));
 });
 
 function readPushPayload(event) {
@@ -156,15 +169,20 @@ function createNotificationFromPushPayload(payload = {}) {
   const title = data.title || notification.title || payload.title || "AstroChat";
   const body = data.body || notification.body || payload.body || "Nova atividade no AstroChat.";
   const url = data.url || payload.url || (roomId ? `./index.html#room=${encodeURIComponent(roomId)}` : "./");
+  const tag = data.tag || payload.tag || (roomId && messageId ? `chat:${roomId}:${messageId}` : createUniqueNotificationTag());
+  const notificationKey = roomId && messageId ? `chat:${roomId}:${messageId}` : tag;
 
   return {
     title,
+    notificationKey,
     options: {
       body,
       icon: data.icon || notification.icon || payload.icon || "icons/icon-192.png",
       badge: data.badge || payload.badge || "icons/icon-192.png",
-      tag: data.tag || payload.tag || (roomId && messageId ? `chat:${roomId}:${messageId}` : "astrochat-background"),
+      tag,
       renotify: true,
+      timestamp: Number(data.timestamp || data.time || Date.now()),
+      vibrate: [120, 80, 120],
       data: {
         url,
         roomId,
@@ -173,6 +191,45 @@ function createNotificationFromPushPayload(payload = {}) {
       }
     }
   };
+}
+
+async function showAstroChatNotification(payload = {}, source = "push") {
+  const { title, options, notificationKey } = createNotificationFromPushPayload(payload);
+
+  if (wasNotificationRecentlyShown(notificationKey)) {
+    return;
+  }
+
+  markNotificationRecentlyShown(notificationKey);
+
+  try {
+    await self.registration.showNotification(title, options);
+  } catch (error) {
+    console.warn("Nao foi possivel mostrar notificacao push.", source, error);
+  }
+}
+
+function createUniqueNotificationTag() {
+  return `astrochat:${Date.now()}:${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function wasNotificationRecentlyShown(key) {
+  clearOldNotificationKeys();
+  return RECENT_NOTIFICATION_KEYS.has(key);
+}
+
+function markNotificationRecentlyShown(key) {
+  clearOldNotificationKeys();
+  RECENT_NOTIFICATION_KEYS.set(key, Date.now());
+}
+
+function clearOldNotificationKeys() {
+  const now = Date.now();
+  RECENT_NOTIFICATION_KEYS.forEach((createdAt, key) => {
+    if (now - createdAt > 8000) {
+      RECENT_NOTIFICATION_KEYS.delete(key);
+    }
+  });
 }
 
 function initializeFirebaseMessaging() {
@@ -186,6 +243,7 @@ function initializeFirebaseMessaging() {
 
     messaging.onBackgroundMessage((payload) => {
       console.log("AstroChat FCM background payload recebido.", payload);
+      return showAstroChatNotification(payload, "fcm");
     });
   } catch (error) {
     firebaseMessagingReady = false;

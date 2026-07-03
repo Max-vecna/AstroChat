@@ -4,6 +4,8 @@ Esta versão usa Firebase Anonymous Auth + Realtime Database para sincronizar us
 
 ## Antes de testar
 
+> Se o app publicado roda em GitHub Pages ou outro dominio, adicione esse dominio em **Firebase Console > Authentication > Settings > Authorized domains**. `localhost` funcionar nao garante que `seu-usuario.github.io` esteja liberado.
+
 1. No Firebase Console, ative **Authentication > Sign-in method > Anonymous**.
 2. Ative o **Realtime Database**.
 3. Confira se a URL do banco no `app.js` está igual à URL do seu Realtime Database:
