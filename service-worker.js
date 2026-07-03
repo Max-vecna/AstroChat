@@ -1,4 +1,15 @@
-const CACHE_NAME = "astrochat-cache-v66";
+const CACHE_NAME = "astrochat-cache-v67";
+const FIREBASE_MESSAGING_SDK_VERSION = "10.12.2";
+const FIREBASE_CONFIG = {
+  apiKey: "AIzaSyC0eXt2QukMgcAJRzgflenD46JvRBfmczg",
+  authDomain: "astro-chat-7d044.firebaseapp.com",
+  projectId: "astro-chat-7d044",
+  storageBucket: "astro-chat-7d044.firebasestorage.app",
+  messagingSenderId: "64273019284",
+  appId: "1:64273019284:web:c4a9ade561d5270b9edf81",
+  measurementId: "G-HTNLE1C4P4"
+};
+let firebaseMessagingReady = false;
 const APP_FILES = [
   "./",
   "./index.html",
@@ -95,12 +106,16 @@ async function fetchAndRefreshCache(request) {
 self.addEventListener("notificationclick", (event) => {
   event.notification.close();
 
-  const targetUrl = event.notification.data?.url || "./";
+  const roomId = event.notification.data?.roomId || "";
+  const targetUrl = event.notification.data?.url || (roomId ? `./index.html#room=${encodeURIComponent(roomId)}` : "./");
   event.waitUntil(
     clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
       const sameOriginClient = clientList.find((client) => new URL(client.url).origin === self.location.origin);
 
       if (sameOriginClient) {
+        if (roomId) {
+          sameOriginClient.postMessage({ type: "OPEN_ROOM_FROM_NOTIFICATION", roomId });
+        }
         sameOriginClient.focus();
         return;
       }
@@ -114,19 +129,9 @@ self.addEventListener("notificationclick", (event) => {
 
 self.addEventListener("push", (event) => {
   const payload = readPushPayload(event);
-  const title = payload.title || "AstroChat";
-  const options = {
-    body: payload.body || "Nova atividade no AstroChat.",
-    icon: payload.icon || "icons/icon-192.png",
-    badge: payload.badge || "icons/icon-192.png",
-    tag: payload.tag || "astrochat-background",
-    renotify: true,
-    data: {
-      url: payload.url || "./",
-      ...payload.data
-    }
-  };
+  if (firebaseMessagingReady && isAstroChatFcmPayload(payload)) return;
 
+  const { title, options } = createNotificationFromPushPayload(payload);
   event.waitUntil(self.registration.showNotification(title, options));
 });
 
@@ -139,3 +144,56 @@ function readPushPayload(event) {
     return { body: event.data.text() };
   }
 }
+
+function isAstroChatFcmPayload(payload = {}) {
+  const data = payload.data || {};
+  return data.fcmSource === "astrochat" || data.type === "chat-message";
+}
+
+function createNotificationFromPushPayload(payload = {}) {
+  const data = payload.data || {};
+  const notification = payload.notification || {};
+  const roomId = data.roomId || payload.roomId || "";
+  const messageId = data.messageId || payload.messageId || "";
+  const title = data.title || notification.title || payload.title || "AstroChat";
+  const body = data.body || notification.body || payload.body || "Nova atividade no AstroChat.";
+  const url = data.url || payload.url || (roomId ? `./index.html#room=${encodeURIComponent(roomId)}` : "./");
+
+  return {
+    title,
+    options: {
+      body,
+      icon: data.icon || notification.icon || payload.icon || "icons/icon-192.png",
+      badge: data.badge || payload.badge || "icons/icon-192.png",
+      tag: data.tag || payload.tag || (roomId && messageId ? `chat:${roomId}:${messageId}` : "astrochat-background"),
+      renotify: true,
+      data: {
+        url,
+        roomId,
+        messageId,
+        ...data
+      }
+    }
+  };
+}
+
+function initializeFirebaseMessaging() {
+  try {
+    importScripts(`https://www.gstatic.com/firebasejs/${FIREBASE_MESSAGING_SDK_VERSION}/firebase-app-compat.js`);
+    importScripts(`https://www.gstatic.com/firebasejs/${FIREBASE_MESSAGING_SDK_VERSION}/firebase-messaging-compat.js`);
+
+    firebase.initializeApp(FIREBASE_CONFIG);
+    const messaging = firebase.messaging();
+    firebaseMessagingReady = true;
+
+    messaging.onBackgroundMessage((payload) => {
+      const { title, options } = createNotificationFromPushPayload(payload);
+      return self.registration.showNotification(title, options);
+    });
+  } catch (error) {
+    firebaseMessagingReady = false;
+    console.warn("Firebase Messaging indisponivel no service worker.", error);
+  }
+}
+
+initializeFirebaseMessaging();

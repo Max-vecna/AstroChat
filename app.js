@@ -19,6 +19,13 @@ import {
   serverTimestamp,
   update
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
+import {
+  deleteToken,
+  getMessaging,
+  getToken,
+  isSupported as isFirebaseMessagingSupported,
+  onMessage
+} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-messaging.js";
 
 // Configurações e Constantes
 const firebaseConfig = {
@@ -36,11 +43,15 @@ const auth = getAuth(firebaseApp);
 // Se o console do Firebase mostrar outra URL do Realtime Database, troque este valor.
 const DATABASE_URL = "https://astro-chat-7d044-default-rtdb.firebaseio.com";
 const db = getDatabase(firebaseApp, DATABASE_URL);
+// Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
+const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
 const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
 const USER_STORAGE_KEY = "chat-pwa-user-v1";
 const NOTIFICATIONS_STORAGE_KEY = "chat-pwa-notificacoes-v1";
+const FCM_DEVICE_ID_STORAGE_KEY = "astrochat-fcm-device-id-v1";
+const FCM_TOKEN_STORAGE_KEY = "astrochat-fcm-token-v1";
 const LIVE_TYPING_STORAGE_KEY = "astrochat-live-typing-v1";
 const LEARNING_TEST_STORAGE_KEY = "astrochat-learning-test-v1";
 const PROCESSED_FRIEND_REQUESTS_STORAGE_KEY = "astrochat-friend-requests-processados-v1";
@@ -109,6 +120,7 @@ let currentUser = loadUser();
 let currentFirebaseUser = null;
 let currentFirebaseUid = null;
 let activeRoomId = null;
+let pendingNotificationRoomId = getInitialNotificationRoomId();
 let suppressAutoRoomSelection = false;
 let activeView = "rooms";
 let deferredInstallPrompt = null;
@@ -136,6 +148,10 @@ let activeToastElement = null;
 let activeToastTimer = null;
 let backgroundRefreshTimer = null;
 let backgroundRefreshInProgress = false;
+let firebaseMessaging = null;
+let firebaseMessagingSupportedPromise = null;
+let firebaseMessagingForegroundUnsubscribe = null;
+let fcmTokenRegistrationPromise = null;
 const roomMessagesById = new Map();
 const renderedMessageIdsByRoom = new Map();
 const revealedOriginalMessageIds = new Set();
@@ -281,6 +297,7 @@ const aiAssistContent = document.querySelector("#aiAssistContent");
 setupConnectivityDetection();
 setupBackgroundRuntime();
 setupNotificationSoundUnlock();
+setupServiceWorkerMessageHandling();
 bootApp().catch((error) => {
   console.error("Falha ao iniciar o app.", error);
   showLogin();
@@ -380,7 +397,7 @@ resetLocalProfileButton?.addEventListener("click", () => {
   closeProfileSettingsModal();
   handleEraseUserAndLogout();
 });
-profileNotificationsButton?.addEventListener("click", handleProfileNotificationsButtonClick);
+profileNotificationsButton?.addEventListener("click", handleProfileNotificationsButtonClickWithFcm);
 
 profileNickInput?.addEventListener("input", updateProfileSettingsPreview);
 profileNativeLanguageSelect?.addEventListener("change", updateProfileSettingsPreview);
@@ -720,6 +737,7 @@ async function handleSessionLogout() {
 
   try {
     await clearCurrentTypingStatus();
+    await unregisterFcmTokenForCurrentUser();
     finishSessionLogout();
     showToast("Voce saiu", "Seus dados foram preservados. Entre novamente para continuar.");
   } catch (error) {
@@ -757,6 +775,7 @@ async function handleEraseUserAndLogout() {
 
   try {
     await clearCurrentTypingStatus();
+    await unregisterFcmTokenForCurrentUser({ deleteBrowserToken: true });
     await eraseCurrentUserFromFirebaseSystem();
     await deleteCurrentFirebaseAuthUserOrSignOut();
     finishFullLogout();
@@ -815,6 +834,12 @@ function resetRuntimeSessionState() {
   firebaseReady = false;
   firebaseInitPromise = null;
   aiReplyInProgress = false;
+  pendingNotificationRoomId = "";
+  fcmTokenRegistrationPromise = null;
+  if (firebaseMessagingForegroundUnsubscribe) {
+    firebaseMessagingForegroundUnsubscribe();
+    firebaseMessagingForegroundUnsubscribe = null;
+  }
   pendingRoomInviteFriendIds.clear();
   roomMessagesById.clear();
   renderedMessageIdsByRoom.clear();
@@ -846,6 +871,8 @@ function clearStoredAstroChatData() {
     FRIENDS_STORAGE_KEY,
     ROOMS_STORAGE_KEY,
     NOTIFICATIONS_STORAGE_KEY,
+    FCM_DEVICE_ID_STORAGE_KEY,
+    FCM_TOKEN_STORAGE_KEY,
     LIVE_TYPING_STORAGE_KEY,
     LEARNING_TEST_STORAGE_KEY,
     PROCESSED_FRIEND_REQUESTS_STORAGE_KEY
@@ -1068,6 +1095,7 @@ async function addProfileCleanupUpdates(updates, uid) {
   });
 
   updates[`users/${uid}`] = null;
+  updates[`fcmTokens/${uid}`] = null;
 }
 
 function setupConnectivityDetection() {
@@ -1294,6 +1322,10 @@ async function initFirebaseSession() {
     await saveFirebaseUserProfile();
     await preloadFirebaseInitialData();
     attachFirebaseListeners({ preserveCachedData: true });
+    setupFirebaseMessagingForegroundListener().catch((error) => {
+      console.warn("Nao foi possivel preparar mensagens FCM em primeiro plano.", error);
+    });
+    registerFcmTokenIfNotificationGranted();
     updateUserHeader("Online");
   })();
 
@@ -1348,6 +1380,7 @@ async function preloadFirebaseInitialData() {
   mergeInviteBuckets();
   validateActiveRoom();
   renderAll(true);
+  tryOpenPendingNotificationRoom();
 }
 
 function waitForAuthState() {
@@ -1699,6 +1732,7 @@ function syncRoomSubscriptions(roomIds) {
         validateActiveRoom();
         renderAll();
         subscribeToActiveRoomMessages();
+        tryOpenPendingNotificationRoom();
       },
       (error) => {
         console.error("Erro ao escutar uma sala no Realtime Database.", error);
@@ -1711,6 +1745,7 @@ function syncRoomSubscriptions(roomIds) {
   remoteRooms = Array.from(remoteRoomMap.values());
   validateActiveRoom();
   renderAll();
+  tryOpenPendingNotificationRoom();
 }
 
 function syncInviteSubscriptions(bucket, inviteIds) {
@@ -2243,6 +2278,66 @@ function getBrowserNotificationStatus() {
   return Notification.permission;
 }
 
+async function handleProfileNotificationsButtonClickWithFcm() {
+  unlockNotificationSound();
+
+  if (!profileNotificationsButton) return;
+
+  const status = getBrowserNotificationStatus();
+  if (status === "unsupported") {
+    showToast("Notificacoes indisponiveis", "Este navegador nao oferece notificacoes do sistema para este app.");
+    updateProfileNotificationsButtonState();
+    return;
+  }
+
+  if (status === "insecure") {
+    showToast("Ambiente sem permissao", "Abra o app em HTTPS ou localhost para habilitar notificacoes.");
+    updateProfileNotificationsButtonState();
+    return;
+  }
+
+  if (status === "denied") {
+    showToast("Notificacoes bloqueadas", "Libere as notificacoes nas configuracoes do navegador para este site.");
+    updateProfileNotificationsButtonState();
+    return;
+  }
+
+  if (status === "granted") {
+    updateProfileNotificationsButtonState("Registrando este navegador...");
+    const token = await ensureFcmTokenRegistration({ force: true, showErrors: true });
+    showToast(
+      token ? "Notificacoes ja ativadas" : "Permissao ativada",
+      token
+        ? "Este navegador ja pode receber avisos pelo Firebase Cloud Messaging."
+        : "O navegador permitiu notificacoes, mas o FCM ainda precisa da chave VAPID."
+    );
+    updateProfileNotificationsButtonState();
+    return;
+  }
+
+  profileNotificationsButton.disabled = true;
+  updateProfileNotificationsButtonState("Solicitando permissao...");
+
+  const permission = await requestBrowserNotificationPermission();
+
+  if (permission === "granted") {
+    updateProfileNotificationsButtonState("Registrando este navegador...");
+    const token = await ensureFcmTokenRegistration({ force: true, showErrors: true });
+    showToast(
+      token ? "Notificacoes ativadas" : "Permissao ativada",
+      token
+        ? "Voce recebera avisos de mensagens pelo Firebase Cloud Messaging."
+        : "Cole a chave VAPID do Firebase para ativar o envio em segundo plano."
+    );
+  } else if (permission === "denied") {
+    showToast("Permissao negada", "As notificacoes ficaram bloqueadas neste navegador.");
+  } else {
+    showToast("Permissao pendente", "Voce pode habilitar as notificacoes por este botao quando quiser.");
+  }
+
+  updateProfileNotificationsButtonState();
+}
+
 function updateProfileNotificationsButtonState(statusOverride = "") {
   if (!profileNotificationsButton || !profileNotificationsStatus) return;
 
@@ -2280,7 +2375,15 @@ function updateProfileNotificationsButtonState(statusOverride = "") {
     }
   };
 
-  const config = labels[status] || labels.default;
+  const config = { ...(labels[status] || labels.default) };
+  const vapidKeyValidation = getFcmVapidKeyValidation();
+  if (status === "granted" && !vapidKeyValidation.valid) {
+    config.title = "FCM pendente";
+    config.detail = vapidKeyValidation.message;
+    config.icon = "fa-solid fa-bell";
+  } else if (status === "granted" && localStorage.getItem(FCM_TOKEN_STORAGE_KEY)) {
+    config.detail = "Este navegador esta registrado no Firebase Cloud Messaging.";
+  }
   const icon = profileNotificationsButton.querySelector("i");
   const title = profileNotificationsButton.querySelector("strong");
 
@@ -2345,6 +2448,7 @@ async function saveProfileSettings(event) {
     if (firebaseReady && currentFirebaseUid && requireInternet("sincronizar perfil")) {
       await saveFirebaseUserProfile();
       await syncCurrentUserNameIntoLoadedRooms();
+      registerFcmTokenIfNotificationGranted({ force: true });
     }
     showToast("Perfil atualizado", "Seu nick, ícone espacial e idioma nativo foram salvos.");
     closeProfileSettingsModal();
@@ -7201,7 +7305,10 @@ function handleRoomMessageNotification(room, options = {}) {
 
 function openRoomFromNotification(roomId) {
   const room = getVisibleRooms().find((item) => item.id === roomId);
-  if (!room) return;
+  if (!room) {
+    pendingNotificationRoomId = roomId || "";
+    return;
+  }
 
   clearCurrentTypingStatus();
   activeRoomId = room.id;
@@ -7213,6 +7320,57 @@ function openRoomFromNotification(roomId) {
   closeNotificationsModal();
   renderAll(true);
   appShell.classList.add("chat-open");
+}
+
+function setupServiceWorkerMessageHandling() {
+  if (!("serviceWorker" in navigator)) return;
+
+  navigator.serviceWorker.addEventListener("message", (event) => {
+    const data = event.data || {};
+    if (data.type !== "OPEN_ROOM_FROM_NOTIFICATION") return;
+
+    queueOpenRoomFromNotification(data.roomId || "");
+  });
+}
+
+function getInitialNotificationRoomId() {
+  if (!location.hash) return "";
+
+  const hash = location.hash.startsWith("#") ? location.hash.slice(1) : location.hash;
+  const params = new URLSearchParams(hash);
+  return sanitizeNotificationRoomId(params.get("room") || "");
+}
+
+function sanitizeNotificationRoomId(roomId) {
+  return String(roomId || "").replace(/[^a-zA-Z0-9:_-]/g, "").slice(0, 180);
+}
+
+function queueOpenRoomFromNotification(roomId) {
+  const safeRoomId = sanitizeNotificationRoomId(roomId);
+  if (!safeRoomId) return;
+
+  pendingNotificationRoomId = safeRoomId;
+  tryOpenPendingNotificationRoom();
+}
+
+function tryOpenPendingNotificationRoom() {
+  if (!pendingNotificationRoomId || !currentUser?.nick) return;
+
+  const roomId = pendingNotificationRoomId;
+  if (!getVisibleRooms().some((room) => room.id === roomId)) return;
+
+  pendingNotificationRoomId = "";
+  openRoomFromNotification(roomId);
+
+  if (location.hash.includes(`room=${encodeURIComponent(roomId)}`)) {
+    history.replaceState(null, "", `${location.pathname}${location.search}`);
+  }
+}
+
+function getRoomNotificationUrl(roomId) {
+  const url = new URL(window.location.href);
+  url.hash = `room=${encodeURIComponent(roomId)}`;
+  return url.href;
 }
 
 function markRoomAsRead(room) {
@@ -7378,7 +7536,7 @@ function showBrowserNotification(title, body, data = {}) {
     tag: data.tag || title,
     renotify: true,
     data: {
-      url: window.location.href,
+      url: data.roomId ? getRoomNotificationUrl(data.roomId) : window.location.href,
       ...data
     }
   };
@@ -7413,6 +7571,218 @@ function showBrowserNotification(title, body, data = {}) {
   }
 
   showWindowNotification();
+}
+
+function isFcmVapidKeyConfigured() {
+  return getFcmVapidKeyValidation().valid;
+}
+
+function getNormalizedFcmVapidKey() {
+  return String(FCM_WEB_PUSH_PUBLIC_VAPID_KEY || "").replace(/\s+/g, "").trim();
+}
+
+function getFcmVapidKeyValidation() {
+  const key = getNormalizedFcmVapidKey();
+
+  if (!key || key.includes("COLE") || key.includes("SUA_CHAVE")) {
+    return {
+      valid: false,
+      message: "Cole a chave publica Web Push do Firebase em FCM_WEB_PUSH_PUBLIC_VAPID_KEY."
+    };
+  }
+
+  if (!/^[A-Za-z0-9_-]+={0,2}$/.test(key)) {
+    return {
+      valid: false,
+      message: "A chave VAPID deve ser base64url. Copie a chave publica de Web push certificates."
+    };
+  }
+
+  try {
+    const bytes = base64UrlToUint8Array(key);
+    if (bytes.length !== 65 || bytes[0] !== 4) {
+      return {
+        valid: false,
+        message: "A chave VAPID atual nao parece ser a chave publica Web Push completa do Firebase."
+      };
+    }
+  } catch (error) {
+    return {
+      valid: false,
+      message: "A chave VAPID atual nao pode ser decodificada. Copie novamente a chave publica Web Push."
+    };
+  }
+
+  return {
+    valid: true,
+    message: ""
+  };
+}
+
+function base64UrlToUint8Array(value) {
+  const padding = "=".repeat((4 - value.length % 4) % 4);
+  const base64 = `${value}${padding}`.replace(/-/g, "+").replace(/_/g, "/");
+  const raw = atob(base64);
+  const output = new Uint8Array(raw.length);
+
+  for (let index = 0; index < raw.length; index += 1) {
+    output[index] = raw.charCodeAt(index);
+  }
+
+  return output;
+}
+
+async function getFirebaseMessagingIfSupported() {
+  if (!("Notification" in window) || !("serviceWorker" in navigator)) return null;
+  if (!window.isSecureContext && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") return null;
+
+  if (!firebaseMessagingSupportedPromise) {
+    firebaseMessagingSupportedPromise = isFirebaseMessagingSupported().catch((error) => {
+      console.warn("Firebase Cloud Messaging indisponivel neste navegador.", error);
+      return false;
+    });
+  }
+
+  const supported = await firebaseMessagingSupportedPromise;
+  if (!supported) return null;
+
+  if (!firebaseMessaging) {
+    firebaseMessaging = getMessaging(firebaseApp);
+  }
+
+  return firebaseMessaging;
+}
+
+function getFcmDeviceId() {
+  const existing = localStorage.getItem(FCM_DEVICE_ID_STORAGE_KEY);
+  if (existing) return existing;
+
+  const nextId = window.crypto?.randomUUID?.() || createId("web-fcm");
+  localStorage.setItem(FCM_DEVICE_ID_STORAGE_KEY, nextId);
+  return nextId;
+}
+
+function registerFcmTokenIfNotificationGranted(options = {}) {
+  if (!("Notification" in window) || Notification.permission !== "granted") return;
+
+  ensureFcmTokenRegistration(options).catch((error) => {
+    console.warn("Nao foi possivel registrar o token FCM.", error);
+  });
+}
+
+async function ensureFcmTokenRegistration(options = {}) {
+  if (fcmTokenRegistrationPromise && !options.force) return fcmTokenRegistrationPromise;
+
+  fcmTokenRegistrationPromise = (async () => {
+    if (!currentFirebaseUid || !currentUser?.nick || !firebaseReady) return null;
+    if (!("Notification" in window) || Notification.permission !== "granted") return null;
+
+    const vapidKeyValidation = getFcmVapidKeyValidation();
+    if (!vapidKeyValidation.valid) {
+      if (options.showErrors) {
+        showToast("FCM sem chave VAPID valida", vapidKeyValidation.message);
+      }
+      return null;
+    }
+
+    const messaging = await getFirebaseMessagingIfSupported();
+    if (!messaging) {
+      if (options.showErrors) {
+        showToast("FCM indisponivel", "Este navegador nao suporta Firebase Cloud Messaging para Web Push.");
+      }
+      return null;
+    }
+
+    const registration = await navigator.serviceWorker.ready;
+    const token = await getToken(messaging, {
+      vapidKey: getNormalizedFcmVapidKey(),
+      serviceWorkerRegistration: registration
+    });
+
+    if (!token) {
+      if (options.showErrors) {
+        showToast("Token FCM ausente", "O Firebase nao retornou um token para este navegador.");
+      }
+      return null;
+    }
+
+    await saveFcmTokenForCurrentUser(token);
+    setupFirebaseMessagingForegroundListener().catch((error) => {
+      console.warn("Nao foi possivel preparar mensagens FCM em primeiro plano.", error);
+    });
+    return token;
+  })();
+
+  try {
+    return await fcmTokenRegistrationPromise;
+  } finally {
+    fcmTokenRegistrationPromise = null;
+  }
+}
+
+async function saveFcmTokenForCurrentUser(token) {
+  if (!token || !currentFirebaseUid) return;
+
+  const deviceId = getFcmDeviceId();
+  const now = Date.now();
+
+  await update(ref(db), {
+    [`fcmTokens/${currentFirebaseUid}/${deviceId}`]: {
+      uid: currentFirebaseUid,
+      deviceId,
+      token,
+      platform: "web",
+      nick: currentUser?.nick || "",
+      userAgent: String(navigator.userAgent || "").slice(0, 180),
+      updatedAt: serverTimestamp(),
+      updatedAtMillis: now
+    }
+  });
+
+  localStorage.setItem(FCM_TOKEN_STORAGE_KEY, token);
+}
+
+async function unregisterFcmTokenForCurrentUser(options = {}) {
+  const uid = currentFirebaseUid;
+  const deviceId = localStorage.getItem(FCM_DEVICE_ID_STORAGE_KEY);
+
+  if (uid && deviceId && firebaseReady && isInternetAvailable()) {
+    try {
+      await update(ref(db), {
+        [`fcmTokens/${uid}/${deviceId}`]: null
+      });
+    } catch (error) {
+      console.warn("Nao foi possivel remover o token FCM do Firebase.", error);
+    }
+  }
+
+  if (options.deleteBrowserToken) {
+    try {
+      const messaging = await getFirebaseMessagingIfSupported();
+      if (messaging) await deleteToken(messaging);
+    } catch (error) {
+      console.warn("Nao foi possivel apagar o token FCM local.", error);
+    }
+  }
+
+  localStorage.removeItem(FCM_TOKEN_STORAGE_KEY);
+}
+
+async function setupFirebaseMessagingForegroundListener() {
+  if (firebaseMessagingForegroundUnsubscribe) return;
+
+  try {
+    const messaging = await getFirebaseMessagingIfSupported();
+    if (!messaging) return;
+
+    firebaseMessagingForegroundUnsubscribe = onMessage(messaging, (payload) => {
+      const data = payload?.data || {};
+      if (data.type !== "chat-message" || data.authorUid === currentFirebaseUid) return;
+      // O Realtime Database ja cuida de badge/toast quando o app esta aberto.
+    });
+  } catch (error) {
+    console.warn("Nao foi possivel iniciar listener FCM em primeiro plano.", error);
+  }
 }
 
 function dismissToast(toast = activeToastElement) {
