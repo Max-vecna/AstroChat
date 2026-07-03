@@ -71,3 +71,13 @@ A funcao `sendChatMessageNotification` escuta o Realtime Database no instance `a
 - O token fica salvo em `fcmTokens/{uid}/{deviceId}`.
 - Quando uma mensagem nova e criada, a Cloud Function envia push para os tokens dos outros membros da sala.
 - Ao sair ou apagar usuario, o token desse navegador e removido.
+
+## 5. Se registrou mas nao notificou
+
+Confira estes pontos:
+
+- `fcmTokens/{uid}/{deviceId}` existe no Realtime Database e tem `lastRegisteredAtMillis` recente.
+- A Cloud Function foi implantada com `firebase deploy --only functions`.
+- A mensagem de teste foi enviada por outro usuario/UID; o remetente nao recebe push da propria mensagem.
+- O navegador receptor esta com permissao de notificacao concedida para o dominio atual.
+- Depois de alterar `service-worker.js`, recarregue a pagina para instalar a versao nova do service worker.

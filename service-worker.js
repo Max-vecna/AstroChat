@@ -1,4 +1,4 @@
-const CACHE_NAME = "astrochat-cache-v67";
+const CACHE_NAME = "astrochat-cache-v68";
 const FIREBASE_MESSAGING_SDK_VERSION = "10.12.2";
 const FIREBASE_CONFIG = {
   apiKey: "AIzaSyC0eXt2QukMgcAJRzgflenD46JvRBfmczg",
@@ -129,8 +129,6 @@ self.addEventListener("notificationclick", (event) => {
 
 self.addEventListener("push", (event) => {
   const payload = readPushPayload(event);
-  if (firebaseMessagingReady && isAstroChatFcmPayload(payload)) return;
-
   const { title, options } = createNotificationFromPushPayload(payload);
   event.waitUntil(self.registration.showNotification(title, options));
 });
@@ -187,8 +185,7 @@ function initializeFirebaseMessaging() {
     firebaseMessagingReady = true;
 
     messaging.onBackgroundMessage((payload) => {
-      const { title, options } = createNotificationFromPushPayload(payload);
-      return self.registration.showNotification(title, options);
+      console.log("AstroChat FCM background payload recebido.", payload);
     });
   } catch (error) {
     firebaseMessagingReady = false;

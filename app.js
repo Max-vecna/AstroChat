@@ -8,15 +8,19 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   equalTo,
+  endAt,
   get,
   getDatabase,
+  limitToFirst,
   onValue,
   orderByChild,
+  orderByKey,
   push,
   query,
   ref,
   runTransaction,
   serverTimestamp,
+  startAt,
   update
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js";
 import {
@@ -593,6 +597,7 @@ setupAutomaticUserSearch({
   input: privateNickInput,
   resultContainer: privateSearchResult,
   searchAction: searchUserForPrivateConversation,
+  minLength: 1,
   waitingText: "Digite pelo menos 2 letras para buscar o usuÃ¡rio."
 });
 
@@ -603,6 +608,7 @@ setupAutomaticUserSearch({
   input: inviteNickInput,
   resultContainer: inviteSearchResult,
   searchAction: searchUserForInvite,
+  minLength: 1,
   waitingText: "Digite pelo menos 2 letras para buscar o usuÃ¡rio."
 });
 
@@ -703,6 +709,7 @@ setupAutomaticUserSearch({
   input: friendNickInput,
   resultContainer: friendSearchResult,
   searchAction: searchUserForAddFriend,
+  minLength: 1,
   waitingText: "Digite pelo menos 2 letras para buscar um amigo."
 });
 
@@ -2717,41 +2724,7 @@ function renderRoomList(filter = "") {
 
   const normalizedFilter = normalize(filter);
   const visibleRooms = getVisibleRooms();
-  const filteredRooms = visibleRooms.filter((room) => normalize(room.name).includes(normalizedFilter));
-
-  filteredRooms
-    .sort((a, b) => {
-      if (isAiRoom(a) && !isAiRoom(b)) return -1;
-      if (!isAiRoom(a) && isAiRoom(b)) return 1;
-      return getLastTime(b) - getLastTime(a);
-    })
-    .forEach((room) => {
-      const item = roomItemTemplate.content.firstElementChild.cloneNode(true);
-      const avatar = item.querySelector(".avatar");
-      const name = item.querySelector(".chat-name");
-
-      item.dataset.roomId = room.id;
-      item.classList.toggle("active", room.id === activeRoomId);
-      item.classList.toggle("ai-room", isAiRoom(room));
-      paintRoomAvatar(avatar, room);
-      name.textContent = getRoomDisplayName(room);
-      updateRoomItemContent(item, room);
-
-      item.addEventListener("click", () => {
-        clearCurrentTypingStatus();
-        activeRoomId = room.id;
-        suppressAutoRoomSelection = false;
-        markRoomAsRead(room);
-        clearReplyTarget();
-        forceMessageRerender(room.id);
-        subscribeToActiveRoomMessages();
-        renderRoomList(searchInput.value);
-        renderActiveRoom(true);
-        appShell.classList.add("chat-open");
-      });
-
-      chatList.appendChild(item);
-    });
+  const filteredRooms = visibleRooms.filter((room) => matchesRoomSearch(room, normalizedFilter));
 
   if (!visibleRooms.length) {
     chatList.appendChild(createEmptyState(
@@ -2768,7 +2741,115 @@ function renderRoomList(filter = "") {
       "Nenhuma sala encontrada",
       "Tente pesquisar outro nome."
     ));
+    return;
   }
+
+  getRoomListGroups(filteredRooms).forEach((group) => {
+    chatList.appendChild(createRoomListSection(group));
+  });
+}
+
+function matchesRoomSearch(room, normalizedFilter) {
+  if (!normalizedFilter) return true;
+  return getRoomSearchText(room).includes(normalizedFilter);
+}
+
+function getRoomSearchText(room) {
+  return normalize([
+    getRoomDisplayName(room),
+    room?.name,
+    getRoomDescription(room),
+    room?.description,
+    room?.ownerNick,
+    room?.lastMessage,
+    room?.lastOriginalMessage,
+    room?.lastMessageAuthorNick,
+    ...(room?.memberNicks || []),
+    ...(room?.members || []),
+    ...Object.values(room?.memberNickMap || {}),
+    ...(room?.invitedNicks || [])
+  ].filter(Boolean).join(" "));
+}
+
+function getRoomListGroups(roomList) {
+  const sortedRooms = roomList.slice().sort(sortRoomsForList);
+  return [
+    {
+      key: "assistant",
+      title: "Professor IA",
+      icon: "fa-solid fa-language",
+      rooms: sortedRooms.filter((room) => isAiRoom(room))
+    },
+    {
+      key: "private",
+      title: "Conversas privadas",
+      icon: "fa-solid fa-comment",
+      rooms: sortedRooms.filter((room) => !isAiRoom(room) && isPrivateRoom(room))
+    },
+    {
+      key: "rooms",
+      title: "Salas",
+      icon: "fa-solid fa-door-open",
+      rooms: sortedRooms.filter((room) => !isAiRoom(room) && !isPrivateRoom(room))
+    }
+  ].filter((group) => group.rooms.length);
+}
+
+function sortRoomsForList(a, b) {
+  if (isAiRoom(a) && !isAiRoom(b)) return -1;
+  if (!isAiRoom(a) && isAiRoom(b)) return 1;
+  return getLastTime(b) - getLastTime(a);
+}
+
+function createRoomListSection(group) {
+  const section = document.createElement("section");
+  const header = document.createElement("div");
+  const list = document.createElement("div");
+
+  section.className = `chat-list-section ${group.key}-section`;
+  header.className = "chat-list-section-header";
+  header.innerHTML = `
+    <span><i class="${group.icon}" aria-hidden="true"></i>${escapeHtml(group.title)}</span>
+    <small>${group.rooms.length}</small>
+  `;
+  list.className = "chat-list-section-items";
+
+  group.rooms.forEach((room) => {
+    list.appendChild(createRoomListItem(room));
+  });
+
+  section.append(header, list);
+  return section;
+}
+
+function createRoomListItem(room) {
+  const item = roomItemTemplate.content.firstElementChild.cloneNode(true);
+  const avatar = item.querySelector(".avatar");
+  const name = item.querySelector(".chat-name");
+
+  item.dataset.roomId = room.id;
+  item.classList.toggle("active", room.id === activeRoomId);
+  item.classList.toggle("ai-room", isAiRoom(room));
+  item.classList.toggle("private-room", isPrivateRoom(room));
+  item.classList.toggle("group-room", !isAiRoom(room) && !isPrivateRoom(room));
+  paintRoomAvatar(avatar, room);
+  name.textContent = getRoomDisplayName(room);
+  updateRoomItemContent(item, room);
+
+  item.addEventListener("click", () => {
+    clearCurrentTypingStatus();
+    activeRoomId = room.id;
+    suppressAutoRoomSelection = false;
+    markRoomAsRead(room);
+    clearReplyTarget();
+    forceMessageRerender(room.id);
+    subscribeToActiveRoomMessages();
+    renderRoomList(searchInput.value);
+    renderActiveRoom(true);
+    appShell.classList.add("chat-open");
+  });
+
+  return item;
 }
 
 function renderActiveRoom(forceMessages = false) {
@@ -4422,12 +4503,7 @@ function updateRoomItemAfterNewMessage(room) {
   updateRoomItemContent(item, room);
   item.classList.add("active");
 
-  if (isAiRoom(room)) return;
-
-  const firstRoomItem = chatList.querySelector(".chat-item:not(.ai-room)");
-  if (firstRoomItem && firstRoomItem !== item) {
-    chatList.insertBefore(item, firstRoomItem);
-  }
+  renderRoomList(searchInput.value);
 }
 
 function renderFriendsList() {
@@ -4895,11 +4971,20 @@ async function findFirebaseUsersByNick(nick) {
 
   const nickKey = normalize(nick);
   const nickPathKey = toDatabaseKey(nickKey);
-  const indexSnapshot = await get(ref(db, `nickIndex/${nickPathKey}`));
+  if (!nickKey || !nickPathKey) return [];
+
+  const indexQuery = query(
+    ref(db, "nickIndex"),
+    orderByKey(),
+    startAt(nickPathKey),
+    endAt(`${nickPathKey}\uf8ff`),
+    limitToFirst(12)
+  );
+  const indexSnapshot = await get(indexQuery);
   let users = [];
 
   if (indexSnapshot.exists()) {
-    users = Object.values(indexSnapshot.val() || {});
+    users = Object.values(indexSnapshot.val() || {}).flatMap((entry) => Object.values(entry || {}));
   } else {
     const usersQuery = query(ref(db, "users"), orderByChild("nickKey"), equalTo(nickKey));
     const usersSnapshot = await get(usersQuery);
@@ -4908,6 +4993,9 @@ async function findFirebaseUsersByNick(nick) {
 
   return users
     .filter((user) => user.uid !== currentFirebaseUid)
+    .filter((user) => normalize(user.nick || user.nickKey || "").includes(nickKey))
+    .filter((user, index, list) => list.findIndex((item) => item.uid === user.uid) === index)
+    .sort((a, b) => normalize(a.nick || "").localeCompare(normalize(b.nick || ""), "pt-BR"))
     .map((user) => ({
       uid: user.uid,
       nick: user.nick || nick,
@@ -5517,23 +5605,37 @@ async function searchFirebaseUserAndRender({ nick, resultContainer, actionLabel,
     const foundUsers = await findFirebaseUsersByNick(nick);
     if (isStale?.()) return;
 
-    const user = foundUsers[0];
-
-    if (!user) {
+    if (!foundUsers.length) {
       showInlineResult(resultContainer, emptyText);
       return;
     }
 
-    renderUserSearchResult(resultContainer, user, actionLabel, onSelect);
+    renderUserSearchResults(resultContainer, foundUsers, actionLabel, onSelect);
   } catch (error) {
     console.error("Erro ao buscar usuário.", error);
     showInlineResult(resultContainer, "Não foi possível buscar esse usuário agora.");
   }
 }
 
-function renderUserSearchResult(container, user, actionLabel, onSelect) {
+function renderUserSearchResults(container, users, actionLabel, onSelect) {
   container.innerHTML = "";
 
+  const list = document.createElement("div");
+  list.className = "inline-user-results";
+
+  users.slice(0, 8).forEach((user) => {
+    list.appendChild(createUserSearchResultCard(container, user, actionLabel, onSelect));
+  });
+
+  container.appendChild(list);
+}
+
+function renderUserSearchResult(container, user, actionLabel, onSelect) {
+  container.innerHTML = "";
+  container.appendChild(createUserSearchResultCard(container, user, actionLabel, onSelect));
+}
+
+function createUserSearchResultCard(container, user, actionLabel, onSelect) {
   const isAlreadyFriend = isFriendWithUid(user.uid);
   const actionText = isAlreadyFriend && actionLabel === "Pedir amizade" ? "Conversar" : actionLabel;
   const actionIcon = isAlreadyFriend && actionLabel === "Pedir amizade" ? "fa-solid fa-comment" : "fa-solid fa-user-plus";
@@ -5565,7 +5667,7 @@ function renderUserSearchResult(container, user, actionLabel, onSelect) {
     }
   });
 
-  container.appendChild(card);
+  return card;
 }
 
 function showInlineResult(container, message, type = "muted") {
@@ -7735,7 +7837,8 @@ async function saveFcmTokenForCurrentUser(token) {
       nick: currentUser?.nick || "",
       userAgent: String(navigator.userAgent || "").slice(0, 180),
       updatedAt: serverTimestamp(),
-      updatedAtMillis: now
+      updatedAtMillis: now,
+      lastRegisteredAtMillis: now
     }
   });
 
