@@ -1,4 +1,4 @@
-const CACHE_NAME = "astrochat-cache-v70";
+const CACHE_NAME = "astrochat-cache-v71";
 const FIREBASE_MESSAGING_SDK_VERSION = "10.12.2";
 const FIREBASE_CONFIG = {
   apiKey: "AIzaSyC0eXt2QukMgcAJRzgflenD46JvRBfmczg",

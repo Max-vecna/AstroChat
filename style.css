@@ -538,22 +538,32 @@ body.is-authenticated .login-screen {
 
 .chat-item-top {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   gap: 8px;
 }
 
 .chat-name {
+  min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 0.95rem;
 }
 
+.chat-item-meta {
+  min-width: 38px;
+  flex: 0 0 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 4px;
+}
+
 .chat-time {
   color: var(--muted);
   font-size: 0.75rem;
-  flex: 0 0 auto;
+  line-height: 1.1;
 }
 
 .chat-preview {
@@ -1931,6 +1941,10 @@ button:disabled,
   background: var(--accent-2);
   font-size: 0.72rem;
   font-weight: 900;
+}
+
+.chat-item-meta .room-unread-badge {
+  margin-top: 0;
 }
 
 .chat-item.has-unread .chat-name,

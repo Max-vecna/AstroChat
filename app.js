@@ -49,7 +49,7 @@ const DATABASE_URL = "https://astro-chat-7d044-default-rtdb.firebaseio.com";
 const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
-const CHAT_VERSION = "v70";
+const CHAT_VERSION = "v71";
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
 const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
@@ -2822,9 +2822,10 @@ function getRoomListGroups(roomList) {
 }
 
 function sortRoomsForList(a, b) {
-  if (isAiRoom(a) && !isAiRoom(b)) return -1;
-  if (!isAiRoom(a) && isAiRoom(b)) return 1;
-  return getLastTime(b) - getLastTime(a);
+  const timeDifference = getLastTime(b) - getLastTime(a);
+  if (timeDifference) return timeDifference;
+
+  return getRoomDisplayName(a).localeCompare(getRoomDisplayName(b), "pt-BR", { sensitivity: "base" });
 }
 
 function createRoomListSection(group) {
@@ -4503,7 +4504,7 @@ function updateRoomItemContent(item, room) {
 
 function renderRoomUnreadBadge(item, count) {
   let badge = item.querySelector(".room-unread-badge");
-  const top = item.querySelector(".chat-item-top");
+  const meta = item.querySelector(".chat-item-meta") || item.querySelector(".chat-item-top");
 
   if (!count) {
     if (badge) badge.remove();
@@ -4513,7 +4514,7 @@ function renderRoomUnreadBadge(item, count) {
   if (!badge) {
     badge = document.createElement("span");
     badge.className = "room-unread-badge";
-    top.appendChild(badge);
+    meta.appendChild(badge);
   }
 
   badge.textContent = count > 99 ? "99+" : String(count);
