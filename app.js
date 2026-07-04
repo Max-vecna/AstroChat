@@ -50,7 +50,7 @@ const DATABASE_URL = "https://astro-chat-7d044-default-rtdb.firebaseio.com";
 const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
-const CHAT_VERSION = "v83";
+const CHAT_VERSION = "v85";
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
 const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
@@ -102,7 +102,39 @@ const SPACE_AVATAR_OPTIONS = [
   "fa-solid fa-moon",
   "fa-solid fa-star",
   "fa-solid fa-satellite",
-  "fa-solid fa-earth-americas"
+  "fa-solid fa-earth-americas",
+  "fa-solid fa-meteor",
+  "fa-solid fa-sun",
+  "fa-solid fa-cloud-moon",
+  "fa-solid fa-shuttle-space",
+  "fa-solid fa-satellite-dish",
+  "fa-solid fa-robot",
+  "fa-solid fa-user-secret",
+  "fa-solid fa-wand-magic-sparkles",
+  "fa-solid fa-hat-wizard",
+  "fa-solid fa-gem",
+  "fa-solid fa-bolt",
+  "fa-solid fa-compass",
+  "fa-solid fa-user-ninja",
+  "fa-solid fa-dragon",
+  "fa-solid fa-dice-d20",
+  "fa-solid fa-crown",
+  "fa-solid fa-shield-halved",
+  "fa-solid fa-feather",
+  "fa-solid fa-fire",
+  "fa-solid fa-water",
+  "fa-solid fa-snowflake",
+  "fa-solid fa-leaf",
+  "fa-solid fa-music",
+  "fa-solid fa-gamepad",
+  "fa-solid fa-puzzle-piece",
+  "fa-solid fa-book-open",
+  "fa-solid fa-map",
+  "fa-solid fa-camera-retro",
+  "fa-solid fa-headphones",
+  "fa-solid fa-microchip",
+  "fa-solid fa-atom",
+  "fa-solid fa-flask"
 ];
 const DEFAULT_SPACE_AVATAR_ICON = SPACE_AVATAR_OPTIONS[0];
 const AI_SYSTEM_PROMPT = `Você é um professor de idiomas paciente, prático e motivador dentro de um app de bate-papo.
@@ -2554,11 +2586,15 @@ function areInternalPushNotificationsEnabled() {
 function toggleInternalPushNotifications() {
   const enabled = !areInternalPushNotificationsEnabled();
   setInternalPushNotificationsEnabled(enabled);
+
+  if (!enabled) {
+    dismissToast();
+    return;
+  }
+
   showToast(
-    enabled ? "Avisos internos ativados" : "Avisos internos desativados",
-    enabled
-      ? "Mensagens e pedidos voltam a mostrar pop-ups e som neste aparelho."
-      : "Mensagens e pedidos continuam contando como nao lidos, sem pop-ups nem som interno."
+    "Push interno ativado",
+    "Mensagens e pedidos voltam a mostrar pop-ups, notificacoes locais, som e vibracao."
   );
 }
 
@@ -2580,9 +2616,9 @@ function updateInternalPushToggleState() {
   internalPushToggleButton.classList.toggle("is-blocked", !enabled);
 
   if (icon) icon.className = enabled ? "fa-solid fa-toggle-on" : "fa-solid fa-toggle-off";
-  if (title) title.textContent = enabled ? "Avisos internos ativados" : "Avisos internos desativados";
+  if (title) title.textContent = enabled ? "Push interno ativado" : "Push interno desativado";
   internalPushToggleStatus.textContent = enabled
-    ? "Mostra pop-ups e som quando chegam mensagens ou pedidos."
+    ? "Mostra pop-ups, notificacoes locais, som e vibracao."
     : "Mantem apenas badges e lista de nao lidas neste aparelho.";
 }
 
@@ -8183,6 +8219,8 @@ function primeNotificationSound(context) {
 }
 
 function playNotificationSound() {
+  if (!areInternalPushNotificationsEnabled()) return;
+
   if ("vibrate" in navigator) {
     navigator.vibrate([45, 35, 45]);
   }
