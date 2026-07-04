@@ -50,12 +50,13 @@ const DATABASE_URL = "https://astro-chat-7d044-default-rtdb.firebaseio.com";
 const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
-const CHAT_VERSION = "v82";
+const CHAT_VERSION = "v83";
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
 const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
 const USER_STORAGE_KEY = "chat-pwa-user-v1";
 const NOTIFICATIONS_STORAGE_KEY = "chat-pwa-notificacoes-v1";
+const INTERNAL_PUSH_STORAGE_KEY = "astrochat-internal-push-enabled-v1";
 const FCM_DEVICE_ID_STORAGE_KEY = "astrochat-fcm-device-id-v1";
 const FCM_TOKEN_STORAGE_KEY = "astrochat-fcm-token-v1";
 const LIVE_TYPING_STORAGE_KEY = "astrochat-live-typing-v1";
@@ -118,6 +119,7 @@ let friends = loadFromStorage(FRIENDS_STORAGE_KEY, []);
 let pendingRoomInviteFriendIds = new Set();
 let invites = [];
 let notificationState = normalizeNotificationState(loadFromStorage(NOTIFICATIONS_STORAGE_KEY, {}));
+let internalPushNotificationsEnabled = loadFromStorage(INTERNAL_PUSH_STORAGE_KEY, true) !== false;
 let liveTypingByRoom = loadFromStorage(LIVE_TYPING_STORAGE_KEY, {});
 let learningTestByRoom = loadFromStorage(LEARNING_TEST_STORAGE_KEY, {});
 let processedFriendRequestIds = loadFromStorage(PROCESSED_FRIEND_REQUESTS_STORAGE_KEY, {});
@@ -237,6 +239,8 @@ const cancelProfileSettingsButton = document.querySelector("#cancelProfileSettin
 const resetLocalProfileButton = document.querySelector("#resetLocalProfileButton");
 const profileNotificationsButton = document.querySelector("#profileNotificationsButton");
 const profileNotificationsStatus = document.querySelector("#profileNotificationsStatus");
+const internalPushToggleButton = document.querySelector("#internalPushToggleButton");
+const internalPushToggleStatus = document.querySelector("#internalPushToggleStatus");
 const profileVersionLabel = document.querySelector("#profileVersionLabel");
 const roomItemTemplate = document.querySelector("#roomItemTemplate");
 
@@ -426,6 +430,7 @@ resetLocalProfileButton?.addEventListener("click", () => {
   handleEraseUserAndLogout();
 });
 profileNotificationsButton?.addEventListener("click", handleProfileNotificationsButtonClickWithFcm);
+internalPushToggleButton?.addEventListener("click", toggleInternalPushNotifications);
 
 profileNickInput?.addEventListener("input", updateProfileSettingsPreview);
 profileNativeLanguageSelect?.addEventListener("change", updateProfileSettingsPreview);
@@ -902,6 +907,7 @@ function clearStoredAstroChatData() {
     FRIENDS_STORAGE_KEY,
     ROOMS_STORAGE_KEY,
     NOTIFICATIONS_STORAGE_KEY,
+    INTERNAL_PUSH_STORAGE_KEY,
     FCM_DEVICE_ID_STORAGE_KEY,
     FCM_TOKEN_STORAGE_KEY,
     LIVE_TYPING_STORAGE_KEY,
@@ -914,6 +920,7 @@ function loadLocalSessionData() {
   rooms = loadFromStorage(ROOMS_STORAGE_KEY, []).filter((room) => room?.type === AI_ROOM_TYPE);
   friends = loadFromStorage(FRIENDS_STORAGE_KEY, []);
   notificationState = normalizeNotificationState(loadFromStorage(NOTIFICATIONS_STORAGE_KEY, {}));
+  internalPushNotificationsEnabled = loadFromStorage(INTERNAL_PUSH_STORAGE_KEY, true) !== false;
   liveTypingByRoom = loadFromStorage(LIVE_TYPING_STORAGE_KEY, {});
   learningTestByRoom = loadFromStorage(LEARNING_TEST_STORAGE_KEY, {});
   processedFriendRequestIds = loadFromStorage(PROCESSED_FRIEND_REQUESTS_STORAGE_KEY, {});
@@ -2347,6 +2354,7 @@ function openProfileSettingsModal() {
   selectProfileSpaceAvatar(currentUser.avatarIcon || DEFAULT_SPACE_AVATAR_ICON);
   updateProfileSettingsPreview();
   updateProfileNotificationsButtonState();
+  updateInternalPushToggleState();
   profileSettingsModal.hidden = false;
   profileSettingsModal.setAttribute("aria-hidden", "false");
 }
@@ -2537,6 +2545,45 @@ function updateProfileNotificationsButtonState(statusOverride = "") {
   profileNotificationsButton.disabled = Boolean(statusOverride) ? true : config.disabled;
   profileNotificationsButton.classList.toggle("is-enabled", status === "granted");
   profileNotificationsButton.classList.toggle("is-blocked", status === "denied" || status === "unsupported" || status === "insecure");
+}
+
+function areInternalPushNotificationsEnabled() {
+  return internalPushNotificationsEnabled !== false;
+}
+
+function toggleInternalPushNotifications() {
+  const enabled = !areInternalPushNotificationsEnabled();
+  setInternalPushNotificationsEnabled(enabled);
+  showToast(
+    enabled ? "Avisos internos ativados" : "Avisos internos desativados",
+    enabled
+      ? "Mensagens e pedidos voltam a mostrar pop-ups e som neste aparelho."
+      : "Mensagens e pedidos continuam contando como nao lidos, sem pop-ups nem som interno."
+  );
+}
+
+function setInternalPushNotificationsEnabled(enabled) {
+  internalPushNotificationsEnabled = Boolean(enabled);
+  localStorage.setItem(INTERNAL_PUSH_STORAGE_KEY, JSON.stringify(internalPushNotificationsEnabled));
+  updateInternalPushToggleState();
+}
+
+function updateInternalPushToggleState() {
+  if (!internalPushToggleButton || !internalPushToggleStatus) return;
+
+  const enabled = areInternalPushNotificationsEnabled();
+  const icon = internalPushToggleButton.querySelector("i");
+  const title = internalPushToggleButton.querySelector("strong");
+
+  internalPushToggleButton.setAttribute("aria-pressed", String(enabled));
+  internalPushToggleButton.classList.toggle("is-enabled", enabled);
+  internalPushToggleButton.classList.toggle("is-blocked", !enabled);
+
+  if (icon) icon.className = enabled ? "fa-solid fa-toggle-on" : "fa-solid fa-toggle-off";
+  if (title) title.textContent = enabled ? "Avisos internos ativados" : "Avisos internos desativados";
+  internalPushToggleStatus.textContent = enabled
+    ? "Mostra pop-ups e som quando chegam mensagens ou pedidos."
+    : "Mantem apenas badges e lista de nao lidas neste aparelho.";
 }
 
 async function saveProfileSettings(event) {
@@ -7783,16 +7830,18 @@ function handleInviteNotifications() {
     const body = isFriendRequest
       ? `${invite.fromNick} quer adicionar você como amigo.`
       : `${invite.fromNick} convidou você para ${invite.roomName}.`;
-    showToast(
-      title,
-      body,
-      "Ver pedidos",
-      () => {
-        openNotificationsModal();
-      }
-    );
-    showBrowserNotification(title, body, { tag: `invite:${invite.id}` });
-    playNotificationSound();
+    if (areInternalPushNotificationsEnabled()) {
+      showToast(
+        title,
+        body,
+        "Ver pedidos",
+        () => {
+          openNotificationsModal();
+        }
+      );
+      showBrowserNotification(title, body, { tag: `invite:${invite.id}` });
+      playNotificationSound();
+    }
     seen.add(invite.id);
   });
 
@@ -7833,17 +7882,19 @@ function handleRoomMessageNotification(room, options = {}) {
   if (!wasAlreadyNotified && (!isInitialSnapshot || isRecentInitialSnapshot)) {
     const author = room.lastMessageAuthorNick || "Alguém";
     const text = truncateText(room.lastMessage || "Nova mensagem", 120);
-    showToast(
-      `Nova mensagem de ${author}`,
-      `${getRoomDisplayName(room)}: ${text}`,
-      "Abrir",
-      () => openRoomFromNotification(room.id)
-    );
-    showBrowserNotification(`Nova mensagem de ${author}`, `${getRoomDisplayName(room)}: ${text}`, {
-      tag: key,
-      roomId: room.id
-    });
-    playNotificationSound();
+    if (areInternalPushNotificationsEnabled()) {
+      showToast(
+        `Nova mensagem de ${author}`,
+        `${getRoomDisplayName(room)}: ${text}`,
+        "Abrir",
+        () => openRoomFromNotification(room.id)
+      );
+      showBrowserNotification(`Nova mensagem de ${author}`, `${getRoomDisplayName(room)}: ${text}`, {
+        tag: key,
+        roomId: room.id
+      });
+      playNotificationSound();
+    }
     markMessageNotificationShown(key);
   }
 
@@ -7926,14 +7977,16 @@ function handleForegroundFcmChatMessage(payload = {}, options = {}) {
   if (!options.silentSystemNotification && !wasAlreadyNotified) {
     const title = data.title || `Nova mensagem de ${data.authorNick || "Alguem"}`;
     const body = data.body || `${data.roomName || getRoomDisplayName(room) || "AstroChat"}: Nova mensagem`;
-    showToast(title, body, "Abrir", () => openRoomFromNotification(roomId));
-    showBrowserNotification(title, body, {
-      tag: key,
-      roomId,
-      messageId: data.messageId || "",
-      timestamp
-    });
-    playNotificationSound();
+    if (areInternalPushNotificationsEnabled()) {
+      showToast(title, body, "Abrir", () => openRoomFromNotification(roomId));
+      showBrowserNotification(title, body, {
+        tag: key,
+        roomId,
+        messageId: data.messageId || "",
+        timestamp
+      });
+      playNotificationSound();
+    }
     markMessageNotificationShown(key);
     refreshNotificationUi();
     return;
@@ -8182,6 +8235,7 @@ async function requestBrowserNotificationPermission() {
 }
 
 function showBrowserNotification(title, body, data = {}) {
+  if (!areInternalPushNotificationsEnabled()) return;
   if (!("Notification" in window)) return;
   if (Notification.permission !== "granted") return;
 

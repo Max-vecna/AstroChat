@@ -552,12 +552,13 @@ body.is-authenticated .login-screen {
 }
 
 .chat-item-meta {
-  min-width: 38px;
+  /* min-width: 38px; */
   flex: 0 0 auto;
   display: flex;
   flex-direction: column;
-  align-items: flex-end;
+  align-items: center;
   gap: 4px;
+  position: relative;
 }
 
 .chat-time {
@@ -1941,6 +1942,8 @@ button:disabled,
   background: var(--accent-2);
   font-size: 0.72rem;
   font-weight: 900;
+  position: absolute;
+  top: 20px;
 }
 
 .chat-item-meta .room-unread-badge {
@@ -2609,8 +2612,8 @@ button:disabled,
 
 .profile-pill:hover,
 .profile-pill:focus-visible {
-  outline: 1px solid rgba(157, 255, 224, 0.28);
-  background: rgba(255, 255, 255, 0.075);
+  /* outline: 1px solid rgba(157, 255, 224, 0.28); */
+  /* background: rgba(255, 255, 255, 0.075); */
 }
 
 .message-row.is-grouped {
@@ -2853,7 +2856,7 @@ button:disabled,
 
 .profile-pill:hover,
 .profile-pill:focus-visible {
-  transform: translateY(-1px);
+  /* transform: translateY(-1px); */
 }
 
 .icon-button,
@@ -4188,6 +4191,16 @@ button:disabled,
 .profile-notification-action.is-blocked {
   border-color: rgba(239, 107, 115, 0.26);
   background: linear-gradient(135deg, rgba(239, 107, 115, 0.12), rgba(255, 255, 255, 0.035));
+}
+
+.profile-internal-push-action.is-blocked {
+  border-color: rgba(255, 179, 71, 0.24);
+  background: linear-gradient(135deg, rgba(255, 179, 71, 0.12), rgba(255, 255, 255, 0.035));
+}
+
+.profile-internal-push-action.is-blocked > i {
+  color: #ffd9a1;
+  background: rgba(255, 179, 71, 0.12);
 }
 
 .profile-panel-actions {
