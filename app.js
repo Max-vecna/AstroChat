@@ -12,6 +12,7 @@ import {
   get,
   getDatabase,
   limitToFirst,
+  limitToLast,
   onValue,
   orderByChild,
   orderByKey,
@@ -49,7 +50,7 @@ const DATABASE_URL = "https://astro-chat-7d044-default-rtdb.firebaseio.com";
 const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
-const CHAT_VERSION = "v76";
+const CHAT_VERSION = "v78";
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
 const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
@@ -68,6 +69,7 @@ const FRIEND_REQUEST_TYPE = "friend-request";
 const NICK_TAKEN_ERROR_CODE = "nick-taken";
 const MISSING_FIREBASE_USER_DATA_ERROR_CODE = "missing-firebase-user-data";
 const BACKGROUND_REFRESH_INTERVAL_MS = 45000;
+const ROOM_LAST_MESSAGE_LISTEN_LIMIT = 1;
 const AI_TEACHER_NAME = "Professor IA";
 const POLLINATIONS_CHAT_ENDPOINT = "https://text.pollinations.ai/openai";
 const POLLINATIONS_TEXT_ENDPOINT = "https://text.pollinations.ai/";
@@ -153,6 +155,8 @@ let activeToastElement = null;
 let activeToastTimer = null;
 let backgroundRefreshTimer = null;
 let backgroundRefreshInProgress = false;
+let roomLastMessageRefreshTimer = null;
+let roomLastMessageRefreshInProgress = false;
 let firebaseMessaging = null;
 let firebaseMessagingSupportedPromise = null;
 let firebaseMessagingForegroundUnsubscribe = null;
@@ -165,6 +169,7 @@ const dehydratingMessageIds = new Set();
 const hydratedTranslationCache = new Map();
 const remoteRoomMap = new Map();
 const roomMetadataUnsubscribers = new Map();
+const roomLastMessageUnsubscribers = new Map();
 const inviteUnsubscribers = {
   received: new Map(),
   sent: new Map()
@@ -1205,7 +1210,9 @@ async function runBackgroundRefresh(options = {}) {
       get(ref(db, `userInvites/${currentFirebaseUid}/sent`))
     ]);
 
-    syncRoomSubscriptions(Object.keys(roomIndexSnapshot.val() || {}));
+    const roomIds = Object.keys(roomIndexSnapshot.val() || {});
+    syncRoomSubscriptions(roomIds);
+    scheduleRoomLastMessagesRefresh(roomIds, options.foreground ? 0 : 500);
     syncInviteSubscriptions("received", Object.keys(receivedIndexSnapshot.val() || {}));
     syncInviteSubscriptions("sent", Object.keys(sentIndexSnapshot.val() || {}));
 
@@ -1777,8 +1784,10 @@ function detachFirebaseListeners(options = {}) {
   if (unsubscribeSentInvites) unsubscribeSentInvites();
   if (unsubscribeMessages) unsubscribeMessages();
   if (unsubscribeTyping) unsubscribeTyping();
+  if (roomLastMessageRefreshTimer) window.clearTimeout(roomLastMessageRefreshTimer);
 
   roomMetadataUnsubscribers.forEach((unsubscribe) => unsubscribe());
+  roomLastMessageUnsubscribers.forEach((unsubscribe) => unsubscribe());
   inviteUnsubscribers.received.forEach((unsubscribe) => unsubscribe());
   inviteUnsubscribers.sent.forEach((unsubscribe) => unsubscribe());
 
@@ -1787,10 +1796,14 @@ function detachFirebaseListeners(options = {}) {
   unsubscribeSentInvites = null;
   unsubscribeMessages = null;
   unsubscribeTyping = null;
+  roomLastMessageRefreshTimer = null;
+  roomLastMessageRefreshInProgress = false;
+  scheduleRoomLastMessagesRefresh.pendingIds?.clear();
   activeMessagesRoomId = null;
   activeTypingRoomId = null;
   activeTypingUsers = [];
   roomMetadataUnsubscribers.clear();
+  roomLastMessageUnsubscribers.clear();
   inviteUnsubscribers.received.clear();
   inviteUnsubscribers.sent.clear();
   if (!options.preserveCachedData) {
@@ -1808,6 +1821,9 @@ function syncRoomSubscriptions(roomIds) {
       remoteRoomMap.delete(roomId);
       roomMessagesById.delete(roomId);
       renderedMessageIdsByRoom.delete(roomId);
+      const unsubscribeLastMessage = roomLastMessageUnsubscribers.get(roomId);
+      if (unsubscribeLastMessage) unsubscribeLastMessage();
+      roomLastMessageUnsubscribers.delete(roomId);
     }
   });
 
@@ -1815,6 +1831,9 @@ function syncRoomSubscriptions(roomIds) {
     if (!nextIds.has(roomId)) {
       unsubscribe();
       roomMetadataUnsubscribers.delete(roomId);
+      const unsubscribeLastMessage = roomLastMessageUnsubscribers.get(roomId);
+      if (unsubscribeLastMessage) unsubscribeLastMessage();
+      roomLastMessageUnsubscribers.delete(roomId);
       remoteRoomMap.delete(roomId);
       roomMessagesById.delete(roomId);
       renderedMessageIdsByRoom.delete(roomId);
@@ -1822,6 +1841,8 @@ function syncRoomSubscriptions(roomIds) {
   });
 
   roomIds.forEach((roomId) => {
+    ensureRoomLastMessageSubscription(roomId);
+
     if (roomMetadataUnsubscribers.has(roomId)) return;
 
     const unsubscribe = onValue(
@@ -1853,6 +1874,7 @@ function syncRoomSubscriptions(roomIds) {
   remoteRooms = Array.from(remoteRoomMap.values());
   validateActiveRoom();
   renderAll();
+  scheduleRoomLastMessagesRefresh(roomIds, 500);
   tryOpenPendingNotificationRoom();
 }
 
@@ -2759,12 +2781,16 @@ function updateBadges() {
   if (roomsBadge) roomsBadge.textContent = getVisibleRooms().length;
   if (friendsBadge) friendsBadge.textContent = friends.length;
   if (invitesBadge) invitesBadge.textContent = pendingInvites;
-  notificationBadge.textContent = totalNotifications > 99 ? "99+" : String(totalNotifications);
-  notificationBadge.hidden = totalNotifications === 0;
-  notificationsButton.classList.toggle("has-pending", totalNotifications > 0);
-  notificationsButton.title = totalNotifications
-    ? `${totalNotifications} notificação${totalNotifications > 1 ? "es" : ""}: ${pendingInvites} convite${pendingInvites !== 1 ? "s" : ""}, ${unreadMessages} mensagem${unreadMessages !== 1 ? "s" : ""} não lida${unreadMessages !== 1 ? "s" : ""}`
-    : "Pedidos e convites";
+  if (notificationBadge) {
+    notificationBadge.textContent = totalNotifications > 99 ? "99+" : String(totalNotifications);
+    notificationBadge.hidden = totalNotifications === 0;
+  }
+  if (notificationsButton) {
+    notificationsButton.classList.toggle("has-pending", totalNotifications > 0);
+    notificationsButton.title = totalNotifications
+      ? `${totalNotifications} notificação${totalNotifications > 1 ? "es" : ""}: ${pendingInvites} convite${pendingInvites !== 1 ? "s" : ""}, ${unreadMessages} mensagem${unreadMessages !== 1 ? "s" : ""} não lida${unreadMessages !== 1 ? "s" : ""}`
+      : "Pedidos e convites";
+  }
   if (mobileNotificationBadge) {
     mobileNotificationBadge.textContent = totalNotifications > 99 ? "99+" : String(totalNotifications);
     mobileNotificationBadge.hidden = totalNotifications === 0;
@@ -3241,6 +3267,165 @@ function upsertRoomMessage(roomId, message) {
   nextMessages.sort((a, b) => a.time - b.time);
   roomMessagesById.set(roomId, nextMessages);
   return nextMessages;
+}
+
+function ensureRoomLastMessageSubscription(roomId) {
+  if (!roomId || roomLastMessageUnsubscribers.has(roomId)) return;
+
+  const lastMessageQuery = query(
+    ref(db, `rooms/${roomId}/messages`),
+    orderByKey(),
+    limitToLast(ROOM_LAST_MESSAGE_LISTEN_LIMIT)
+  );
+
+  let receivedInitialSnapshot = false;
+  const unsubscribe = onValue(
+    lastMessageQuery,
+    (snapshot) => {
+      let lastMessage = null;
+      snapshot.forEach((childSnapshot) => {
+        lastMessage = mapMessageSnapshot(childSnapshot);
+      });
+
+      const initialSnapshot = !receivedInitialSnapshot;
+      receivedInitialSnapshot = true;
+
+      if (!lastMessage) return;
+      syncRemoteRoomLastMessage(roomId, lastMessage, { initialSnapshot });
+    },
+    (error) => {
+      console.error("Erro ao escutar ultima mensagem da sala no Realtime Database.", error);
+    }
+  );
+
+  roomLastMessageUnsubscribers.set(roomId, unsubscribe);
+}
+
+function scheduleRoomLastMessagesRefresh(roomIds = [], delay = 400) {
+  if (!Array.isArray(roomIds) || !roomIds.length) return;
+  if (!firebaseReady || !currentFirebaseUid || !isInternetAvailable()) return;
+
+  if (!scheduleRoomLastMessagesRefresh.pendingIds) {
+    scheduleRoomLastMessagesRefresh.pendingIds = new Set();
+  }
+
+  roomIds.filter(Boolean).forEach((roomId) => scheduleRoomLastMessagesRefresh.pendingIds.add(roomId));
+
+  if (roomLastMessageRefreshTimer) {
+    window.clearTimeout(roomLastMessageRefreshTimer);
+  }
+
+  roomLastMessageRefreshTimer = window.setTimeout(() => {
+    const pendingIds = Array.from(scheduleRoomLastMessagesRefresh.pendingIds || []);
+    scheduleRoomLastMessagesRefresh.pendingIds?.clear();
+    roomLastMessageRefreshTimer = null;
+    refreshRoomLastMessages(pendingIds).catch((error) => {
+      console.warn("Nao foi possivel atualizar ultimas mensagens das salas.", error);
+    });
+  }, Math.max(0, delay));
+}
+
+async function refreshRoomLastMessages(roomIds = []) {
+  if (roomLastMessageRefreshInProgress) {
+    scheduleRoomLastMessagesRefresh(roomIds, 1000);
+    return;
+  }
+
+  const uniqueRoomIds = unique(roomIds).filter(Boolean);
+  if (!uniqueRoomIds.length || !firebaseReady || !currentFirebaseUid || !isInternetAvailable()) return;
+
+  roomLastMessageRefreshInProgress = true;
+
+  try {
+    await Promise.all(uniqueRoomIds.map((roomId) => refreshRoomLastMessage(roomId)));
+  } finally {
+    roomLastMessageRefreshInProgress = false;
+  }
+}
+
+async function refreshRoomLastMessage(roomId) {
+  const lastMessageQuery = query(
+    ref(db, `rooms/${roomId}/messages`),
+    orderByKey(),
+    limitToLast(1)
+  );
+
+  try {
+    const snapshot = await get(lastMessageQuery);
+    let lastMessage = null;
+    snapshot.forEach((childSnapshot) => {
+      lastMessage = mapMessageSnapshot(childSnapshot);
+    });
+
+    if (lastMessage) {
+      const hadRoom = remoteRoomMap.has(roomId);
+      syncRemoteRoomLastMessage(roomId, lastMessage, { initialSnapshot: !hadRoom });
+      return;
+    }
+
+    const roomSnapshot = await get(ref(db, `rooms/${roomId}`));
+    if (!roomSnapshot.exists()) return;
+
+    const initialSnapshot = !remoteRoomMap.has(roomId);
+    const mappedRoom = mapRoomSnapshot(roomSnapshot);
+    remoteRoomMap.set(roomId, mappedRoom);
+    remoteRooms = Array.from(remoteRoomMap.values());
+    handleRoomMessageNotification(mappedRoom, { initialSnapshot });
+    renderRoomList(searchInput.value);
+    refreshNotificationsModalIfOpen();
+  } catch (error) {
+    console.warn("Nao foi possivel buscar ultima mensagem da sala.", roomId, error);
+  }
+}
+
+function syncRemoteRoomLastMessage(roomId, message, options = {}) {
+  if (!roomId || !message?.id) return;
+
+  const messagesForRoom = upsertRoomMessage(roomId, message);
+  const currentRoom = remoteRoomMap.get(roomId);
+  const lastMessageAt = Number(message.time || message.createdAt || Date.now());
+  const displayText = getMessageDisplayText(message, 300) || "Nova mensagem";
+
+  if (currentRoom) {
+    const updatedRoom = {
+      ...currentRoom,
+      lastMessage: displayText,
+      lastMessageId: message.id,
+      lastOriginalMessage: message.originalText || currentRoom.lastOriginalMessage || "",
+      lastMessageAuthorUid: message.authorUid || currentRoom.lastMessageAuthorUid || "",
+      lastMessageAuthorNick: message.authorNick || message.author || currentRoom.lastMessageAuthorNick || "Usuario",
+      lastMessageAt,
+      updatedAt: Math.max(Number(currentRoom.updatedAt || 0), lastMessageAt),
+      messages: messagesForRoom
+    };
+
+    remoteRoomMap.set(roomId, updatedRoom);
+    remoteRooms = Array.from(remoteRoomMap.values());
+
+    handleRoomMessageNotification(updatedRoom, { initialSnapshot: options.initialSnapshot === true });
+  } else {
+    handleRoomMessageNotification({
+      id: roomId,
+      lastMessage: displayText,
+      lastMessageId: message.id,
+      lastOriginalMessage: message.originalText || "",
+      lastMessageAuthorUid: message.authorUid || "",
+      lastMessageAuthorNick: message.authorNick || message.author || "Usuario",
+      lastMessageAt,
+      messages: messagesForRoom
+    }, { initialSnapshot: options.initialSnapshot === true });
+  }
+
+  if (activeRoomId === roomId) {
+    const activeRoom = getActiveRoom();
+    if (activeRoom) {
+      if (isRoomCurrentlyVisible(roomId)) markRoomAsRead(activeRoom);
+      renderRoomMessages(activeRoom);
+    }
+  }
+
+  renderRoomList(searchInput.value);
+  refreshNotificationsModalIfOpen();
 }
 
 function createMessageElement(message, animated = false, options = {}) {
@@ -4845,9 +5030,7 @@ function renderUnreadNotificationsList() {
   if (!unreadList) return;
   unreadList.innerHTML = "";
 
-  const unreadRooms = getVisibleRooms()
-    .filter((room) => getUnreadCount(room.id) > 0)
-    .sort((a, b) => getLastTime(b) - getLastTime(a));
+  const unreadRooms = getUnreadRoomsForNotifications();
 
   if (!unreadRooms.length) {
     unreadList.appendChild(createEmptyState(
@@ -4874,6 +5057,39 @@ function renderUnreadNotificationsList() {
     card.addEventListener("click", () => openRoomFromNotification(room.id));
     unreadList.appendChild(card);
   });
+}
+
+function getUnreadRoomsForNotifications() {
+  const visibleRooms = getVisibleRooms();
+  const visibleRoomIds = new Set(visibleRooms.map((room) => room.id));
+  const fallbackRooms = Object.entries(notificationState.unreadByRoom || {})
+    .filter(([roomId, count]) => roomId && Number(count || 0) > 0 && !visibleRoomIds.has(roomId))
+    .filter(([roomId]) => roomLastMessageUnsubscribers.has(roomId) || roomMessagesById.has(roomId) || remoteRoomMap.has(roomId))
+    .map(([roomId]) => createUnreadFallbackRoom(roomId));
+
+  return [...visibleRooms, ...fallbackRooms]
+    .filter((room) => getUnreadCount(room.id) > 0)
+    .sort((a, b) => getLastTime(b) - getLastTime(a));
+}
+
+function createUnreadFallbackRoom(roomId) {
+  const lastMessage = roomMessagesById.get(roomId)?.at(-1) || null;
+  const authorNick = lastMessage?.authorNick || lastMessage?.author || "Usuário";
+  const lastMessageText = getMessageDisplayText(lastMessage, 300) || "Nova mensagem";
+
+  return {
+    id: roomId,
+    type: USER_ROOM_TYPE,
+    name: "Conversa",
+    avatar: "C",
+    color: getGradientByText(roomId),
+    lastMessage: `${authorNick}: ${lastMessageText}`,
+    lastMessageId: lastMessage?.id || "",
+    lastMessageAuthorUid: lastMessage?.authorUid || "",
+    lastMessageAuthorNick: authorNick,
+    lastMessageAt: Number(lastMessage?.time || lastMessage?.createdAt || Date.now()),
+    messages: lastMessage ? [lastMessage] : []
+  };
 }
 
 async function createFirebaseRoom(name, description, selectedFriends, language = getLanguageOption("")) {

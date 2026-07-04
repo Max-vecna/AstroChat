@@ -1,4 +1,4 @@
-const CACHE_NAME = "astrochat-cache-v76";
+const CACHE_NAME = "astrochat-cache-v78";
 const FIREBASE_MESSAGING_SDK_VERSION = "10.12.2";
 const FIREBASE_CONFIG = {
   apiKey: "AIzaSyC0eXt2QukMgcAJRzgflenD46JvRBfmczg",
@@ -275,17 +275,38 @@ function initializeFirebaseMessaging() {
 
     messaging.onBackgroundMessage((payload) => {
       console.log("AstroChat FCM background payload recebido.", payload);
-
-      if (payload?.notification) {
-        syncOpenClientsFromPushPayload(payload);
-        return null;
-      }
-
       return showAstroChatNotification(payload, "fcm");
     });
   } catch (error) {
     firebaseMessagingReady = false;
     console.warn("Firebase Messaging indisponivel no service worker.", error);
+  }
+}
+
+
+self.addEventListener("push", (event) => {
+  const payload = getPayloadFromPushEvent(event);
+  if (!payload || !isAstroChatFcmPayload(payload)) return;
+
+  event.waitUntil(showAstroChatNotification(payload, "push"));
+});
+
+function getPayloadFromPushEvent(event) {
+  if (!event?.data) return null;
+
+  try {
+    const rawPayload = event.data.json();
+    if (rawPayload?.data || rawPayload?.notification) return rawPayload;
+    return { data: rawPayload };
+  } catch (error) {
+    try {
+      const text = event.data.text();
+      const rawPayload = JSON.parse(text);
+      if (rawPayload?.data || rawPayload?.notification) return rawPayload;
+      return { data: rawPayload };
+    } catch (innerError) {
+      return null;
+    }
   }
 }
 
