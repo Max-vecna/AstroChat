@@ -49,7 +49,7 @@ const DATABASE_URL = "https://astro-chat-7d044-default-rtdb.firebaseio.com";
 const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
-const CHAT_VERSION = "v73";
+const CHAT_VERSION = "v74";
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
 const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
@@ -3186,6 +3186,7 @@ async function sendFirebaseMessage(room, text, options = {}) {
   await update(ref(db), {
     [`rooms/${room.id}/messages/${messageRef.key}`]: message,
     [`rooms/${room.id}/lastMessage`]: displayText,
+    [`rooms/${room.id}/lastMessageId`]: messageRef.key,
     [`rooms/${room.id}/lastOriginalMessage`]: hasDeliveredTranslation ? cleanText : "",
     [`rooms/${room.id}/lastMessageAuthorUid`]: currentFirebaseUid,
     [`rooms/${room.id}/lastMessageAuthorNick`]: message.authorNick,
@@ -4867,6 +4868,7 @@ async function createFirebaseRoom(name, description, selectedFriends, language =
     invitedUids: invitedUids.reduce((map, uid) => ({ ...map, [uid]: true }), {}),
     invitedNicks: invitedNickMap,
     lastMessage: "",
+    lastMessageId: "",
     lastMessageAuthorUid: "",
     lastMessageAuthorNick: "",
     lastMessageAt: now,
@@ -5078,6 +5080,7 @@ async function clearFirebaseRoomMessages(roomId) {
   await update(ref(db), {
     [`rooms/${roomId}/messages`]: null,
     [`rooms/${roomId}/lastMessage`]: "",
+    [`rooms/${roomId}/lastMessageId`]: "",
     [`rooms/${roomId}/lastMessageAuthorUid`]: "",
     [`rooms/${roomId}/lastMessageAuthorNick`]: "",
     [`rooms/${roomId}/lastMessageAt`]: now,
@@ -6153,6 +6156,7 @@ async function startPrivateConversation(friend, options = {}) {
       },
       privatePair: getPrivatePairKey(currentFirebaseUid, friend.uid),
       lastMessage: "",
+      lastMessageId: "",
       lastMessageAuthorUid: "",
       lastMessageAuthorNick: "",
       lastMessageAt: now,
@@ -7229,6 +7233,7 @@ function mapRoomSnapshot(roomSnapshot) {
     invitedUids: objectKeys(data.invitedUids),
     invitedNicks: objectValues(data.invitedNicks),
     lastMessage: data.lastMessage || "",
+    lastMessageId: data.lastMessageId || "",
     lastOriginalMessage: data.lastOriginalMessage || "",
     lastMessageAuthorUid: data.lastMessageAuthorUid || "",
     lastMessageAuthorNick: data.lastMessageAuthorNick || "",
@@ -7500,14 +7505,20 @@ function handleRoomMessageNotification(room, options = {}) {
 
   if (lastMessageAt <= lastSeen) return;
 
-  const key = `${room.id}:${lastMessageAt}:${room.lastMessageAuthorUid || "user"}`;
+  const key = getMessageNotificationKey({
+    roomId: room.id,
+    messageId: room.lastMessageId,
+    lastMessageAt,
+    authorUid: room.lastMessageAuthorUid
+  });
   const notified = new Set(notificationState.notifiedMessageKeys || []);
   const wasAlreadyNotified = notified.has(key);
   const isInitialSnapshot = options.initialSnapshot === true;
+  const isRecentInitialSnapshot = isInitialSnapshot && Date.now() - lastMessageAt < 10 * 60 * 1000;
 
   notificationState.unreadByRoom[room.id] = Math.max(1, Number(notificationState.unreadByRoom?.[room.id] || 0) + (wasAlreadyNotified ? 0 : 1));
 
-  if (!wasAlreadyNotified && !isInitialSnapshot) {
+  if (!wasAlreadyNotified && (!isInitialSnapshot || isRecentInitialSnapshot)) {
     const author = room.lastMessageAuthorNick || "Alguém";
     const text = truncateText(room.lastMessage || "Nova mensagem", 120);
     showToast(
@@ -7526,6 +7537,56 @@ function handleRoomMessageNotification(room, options = {}) {
   if (!wasAlreadyNotified) notified.add(key);
 
   notificationState.notifiedMessageKeys = Array.from(notified).slice(-200);
+  saveNotificationState();
+  updateBadges();
+}
+
+function getMessageNotificationKey({ roomId, messageId = "", lastMessageAt = "", authorUid = "" } = {}) {
+  return `${roomId || "room"}:${messageId || lastMessageAt || "message"}:${authorUid || "user"}`;
+}
+
+function handleForegroundFcmChatMessage(payload = {}) {
+  const data = payload?.data || {};
+  if (data.type !== "chat-message" || data.authorUid === currentFirebaseUid) return;
+
+  const roomId = sanitizeNotificationRoomId(data.roomId || "");
+  if (!roomId) return;
+
+  const timestamp = Number(data.timestamp || data.time || Date.now());
+  const key = getMessageNotificationKey({
+    roomId,
+    messageId: data.messageId || "",
+    lastMessageAt: timestamp,
+    authorUid: data.authorUid || ""
+  });
+  const notified = new Set(notificationState.notifiedMessageKeys || []);
+  const wasAlreadyNotified = notified.has(key);
+  const room = getVisibleRooms().find((item) => item.id === roomId) || null;
+
+  if (isRoomCurrentlyVisible(roomId)) {
+    markRoomAsRead({ ...(room || { id: roomId }), lastMessageAt: timestamp });
+    return;
+  }
+
+  if (!wasAlreadyNotified) {
+    notificationState.unreadByRoom[roomId] = Math.max(1, Number(notificationState.unreadByRoom?.[roomId] || 0) + 1);
+    notified.add(key);
+    notificationState.notifiedMessageKeys = Array.from(notified).slice(-200);
+    saveNotificationState();
+    updateBadges();
+    renderRoomList(searchInput.value);
+
+    const title = data.title || `Nova mensagem de ${data.authorNick || "Alguem"}`;
+    const body = data.body || `${data.roomName || getRoomDisplayName(room) || "AstroChat"}: Nova mensagem`;
+    showToast(title, body, "Abrir", () => openRoomFromNotification(roomId));
+    showBrowserNotification(title, body, {
+      tag: key,
+      roomId
+    });
+    playNotificationSound();
+    return;
+  }
+
   saveNotificationState();
   updateBadges();
 }
@@ -8006,7 +8067,7 @@ async function setupFirebaseMessagingForegroundListener() {
     firebaseMessagingForegroundUnsubscribe = onMessage(messaging, (payload) => {
       const data = payload?.data || {};
       if (data.type !== "chat-message" || data.authorUid === currentFirebaseUid) return;
-      // O Realtime Database ja cuida de badge/toast quando o app esta aberto.
+      handleForegroundFcmChatMessage(payload);
     });
   } catch (error) {
     console.warn("Nao foi possivel iniciar listener FCM em primeiro plano.", error);
