@@ -49,7 +49,7 @@ const DATABASE_URL = "https://astro-chat-7d044-default-rtdb.firebaseio.com";
 const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
-const CHAT_VERSION = "v75";
+const CHAT_VERSION = "v76";
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
 const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
@@ -7545,14 +7545,14 @@ function getMessageNotificationKey({ roomId, messageId = "", lastMessageAt = "",
   return `${roomId || "room"}:${messageId || lastMessageAt || "message"}:${authorUid || "user"}`;
 }
 
-function handleForegroundFcmChatMessage(payload = {}) {
+function handleForegroundFcmChatMessage(payload = {}, options = {}) {
   const data = payload?.data || {};
   if (data.type !== "chat-message" || data.authorUid === currentFirebaseUid) return;
 
   const roomId = sanitizeNotificationRoomId(data.roomId || "");
   if (!roomId) return;
 
-  const timestamp = Number(data.timestamp || data.time || Date.now());
+  const timestamp = getNotificationTimestamp(data);
   const key = getMessageNotificationKey({
     roomId,
     messageId: data.messageId || "",
@@ -7575,20 +7575,31 @@ function handleForegroundFcmChatMessage(payload = {}) {
     saveNotificationState();
     updateBadges();
     renderRoomList(searchInput.value);
+    refreshNotificationsModalIfOpen();
 
-    const title = data.title || `Nova mensagem de ${data.authorNick || "Alguem"}`;
-    const body = data.body || `${data.roomName || getRoomDisplayName(room) || "AstroChat"}: Nova mensagem`;
-    showToast(title, body, "Abrir", () => openRoomFromNotification(roomId));
-    showBrowserNotification(title, body, {
-      tag: key,
-      roomId
-    });
-    playNotificationSound();
+    if (!options.silentSystemNotification) {
+      const title = data.title || `Nova mensagem de ${data.authorNick || "Alguem"}`;
+      const body = data.body || `${data.roomName || getRoomDisplayName(room) || "AstroChat"}: Nova mensagem`;
+      showToast(title, body, "Abrir", () => openRoomFromNotification(roomId));
+      showBrowserNotification(title, body, {
+        tag: key,
+        roomId,
+        messageId: data.messageId || "",
+        timestamp
+      });
+      playNotificationSound();
+    }
     return;
   }
 
   saveNotificationState();
   updateBadges();
+}
+
+function getNotificationTimestamp(data = {}) {
+  const candidates = [data.timestamp, data.time, data.sentAt, data.createdAt, Date.now()];
+  const value = candidates.find((candidate) => Number.isFinite(Number(candidate)) && Number(candidate) > 0);
+  return Number(value || Date.now());
 }
 
 function openRoomFromNotification(roomId) {
@@ -7615,9 +7626,15 @@ function setupServiceWorkerMessageHandling() {
 
   navigator.serviceWorker.addEventListener("message", (event) => {
     const data = event.data || {};
-    if (data.type !== "OPEN_ROOM_FROM_NOTIFICATION") return;
 
-    queueOpenRoomFromNotification(data.roomId || "");
+    if (data.type === "OPEN_ROOM_FROM_NOTIFICATION") {
+      queueOpenRoomFromNotification(data.roomId || "");
+      return;
+    }
+
+    if (data.type === "ASTROCHAT_PUSH_RECEIVED") {
+      handleForegroundFcmChatMessage({ data: data.payloadData || {} }, { silentSystemNotification: true });
+    }
   });
 }
 
@@ -7682,6 +7699,7 @@ function markVisibleActiveRoomAsRead() {
 function isRoomCurrentlyVisible(roomId) {
   if (!roomId || roomId !== activeRoomId) return false;
   if (document.hidden || document.visibilityState !== "visible") return false;
+  if (typeof document.hasFocus === "function" && !document.hasFocus()) return false;
 
   return !isMobileLayout() || appShell.classList.contains("chat-open");
 }
