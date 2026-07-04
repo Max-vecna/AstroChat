@@ -50,7 +50,7 @@ const DATABASE_URL = "https://astro-chat-7d044-default-rtdb.firebaseio.com";
 const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
-const CHAT_VERSION = "v79";
+const CHAT_VERSION = "v80";
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
 const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
@@ -5789,6 +5789,7 @@ async function deletePrivateConversation(friend) {
 
     delete notificationState.unreadByRoom[roomId];
     delete notificationState.lastSeenByRoom[roomId];
+    delete notificationState.lastSeenMessageIdByRoom[roomId];
     saveNotificationState();
 
     if (activeRoomId === roomId) {
@@ -6101,6 +6102,7 @@ function applyFriendRemovalLocally(friendUid, options = {}) {
   if (options.clearPrivateRoom !== false) {
     delete notificationState.unreadByRoom[privateRoomId];
     delete notificationState.lastSeenByRoom[privateRoomId];
+    delete notificationState.lastSeenMessageIdByRoom[privateRoomId];
     roomMessagesById.delete(privateRoomId);
     renderedMessageIdsByRoom.delete(privateRoomId);
     remoteRoomMap.delete(privateRoomId);
@@ -7729,6 +7731,7 @@ function normalizeNotificationState(value = {}) {
     countedMessageKeys: Array.isArray(value.countedMessageKeys) ? value.countedMessageKeys : [],
     notifiedMessageKeys: Array.isArray(value.notifiedMessageKeys) ? value.notifiedMessageKeys : [],
     lastSeenByRoom: value.lastSeenByRoom && typeof value.lastSeenByRoom === "object" ? value.lastSeenByRoom : {},
+    lastSeenMessageIdByRoom: value.lastSeenMessageIdByRoom && typeof value.lastSeenMessageIdByRoom === "object" ? value.lastSeenMessageIdByRoom : {},
     unreadByRoom: value.unreadByRoom && typeof value.unreadByRoom === "object" ? value.unreadByRoom : {}
   };
 }
@@ -7785,9 +7788,7 @@ function handleRoomMessageNotification(room, options = {}) {
     return;
   }
 
-  const lastSeen = Number(notificationState.lastSeenByRoom?.[room.id] || 0);
-
-  if (lastMessageAt <= lastSeen) return;
+  if (isRoomMessageAlreadyRead(room, lastMessageAt)) return;
 
   const key = getMessageNotificationKey({
     roomId: room.id,
@@ -7822,6 +7823,19 @@ function handleRoomMessageNotification(room, options = {}) {
 
 function getMessageNotificationKey({ roomId, messageId = "", lastMessageAt = "", authorUid = "" } = {}) {
   return `${roomId || "room"}:${messageId || lastMessageAt || "message"}:${authorUid || "user"}`;
+}
+
+function isRoomMessageAlreadyRead(room, lastMessageAt = 0) {
+  if (!room?.id) return true;
+
+  const lastMessageId = room.lastMessageId || room.messages?.at(-1)?.id || "";
+  if (lastMessageId) {
+    const lastSeenMessageId = notificationState.lastSeenMessageIdByRoom?.[room.id] || "";
+    if (lastSeenMessageId) return lastSeenMessageId === lastMessageId;
+  }
+
+  const lastSeen = Number(notificationState.lastSeenByRoom?.[room.id] || 0);
+  return Number(lastMessageAt || 0) <= lastSeen;
 }
 
 function markMessageAsUnreadOnce(roomId, key) {
@@ -7873,7 +7887,7 @@ function handleForegroundFcmChatMessage(payload = {}, options = {}) {
   const room = getVisibleRooms().find((item) => item.id === roomId) || null;
 
   if (isRoomCurrentlyVisible(roomId)) {
-    markRoomAsRead({ ...(room || { id: roomId }), lastMessageAt: timestamp });
+    markRoomAsRead({ ...(room || { id: roomId }), lastMessageAt: timestamp, lastMessageId: data.messageId || room?.lastMessageId || "" });
     return;
   }
 
@@ -7983,7 +7997,11 @@ function markRoomAsRead(room) {
   if (!room?.id || isAiRoom(room)) return;
 
   const lastMessageAt = Number(room.lastMessageAt || room.updatedAt || 0);
+  const lastMessageId = room.lastMessageId || room.messages?.at(-1)?.id || "";
   notificationState.lastSeenByRoom[room.id] = Math.max(Number(notificationState.lastSeenByRoom?.[room.id] || 0), lastMessageAt);
+  if (lastMessageId) {
+    notificationState.lastSeenMessageIdByRoom[room.id] = lastMessageId;
+  }
   notificationState.unreadByRoom[room.id] = 0;
   saveNotificationState();
   updateBadges();
