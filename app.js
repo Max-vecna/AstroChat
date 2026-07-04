@@ -50,7 +50,7 @@ const DATABASE_URL = "https://astro-chat-7d044-default-rtdb.firebaseio.com";
 const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
-const CHAT_VERSION = "v78";
+const CHAT_VERSION = "v79";
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
 const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
@@ -7726,6 +7726,7 @@ function getPendingReceivedInvites() {
 function normalizeNotificationState(value = {}) {
   return {
     seenInviteIds: Array.isArray(value.seenInviteIds) ? value.seenInviteIds : [],
+    countedMessageKeys: Array.isArray(value.countedMessageKeys) ? value.countedMessageKeys : [],
     notifiedMessageKeys: Array.isArray(value.notifiedMessageKeys) ? value.notifiedMessageKeys : [],
     lastSeenByRoom: value.lastSeenByRoom && typeof value.lastSeenByRoom === "object" ? value.lastSeenByRoom : {},
     unreadByRoom: value.unreadByRoom && typeof value.unreadByRoom === "object" ? value.unreadByRoom : {}
@@ -7794,12 +7795,10 @@ function handleRoomMessageNotification(room, options = {}) {
     lastMessageAt,
     authorUid: room.lastMessageAuthorUid
   });
-  const notified = new Set(notificationState.notifiedMessageKeys || []);
-  const wasAlreadyNotified = notified.has(key);
+  markMessageAsUnreadOnce(room.id, key);
+  const wasAlreadyNotified = wasMessageNotificationShown(key);
   const isInitialSnapshot = options.initialSnapshot === true;
   const isRecentInitialSnapshot = isInitialSnapshot && Date.now() - lastMessageAt < 10 * 60 * 1000;
-
-  notificationState.unreadByRoom[room.id] = Math.max(1, Number(notificationState.unreadByRoom?.[room.id] || 0) + (wasAlreadyNotified ? 0 : 1));
 
   if (!wasAlreadyNotified && (!isInitialSnapshot || isRecentInitialSnapshot)) {
     const author = room.lastMessageAuthorNick || "Alguém";
@@ -7815,17 +7814,45 @@ function handleRoomMessageNotification(room, options = {}) {
       roomId: room.id
     });
     playNotificationSound();
+    markMessageNotificationShown(key);
   }
 
-  if (!wasAlreadyNotified) notified.add(key);
-
-  notificationState.notifiedMessageKeys = Array.from(notified).slice(-200);
-  saveNotificationState();
-  updateBadges();
+  refreshNotificationUi();
 }
 
 function getMessageNotificationKey({ roomId, messageId = "", lastMessageAt = "", authorUid = "" } = {}) {
   return `${roomId || "room"}:${messageId || lastMessageAt || "message"}:${authorUid || "user"}`;
+}
+
+function markMessageAsUnreadOnce(roomId, key) {
+  if (!roomId || !key) return false;
+
+  const counted = new Set(notificationState.countedMessageKeys || []);
+  if (counted.has(key)) return false;
+
+  notificationState.unreadByRoom[roomId] = Math.max(1, Number(notificationState.unreadByRoom?.[roomId] || 0) + 1);
+  counted.add(key);
+  notificationState.countedMessageKeys = Array.from(counted).slice(-300);
+  return true;
+}
+
+function wasMessageNotificationShown(key) {
+  return Boolean(key && new Set(notificationState.notifiedMessageKeys || []).has(key));
+}
+
+function markMessageNotificationShown(key) {
+  if (!key) return;
+
+  const notified = new Set(notificationState.notifiedMessageKeys || []);
+  notified.add(key);
+  notificationState.notifiedMessageKeys = Array.from(notified).slice(-300);
+}
+
+function refreshNotificationUi() {
+  saveNotificationState();
+  updateBadges();
+  renderRoomList(searchInput.value);
+  refreshNotificationsModalIfOpen();
 }
 
 function handleForegroundFcmChatMessage(payload = {}, options = {}) {
@@ -7842,8 +7869,7 @@ function handleForegroundFcmChatMessage(payload = {}, options = {}) {
     lastMessageAt: timestamp,
     authorUid: data.authorUid || ""
   });
-  const notified = new Set(notificationState.notifiedMessageKeys || []);
-  const wasAlreadyNotified = notified.has(key);
+  const wasAlreadyNotified = wasMessageNotificationShown(key);
   const room = getVisibleRooms().find((item) => item.id === roomId) || null;
 
   if (isRoomCurrentlyVisible(roomId)) {
@@ -7851,32 +7877,24 @@ function handleForegroundFcmChatMessage(payload = {}, options = {}) {
     return;
   }
 
-  if (!wasAlreadyNotified) {
-    notificationState.unreadByRoom[roomId] = Math.max(1, Number(notificationState.unreadByRoom?.[roomId] || 0) + 1);
-    notified.add(key);
-    notificationState.notifiedMessageKeys = Array.from(notified).slice(-200);
-    saveNotificationState();
-    updateBadges();
-    renderRoomList(searchInput.value);
-    refreshNotificationsModalIfOpen();
+  markMessageAsUnreadOnce(roomId, key);
+  refreshNotificationUi();
 
-    if (!options.silentSystemNotification) {
-      const title = data.title || `Nova mensagem de ${data.authorNick || "Alguem"}`;
-      const body = data.body || `${data.roomName || getRoomDisplayName(room) || "AstroChat"}: Nova mensagem`;
-      showToast(title, body, "Abrir", () => openRoomFromNotification(roomId));
-      showBrowserNotification(title, body, {
-        tag: key,
-        roomId,
-        messageId: data.messageId || "",
-        timestamp
-      });
-      playNotificationSound();
-    }
+  if (!options.silentSystemNotification && !wasAlreadyNotified) {
+    const title = data.title || `Nova mensagem de ${data.authorNick || "Alguem"}`;
+    const body = data.body || `${data.roomName || getRoomDisplayName(room) || "AstroChat"}: Nova mensagem`;
+    showToast(title, body, "Abrir", () => openRoomFromNotification(roomId));
+    showBrowserNotification(title, body, {
+      tag: key,
+      roomId,
+      messageId: data.messageId || "",
+      timestamp
+    });
+    playNotificationSound();
+    markMessageNotificationShown(key);
+    refreshNotificationUi();
     return;
   }
-
-  saveNotificationState();
-  updateBadges();
 }
 
 function getNotificationTimestamp(data = {}) {
@@ -7983,6 +8001,8 @@ function isRoomCurrentlyVisible(roomId) {
   if (!roomId || roomId !== activeRoomId) return false;
   if (document.hidden || document.visibilityState !== "visible") return false;
   if (typeof document.hasFocus === "function" && !document.hasFocus()) return false;
+  if (!messages || messages.hidden || messages.dataset.roomId !== roomId) return false;
+  if (!messageForm || messageForm.hidden) return false;
 
   return !isMobileLayout() || appShell.classList.contains("chat-open");
 }
