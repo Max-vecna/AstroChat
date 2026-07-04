@@ -50,7 +50,7 @@ const DATABASE_URL = "https://astro-chat-7d044-default-rtdb.firebaseio.com";
 const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
-const CHAT_VERSION = "v80";
+const CHAT_VERSION = "v82";
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
 const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
@@ -1954,7 +1954,7 @@ function subscribeToActiveRoomMessages() {
       snapshot.forEach((childSnapshot) => {
         nextMessages.push(mapMessageSnapshot(childSnapshot));
       });
-      nextMessages.sort((a, b) => a.time - b.time);
+      nextMessages.sort(compareMessagesBySendOrder);
       roomMessagesById.set(activeRoom.id, nextMessages);
 
       if (activeRoomId === activeRoom.id) {
@@ -3216,7 +3216,8 @@ async function sendFirebaseMessage(room, text, options = {}) {
     [`rooms/${room.id}/lastOriginalMessage`]: hasDeliveredTranslation ? cleanText : "",
     [`rooms/${room.id}/lastMessageAuthorUid`]: currentFirebaseUid,
     [`rooms/${room.id}/lastMessageAuthorNick`]: message.authorNick,
-    [`rooms/${room.id}/lastMessageAt`]: now,
+    [`rooms/${room.id}/lastMessageAt`]: serverTimestamp(),
+    [`rooms/${room.id}/lastMessageAtMillis`]: now,
     [`rooms/${room.id}/updatedAt`]: serverTimestamp(),
     [`rooms/${room.id}/updatedAtMillis`]: now
   });
@@ -3264,7 +3265,7 @@ function upsertRoomMessage(roomId, message) {
     ? currentMessages.map((item, index) => index === existingIndex ? { ...item, ...message } : item)
     : [...currentMessages, message];
 
-  nextMessages.sort((a, b) => a.time - b.time);
+  nextMessages.sort(compareMessagesBySendOrder);
   roomMessagesById.set(roomId, nextMessages);
   return nextMessages;
 }
@@ -3274,7 +3275,7 @@ function ensureRoomLastMessageSubscription(roomId) {
 
   const lastMessageQuery = query(
     ref(db, `rooms/${roomId}/messages`),
-    orderByKey(),
+    orderByChild("createdAt"),
     limitToLast(ROOM_LAST_MESSAGE_LISTEN_LIMIT)
   );
 
@@ -3346,7 +3347,7 @@ async function refreshRoomLastMessages(roomIds = []) {
 async function refreshRoomLastMessage(roomId) {
   const lastMessageQuery = query(
     ref(db, `rooms/${roomId}/messages`),
-    orderByKey(),
+    orderByChild("createdAt"),
     limitToLast(1)
   );
 
@@ -3383,7 +3384,7 @@ function syncRemoteRoomLastMessage(roomId, message, options = {}) {
 
   const messagesForRoom = upsertRoomMessage(roomId, message);
   const currentRoom = remoteRoomMap.get(roomId);
-  const lastMessageAt = Number(message.time || message.createdAt || Date.now());
+  const lastMessageAt = getMessageSortTime(message) || Date.now();
   const displayText = getMessageDisplayText(message, 300) || "Nova mensagem";
 
   if (currentRoom) {
@@ -6746,7 +6747,7 @@ function getRoomStatus(room) {
 
 function getLastTime(room) {
   const lastMessage = room.messages?.at(-1);
-  return lastMessage?.time || room.lastMessageAt || room.updatedAt || room.createdAt || 0;
+  return getMessageSortTime(lastMessage) || room.lastMessageAt || room.updatedAt || room.createdAt || 0;
 }
 
 function getLanguageOption(code) {
@@ -7510,7 +7511,7 @@ function mapRoomSnapshot(roomSnapshot) {
     lastOriginalMessage: data.lastOriginalMessage || "",
     lastMessageAuthorUid: data.lastMessageAuthorUid || "",
     lastMessageAuthorNick: data.lastMessageAuthorNick || "",
-    lastMessageAt: getRealtimeMillis(data.lastMessageAt, data.createdAtMillis || Date.now()),
+    lastMessageAt: getRealtimeMillis(data.lastMessageAt, data.lastMessageAtMillis || data.createdAtMillis || Date.now()),
     createdAt: getRealtimeMillis(data.createdAt, data.createdAtMillis || Date.now()),
     updatedAt: getRealtimeMillis(data.updatedAt, data.updatedAtMillis || data.createdAtMillis || Date.now()),
     messages: messagesForRoom
@@ -7522,7 +7523,7 @@ function mapRoomMessagesFromData(messagesData) {
 
   return Object.entries(messagesData)
     .map(([messageId, data]) => mapMessageData(messageId, data || {}))
-    .sort((a, b) => a.time - b.time);
+    .sort(compareMessagesBySendOrder);
 }
 
 function mapInviteSnapshot(inviteSnapshot) {
@@ -7554,6 +7555,10 @@ function mapMessageSnapshot(messageSnapshot) {
 }
 
 function mapMessageData(messageId, data = {}) {
+  const clientTime = Number(data.createdAtMillis || data.time || 0);
+  const serverTime = getRealtimeMillis(data.createdAt, 0);
+  const displayTime = serverTime || clientTime || Date.now();
+
   return {
     id: messageId,
     text: data.text || "",
@@ -7574,9 +7579,31 @@ function mapMessageData(messageId, data = {}) {
     author: data.authorNick || data.author || "Usuário",
     authorAvatar: data.authorAvatar || getInitials(data.authorNick || "Usuário"),
     authorAvatarIcon: getSafeSpaceAvatarIcon(data.authorAvatarIcon),
-    time: data.time || getRealtimeMillis(data.createdAt, data.createdAtMillis || Date.now()),
-    createdAt: getRealtimeMillis(data.createdAt, data.createdAtMillis || data.time || Date.now())
+    time: displayTime,
+    clientTime: clientTime || displayTime,
+    serverTime,
+    createdAt: displayTime,
+    createdAtMillis: clientTime || displayTime
   };
+}
+
+function compareMessagesBySendOrder(a, b) {
+  const timeDifference = getMessageSortTime(a) - getMessageSortTime(b);
+  if (timeDifference) return timeDifference;
+  return String(a?.id || "").localeCompare(String(b?.id || ""));
+}
+
+function getMessageSortTime(message) {
+  if (!message) return 0;
+
+  const serverTime = Number(message.serverTime || 0);
+  if (Number.isFinite(serverTime) && serverTime > 0) return serverTime;
+
+  const createdAt = getRealtimeMillis(message.createdAt, 0);
+  if (createdAt) return createdAt;
+
+  const fallbackTime = Number(message.time || message.createdAtMillis || message.clientTime || 0);
+  return Number.isFinite(fallbackTime) ? fallbackTime : 0;
 }
 
 
@@ -7633,10 +7660,12 @@ function normalizeMessageHydrations(hydrations) {
 }
 
 function getRealtimeMillis(value, fallback) {
-  if (!value) return fallback || Date.now();
+  if (value === undefined || value === null || value === "") {
+    return fallback !== undefined ? fallback : Date.now();
+  }
   if (typeof value === "number") return value;
   if (value.seconds) return value.seconds * 1000;
-  return fallback || Date.now();
+  return fallback !== undefined ? fallback : Date.now();
 }
 
 function objectKeys(value) {
