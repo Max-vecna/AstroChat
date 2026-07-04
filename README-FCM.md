@@ -93,3 +93,23 @@ Se o app funciona em `localhost` e para quando sobe para GitHub Pages ou outro d
 - No celular, remova o PWA antigo da tela inicial, feche o navegador e abra a URL publicada novamente para pegar o service worker/cache novo.
 - Em iPhone/iOS, teste instalado na tela inicial; alguns navegadores nao entregam Web Push/FCM como o Chrome Android.
 - Se aparecer "Sem permissao no Firebase", mescle as regras de `fcmTokens` acima com as regras existentes do Realtime Database.
+
+## 7. Arquivos da Cloud Function incluídos
+
+Esta pasta corrigida agora inclui também:
+
+```text
+functions/index.js
+functions/package.json
+```
+
+Depois de publicar os arquivos do site, entre na raiz do projeto e rode:
+
+```bash
+cd functions
+npm install
+cd ..
+firebase deploy --only functions
+```
+
+O `functions/index.js` usa uma `tag` única por mensagem (`chat:{roomId}:{messageId}`), para o Android não substituir uma notificação pela outra. Se mesmo assim o celular abrir a notificação no lugar errado, configure a variável `APP_PUBLIC_URL` com a URL HTTPS pública do app.

@@ -3195,8 +3195,52 @@ async function sendFirebaseMessage(room, text, options = {}) {
     [`rooms/${room.id}/updatedAtMillis`]: now
   });
 
+  syncLocalSentFirebaseMessage(room, message, {
+    displayText,
+    originalText: hasDeliveredTranslation ? cleanText : "",
+    sentAt: now
+  });
   clearReplyTarget();
   markRoomAsRead(room);
+}
+
+function syncLocalSentFirebaseMessage(room, message, { displayText = "", originalText = "", sentAt = Date.now() } = {}) {
+  if (!room?.id || !message?.id) return;
+
+  const messagesForRoom = upsertRoomMessage(room.id, message);
+  const currentRoom = remoteRoomMap.get(room.id) || room;
+  const updatedRoom = {
+    ...currentRoom,
+    lastMessage: displayText || message.text || message.translatedText || "",
+    lastMessageId: message.id,
+    lastOriginalMessage: originalText,
+    lastMessageAuthorUid: message.authorUid || currentFirebaseUid || "",
+    lastMessageAuthorNick: message.authorNick || currentUser?.nick || "Voce",
+    lastMessageAt: sentAt,
+    updatedAt: sentAt,
+    messages: messagesForRoom
+  };
+
+  remoteRoomMap.set(room.id, updatedRoom);
+  remoteRooms = Array.from(remoteRoomMap.values());
+
+  if (activeRoomId === room.id) {
+    renderRoomMessages(updatedRoom);
+  }
+
+  renderRoomList(searchInput.value);
+}
+
+function upsertRoomMessage(roomId, message) {
+  const currentMessages = roomMessagesById.get(roomId) || [];
+  const existingIndex = currentMessages.findIndex((item) => item.id === message.id);
+  const nextMessages = existingIndex >= 0
+    ? currentMessages.map((item, index) => index === existingIndex ? { ...item, ...message } : item)
+    : [...currentMessages, message];
+
+  nextMessages.sort((a, b) => a.time - b.time);
+  roomMessagesById.set(roomId, nextMessages);
+  return nextMessages;
 }
 
 function createMessageElement(message, animated = false, options = {}) {
@@ -7209,7 +7253,18 @@ function removeAiTypingIndicator(roomId = "") {
 function mapRoomSnapshot(roomSnapshot) {
   const data = roomSnapshot.val() || {};
   const roomId = roomSnapshot.key;
-  const messagesForRoom = roomMessagesById.get(roomId) || [];
+  let messagesForRoom = roomMessagesById.get(roomId) || [];
+  const snapshotMessages = mapRoomMessagesFromData(data.messages);
+
+  if (snapshotMessages.length) {
+    const currentLastId = messagesForRoom.at(-1)?.id || "";
+    const snapshotLastId = snapshotMessages.at(-1)?.id || "";
+
+    if (!messagesForRoom.length || currentLastId !== snapshotLastId || snapshotMessages.length > messagesForRoom.length) {
+      messagesForRoom = snapshotMessages;
+      roomMessagesById.set(roomId, messagesForRoom);
+    }
+  }
 
   return {
     id: roomId,
@@ -7244,6 +7299,14 @@ function mapRoomSnapshot(roomSnapshot) {
   };
 }
 
+function mapRoomMessagesFromData(messagesData) {
+  if (!messagesData || typeof messagesData !== "object") return [];
+
+  return Object.entries(messagesData)
+    .map(([messageId, data]) => mapMessageData(messageId, data || {}))
+    .sort((a, b) => a.time - b.time);
+}
+
 function mapInviteSnapshot(inviteSnapshot) {
   const data = inviteSnapshot.val() || {};
   return {
@@ -7269,8 +7332,12 @@ function mapInviteSnapshot(inviteSnapshot) {
 
 function mapMessageSnapshot(messageSnapshot) {
   const data = messageSnapshot.val() || {};
+  return mapMessageData(messageSnapshot.key, data);
+}
+
+function mapMessageData(messageId, data = {}) {
   return {
-    id: messageSnapshot.key,
+    id: messageId,
     text: data.text || "",
     originalText: data.originalText || "",
     translatedText: data.translatedText || "",
