@@ -81,6 +81,7 @@ Confira estes pontos:
 - A mensagem de teste foi enviada por outro usuario/UID; o remetente nao recebe push da propria mensagem.
 - O navegador receptor esta com permissao de notificacao concedida para o dominio atual.
 - Depois de alterar `service-worker.js`, recarregue a pagina para instalar a versao nova do service worker.
+- A funcao envia `notification` + `webpush.notification`; depois de mudar `functions/index.js`, o deploy da Function e obrigatorio para o celular receber a correcao.
 
 ## 6. Quando funciona no PC, mas quebra no celular publicado
 

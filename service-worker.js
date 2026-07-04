@@ -1,4 +1,4 @@
-const CACHE_NAME = "astrochat-cache-v74";
+const CACHE_NAME = "astrochat-cache-v75";
 const FIREBASE_MESSAGING_SDK_VERSION = "10.12.2";
 const FIREBASE_CONFIG = {
   apiKey: "AIzaSyC0eXt2QukMgcAJRzgflenD46JvRBfmczg",
@@ -141,21 +141,6 @@ self.addEventListener("notificationclick", (event) => {
   );
 });
 
-self.addEventListener("push", (event) => {
-  const payload = readPushPayload(event);
-  event.waitUntil(showAstroChatNotification(payload, "push"));
-});
-
-function readPushPayload(event) {
-  if (!event.data) return {};
-
-  try {
-    return event.data.json();
-  } catch (error) {
-    return { body: event.data.text() };
-  }
-}
-
 function isAstroChatFcmPayload(payload = {}) {
   const data = payload.data || {};
   return data.fcmSource === "astrochat" || data.type === "chat-message";
@@ -243,6 +228,7 @@ function initializeFirebaseMessaging() {
 
     messaging.onBackgroundMessage((payload) => {
       console.log("AstroChat FCM background payload recebido.", payload);
+      if (payload?.notification) return null;
       return showAstroChatNotification(payload, "fcm");
     });
   } catch (error) {
