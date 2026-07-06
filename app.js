@@ -50,7 +50,7 @@ const DATABASE_URL = "https://astro-chat-7d044-default-rtdb.firebaseio.com";
 const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
-const CHAT_VERSION = "v112";
+const CHAT_VERSION = "v113";
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
 const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
@@ -232,6 +232,13 @@ let notificationSoundPrimed = false;
 let pendingNotificationSound = false;
 let activeToastElement = null;
 let activeToastTimer = null;
+let messageSelectionMode = false;
+let messageEditTarget = null;
+let roomListContextMenuRoomId = "";
+let roomListLongPressTimer = null;
+const selectedMessageIds = new Set();
+const selectedForwardRoomIds = new Set();
+const roomMetadataSignatures = new Map();
 let backgroundRefreshTimer = null;
 let backgroundRefreshInProgress = false;
 let connectivityBackgroundSyncTimer = null;
@@ -286,6 +293,7 @@ const cancelReplyButton = document.querySelector("#cancelReplyButton");
 const searchInput = document.querySelector("#searchInput");
 const searchBox = document.querySelector("#searchBox");
 const chatHeader = document.querySelector("#chatHeader");
+const chatPanel = document.querySelector("#chatPanel");
 const emptyChatPanel = document.querySelector("#emptyChatPanel");
 const activeAvatar = document.querySelector("#activeAvatar");
 const activeName = document.querySelector("#activeName");
@@ -508,9 +516,16 @@ document.addEventListener("click", (event) => {
   if (!event.target.closest(".message-menu") && !event.target.closest(".bubble")) {
     closeMessageMenus();
   }
+
+  if (!event.target.closest(".room-list-context-menu") && !event.target.closest(".chat-item")) {
+    closeRoomListContextMenu();
+  }
 });
 
-window.addEventListener("resize", closeMessageMenus);
+window.addEventListener("resize", () => {
+  closeMessageMenus();
+  closeRoomListContextMenu();
+});
 messages?.addEventListener("scroll", closeMessageMenus, { passive: true });
 
 profileSettingsButton?.addEventListener("click", openProfileSettingsModal);
@@ -597,6 +612,11 @@ messageForm.addEventListener("submit", async (event) => {
   const activeRoom = getActiveRoom();
 
   if (!text || !activeRoom) return;
+
+  if (messageEditTarget) {
+    await submitMessageEdit(text);
+    return;
+  }
 
   if (isAiRoom(activeRoom)) {
     if (aiReplyInProgress) return;
@@ -710,6 +730,12 @@ cancelReplyButton?.addEventListener("click", clearReplyTarget);
 
 messageInput.addEventListener("input", handleMessageInputTyping);
 messageInput.addEventListener("blur", () => scheduleTypingClear());
+messageInput.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && messageEditTarget) {
+    event.preventDefault();
+    cancelMessageEdit();
+  }
+});
 suggestTextButton?.addEventListener("click", openTextSuggestionAssistant);
 spellcheckButton?.addEventListener("click", openSpellcheckAssistant);
 learningTestButton?.addEventListener("click", toggleLearningTestMode);
@@ -1041,6 +1067,11 @@ function resetRuntimeSessionState() {
   rooms = [];
   activeTypingUsers = [];
   replyTarget = null;
+  messageSelectionMode = false;
+  messageEditTarget = null;
+  roomListContextMenuRoomId = "";
+  selectedMessageIds.clear();
+  roomMetadataSignatures.clear();
   notificationState = normalizeNotificationState({});
   liveTypingByRoom = {};
   learningTestByRoom = {};
@@ -1421,8 +1452,21 @@ function handleForegroundResume() {
   stopBackgroundRefresh();
   if (!currentUser?.nick || logoutInProgress) return;
 
+  updateForegroundUserHeader();
+  refreshFcmTokenRegistrationIfNeeded();
   runBackgroundRefresh({ foreground: true });
   markVisibleActiveRoomAsRead();
+}
+
+function updateForegroundUserHeader() {
+  if (!currentUser?.nick) return;
+
+  if (!isInternetAvailable()) {
+    updateUserHeader("Offline");
+    return;
+  }
+
+  updateUserHeader(firebaseReady && currentFirebaseUid ? "Online" : "Reconectando...");
 }
 
 async function runBackgroundRefresh(options = {}) {
@@ -1439,11 +1483,11 @@ async function runBackgroundRefresh(options = {}) {
 
     await flushOfflineMessageQueue();
 
-    const [roomIndexSnapshot, receivedIndexSnapshot, sentIndexSnapshot] = await Promise.all(
+    const [roomIndexSnapshot, receivedIndexSnapshot, sentIndexSnapshot] = await Promise.all([
       get(ref(db, `userRooms/${currentFirebaseUid}`)),
       get(ref(db, `userInvites/${currentFirebaseUid}/received`)),
       get(ref(db, `userInvites/${currentFirebaseUid}/sent`))
-    );
+    ]);
 
     const roomIds = Object.keys(roomIndexSnapshot.val() || {});
     syncRoomSubscriptions(roomIds);
@@ -1452,7 +1496,7 @@ async function runBackgroundRefresh(options = {}) {
     syncInviteSubscriptions("sent", Object.keys(sentIndexSnapshot.val() || {}));
     refreshFcmTokenRegistrationIfNeeded();
 
-    if (options.foreground) {
+    if (options.foreground || !document.hidden) {
       updateUserHeader("Online");
       renderAll();
     } else if (document.hidden) {
@@ -1460,6 +1504,7 @@ async function runBackgroundRefresh(options = {}) {
     }
   } catch (error) {
     firebaseInitPromise = null;
+    if (!document.hidden) updateForegroundUserHeader();
     console.warn("Nao foi possivel atualizar em segundo plano.", error);
   } finally {
     backgroundRefreshInProgress = false;
@@ -2042,6 +2087,7 @@ function detachFirebaseListeners(options = {}) {
   activeTypingUsers = [];
   roomMetadataUnsubscribers.clear();
   roomLastMessageUnsubscribers.clear();
+  roomMetadataSignatures.clear();
   inviteUnsubscribers.received.clear();
   inviteUnsubscribers.sent.clear();
   if (!options.preserveCachedData) {
@@ -2057,6 +2103,7 @@ function syncRoomSubscriptions(roomIds) {
   Array.from(remoteRoomMap.keys()).forEach((roomId) => {
     if (!nextIds.has(roomId)) {
       remoteRoomMap.delete(roomId);
+      roomMetadataSignatures.delete(roomId);
       roomMessagesById.delete(roomId);
       renderedMessageIdsByRoom.delete(roomId);
       const unsubscribeLastMessage = roomLastMessageUnsubscribers.get(roomId);
@@ -2073,6 +2120,7 @@ function syncRoomSubscriptions(roomIds) {
       if (unsubscribeLastMessage) unsubscribeLastMessage();
       roomLastMessageUnsubscribers.delete(roomId);
       remoteRoomMap.delete(roomId);
+      roomMetadataSignatures.delete(roomId);
       roomMessagesById.delete(roomId);
       renderedMessageIdsByRoom.delete(roomId);
     }
@@ -2087,12 +2135,22 @@ function syncRoomSubscriptions(roomIds) {
       ref(db, `rooms/${roomId}`),
       (snapshot) => {
         if (snapshot.exists()) {
+          const rawRoomData = snapshot.val() || {};
+          const metadataSignature = getRoomMetadataSignature(roomId, rawRoomData);
+          const previousSignature = roomMetadataSignatures.get(roomId) || "";
           const initialSnapshot = !remoteRoomMap.has(roomId);
+
+          if (!initialSnapshot && previousSignature === metadataSignature) {
+            return;
+          }
+
+          roomMetadataSignatures.set(roomId, metadataSignature);
           const mappedRoom = mapRoomSnapshot(snapshot);
           remoteRoomMap.set(roomId, mappedRoom);
           handleRoomMessageNotification(mappedRoom, { initialSnapshot });
         } else {
           remoteRoomMap.delete(roomId);
+          roomMetadataSignatures.delete(roomId);
         }
 
         remoteRooms = Array.from(remoteRoomMap.values());
@@ -2661,6 +2719,11 @@ function updateLearningTestButtonState(room = getActiveRoom()) {
 function updateMessageInputPlaceholder(room = getActiveRoom()) {
   if (!messageInput || !room) return;
 
+  if (messageEditTarget) {
+    messageInput.placeholder = "Editando mensagem...";
+    return;
+  }
+
   const language = getRoomLanguage(room);
   if (isAiRoom(room)) {
     messageInput.placeholder = "Pergunte sobre ingles, espanhol, vocabulario, pronuncia...";
@@ -2963,7 +3026,7 @@ function toggleInternalPushNotifications() {
 
   showToast(
     "Avisos internos ativados",
-    "Mensagens e pedidos voltam a mostrar pop-ups dentro do app, som e vibracao."
+    "Mensagens e pedidos voltam a mostrar pop-ups dentro do app. O som do navegador continua separado."
   );
 }
 
@@ -3020,8 +3083,8 @@ function updateInternalPushToggleState() {
   if (icon) icon.className = enabled ? "fa-solid fa-toggle-on" : "fa-solid fa-toggle-off";
   if (title) title.textContent = enabled ? "Avisos internos ativados" : "Avisos internos desativados";
   internalPushToggleStatus.textContent = enabled
-    ? "Mostra pop-ups dentro do app, som e vibracao."
-    : "Mantem apenas badges e lista de nao lidas neste aparelho.";
+    ? "Mostra pop-ups dentro do app. O som do navegador continua ativo quando permitido."
+    : "Oculta pop-ups internos, mas mantém badges, lista de não lidas e som do navegador.";
 }
 
 function updateToastRegionVisibility() {
@@ -3501,20 +3564,129 @@ function createRoomListItem(room) {
   updateRoomItemContent(item, room);
 
   item.addEventListener("click", () => {
-    clearCurrentTypingStatus();
-    activeRoomId = room.id;
-    suppressAutoRoomSelection = false;
-    markRoomAsRead(room);
-    clearReplyTarget();
-    forceMessageRerender(room.id);
-    subscribeToActiveRoomMessages();
-    renderRoomList(searchInput.value);
-    renderActiveRoom(true);
-    appShell.classList.add("chat-open");
+    if (roomListContextMenuRoomId === room.id) return;
+    openRoom(room);
   });
+
+  setupRoomListLongPress(item, room);
 
   return item;
 }
+
+function openRoom(room) {
+  if (!room?.id) return;
+  closeRoomListContextMenu();
+  setMessageSelectionMode(false, { keepRender: true });
+  cancelMessageEdit();
+  clearCurrentTypingStatus();
+  activeRoomId = room.id;
+  suppressAutoRoomSelection = false;
+  markRoomAsRead(room);
+  clearReplyTarget();
+  forceMessageRerender(room.id);
+  subscribeToActiveRoomMessages();
+  renderRoomList(searchInput.value);
+  renderActiveRoom(true);
+  appShell.classList.add("chat-open");
+}
+
+function setupRoomListLongPress(item, room) {
+  if (!item || !room?.id) return;
+
+  const start = (event) => {
+    if (event.pointerType === "mouse" && event.button !== 0) return;
+    if (roomListLongPressTimer) window.clearTimeout(roomListLongPressTimer);
+    roomListLongPressTimer = window.setTimeout(() => {
+      roomListLongPressTimer = null;
+      openRoomListContextMenu(room, item);
+    }, 520);
+  };
+
+  const cancel = () => {
+    if (roomListLongPressTimer) {
+      window.clearTimeout(roomListLongPressTimer);
+      roomListLongPressTimer = null;
+    }
+  };
+
+  item.addEventListener("pointerdown", start);
+  item.addEventListener("pointerup", cancel);
+  item.addEventListener("pointerleave", cancel);
+  item.addEventListener("pointercancel", cancel);
+  item.addEventListener("contextmenu", (event) => {
+    event.preventDefault();
+    openRoomListContextMenu(room, item);
+  });
+}
+
+function openRoomListContextMenu(room, item) {
+  if (!room?.id || isAiRoom(room)) return;
+
+  closeRoomListContextMenu();
+  roomListContextMenuRoomId = room.id;
+  item?.classList.add("context-selected");
+
+  const menu = document.createElement("div");
+  menu.className = "room-list-context-menu";
+  menu.setAttribute("role", "menu");
+  menu.dataset.roomId = room.id;
+
+  const pinLabel = isConversationPinned(room.id) ? "Desafixar" : "Fixar";
+  menu.append(
+    createRoomListContextButton(isConversationPinned(room.id) ? "fa-solid fa-thumbtack-slash" : "fa-solid fa-thumbtack", pinLabel, () => toggleRoomPin(room)),
+    createRoomListContextButton("fa-solid fa-trash-can", isRoomOwner(room) ? "Excluir sala" : "Remover da lista", () => deleteOrLeaveRoomFromList(room), "danger")
+  );
+
+  document.body.appendChild(menu);
+  positionFloatingMenu(menu, item);
+}
+
+function createRoomListContextButton(iconClass, label, onClick, tone = "") {
+  const button = document.createElement("button");
+  button.type = "button";
+  button.setAttribute("role", "menuitem");
+  if (tone) button.classList.add(tone);
+  button.innerHTML = `<i class="${iconClass}" aria-hidden="true"></i><span>${escapeHtml(label)}</span>`;
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    closeRoomListContextMenu();
+    onClick();
+  });
+  return button;
+}
+
+function closeRoomListContextMenu() {
+  document.querySelectorAll(".room-list-context-menu").forEach((menu) => menu.remove());
+  document.querySelectorAll(".chat-item.context-selected").forEach((item) => item.classList.remove("context-selected"));
+  roomListContextMenuRoomId = "";
+}
+
+function toggleRoomPin(room) {
+  if (!room?.id) return;
+
+  if (isConversationPinned(room.id)) {
+    pinnedConversationIds.delete(room.id);
+    showToast("Conversa desafixada", `${getRoomDisplayName(room)} saiu do topo.`);
+  } else {
+    pinnedConversationIds.add(room.id);
+    showToast("Conversa fixada", `${getRoomDisplayName(room)} ficou no topo da lista.`);
+  }
+
+  savePinnedConversations();
+  if (activeRoomId === room.id) updateRoomPinButtonState(room);
+  renderRoomList(searchInput.value);
+}
+
+async function deleteOrLeaveRoomFromList(room) {
+  if (!room || isAiRoom(room)) return;
+
+  if (isRoomOwner(room)) {
+    await deleteActiveRoomForEveryone(room);
+  } else {
+    await leaveActiveRoom(room);
+  }
+}
+
 
 function renderActiveRoom(forceMessages = false) {
   const activeRoom = getActiveRoom();
@@ -3532,6 +3704,8 @@ function renderActiveRoom(forceMessages = false) {
     updateConversationSearchButton(null);
     closeMessageSearchPanel();
     updateLearningTestButtonState(null);
+    setMessageSelectionMode(false, { keepRender: true });
+    cancelMessageEdit();
     return;
   }
 
@@ -3557,6 +3731,7 @@ function renderActiveRoom(forceMessages = false) {
   }
   updateMessageInputPlaceholder(activeRoom);
   updateLearningTestButtonState(activeRoom);
+  updateMessageSelectionToolbar();
 
   if (forceMessages || messages.dataset.roomId !== activeRoom.id) {
     messages.innerHTML = "";
@@ -3577,6 +3752,8 @@ async function closeMobileConversationToMenu() {
   activeRoomId = null;
   suppressAutoRoomSelection = true;
   clearReplyTarget();
+  cancelMessageEdit();
+  setMessageSelectionMode(false, { keepRender: true });
   subscribeToActiveRoomMessages();
   renderRoomList(searchInput.value);
   renderActiveRoom(true);
@@ -4243,6 +4420,10 @@ function getLearningAnalysisSourceText(message) {
 async function analyzeMessageWriting(message) {
   const activeRoom = getActiveRoom();
   if (!activeRoom || isAiRoom(activeRoom) || !message?.id) return;
+  if (!wasMessageSentWithLearningTest(message)) {
+    showToast("Análise indisponível", "A opção Analisar só aparece em mensagens enviadas com Testar meu aprendizado ativo.");
+    return;
+  }
   if (isLearningAnalysisPending(message)) return;
   if (!requireFirebaseConnection("analisar esta mensagem")) return;
 
@@ -5694,6 +5875,8 @@ function createMessageElement(message, animated = false, options = {}) {
   row.classList.toggle("delivery-failed", message.deliveryStatus === "failed");
   row.dataset.messageId = message.id || "";
   row.dataset.signature = getMessageSignature(message);
+  row.classList.toggle("message-selectable", messageSelectionMode);
+  row.classList.toggle("message-selected", messageSelectionMode && selectedMessageIds.has(message.id));
   stack.className = "message-stack";
   bubble.className = `bubble${animated ? " is-new" : ""}`;
   const messageRoomId = options.roomId || activeRoomId;
@@ -5813,6 +5996,10 @@ function createMessageElement(message, animated = false, options = {}) {
     if (event.target.closest("button, a, input, textarea, select, .reaction-picker, .message-menu")) return;
     if (row.dataset.swipedRecently === "1") return;
     event.stopPropagation();
+    if (messageSelectionMode) {
+      toggleMessageSelection(message);
+      return;
+    }
     openMessageMenu(message, row, bubble);
   });
 
@@ -5824,9 +6011,27 @@ function createMessageElement(message, animated = false, options = {}) {
     stack.appendChild(reactionSummary);
   }
 
+  if (messageSelectionMode) {
+    row.appendChild(createMessageSelectionButton(message));
+  }
   row.appendChild(stack);
   setupSwipeReply(row, bubble, message);
   return row;
+}
+
+function createMessageSelectionButton(message) {
+  const button = document.createElement("button");
+  const selected = Boolean(message?.id && selectedMessageIds.has(message.id));
+  button.type = "button";
+  button.className = `message-select-button${selected ? " is-selected" : ""}`;
+  button.title = selected ? "Desmarcar mensagem" : "Selecionar mensagem";
+  button.setAttribute("aria-label", button.title);
+  button.innerHTML = `<i class="fa-solid ${selected ? "fa-check" : "fa-circle"}" aria-hidden="true"></i>`;
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    toggleMessageSelection(message);
+  });
+  return button;
 }
 
 function createHydratedGooeyDropsEffectElement() {
@@ -6329,9 +6534,14 @@ function toggleMessageExtraVisibility(message, wrap, button, updateButton) {
   }
 }
 
+function wasMessageSentWithLearningTest(message) {
+  return Boolean(message?.learningTest || message?.processingType === MESSAGE_PROCESSING_LEARNING_TEST || message?.learningFeedback || message?.learningFeedbackStatus);
+}
+
 function createLearningAnalysisMenuButton(message) {
   const activeRoom = getActiveRoom();
   if (!activeRoom || isAiRoom(activeRoom) || !message?.id) return null;
+  if (!wasMessageSentWithLearningTest(message)) return null;
 
   const isPending = isLearningAnalysisPending(message) || pendingLearningAnalysisKeys.has(getLearningAnalysisJobKey(activeRoom.id, message.id));
   const hasText = Boolean(getLearningAnalysisSourceText(message));
@@ -6430,8 +6640,42 @@ function openMessageMenu(message, row, bubble) {
     }));
   }
 
+  const selectAction = createSelectMessageMenuButton(message);
+  if (selectAction) menu.appendChild(selectAction);
+
+  const editAction = createEditMessageMenuButton(message);
+  if (editAction) menu.appendChild(editAction);
+
+  const deleteAction = createDeleteMessageMenuButton(message);
+  if (deleteAction) menu.appendChild(deleteAction);
+
   document.body.appendChild(menu);
   positionFloatingMenu(menu, bubble);
+}
+
+function createEditMessageMenuButton(message) {
+  if (!canEditMessageForEveryone(message, getActiveRoom())) return null;
+  return createMenuButton("fa-solid fa-pen", "Editar", () => {
+    closeMessageMenus();
+    startMessageEdit(message);
+  });
+}
+
+function createDeleteMessageMenuButton(message) {
+  if (!canDeleteMessageForEveryone(message, getActiveRoom())) return null;
+  return createMenuButton("fa-solid fa-trash-can", "Apagar para todos", () => {
+    closeMessageMenus();
+    deleteMessagesForEveryone([message.id]);
+  });
+}
+
+function createSelectMessageMenuButton(message) {
+  const activeRoom = getActiveRoom();
+  if (!activeRoom?.id || isAiRoom(activeRoom) || !message?.id) return null;
+  return createMenuButton("fa-solid fa-check-double", "Selecionar", () => {
+    closeMessageMenus();
+    beginMessageSelection(message);
+  });
 }
 
 function createMenuButton(iconClass, label, onClick) {
@@ -6465,6 +6709,650 @@ function positionFloatingMenu(menu, anchor) {
 
 function closeMessageMenus() {
   document.querySelectorAll(".message-menu").forEach((menu) => menu.remove());
+}
+
+function setMessageSelectionMode(enabled, options = {}) {
+  const activeRoom = getActiveRoom();
+  messageSelectionMode = Boolean(enabled && activeRoom && !isAiRoom(activeRoom));
+
+  if (!messageSelectionMode) {
+    selectedMessageIds.clear();
+  } else {
+    cancelMessageEdit();
+  }
+
+  document.body.classList.toggle("message-selection-active", messageSelectionMode);
+  updateMessageSelectionToolbar();
+
+  if (!options.keepRender && activeRoom?.id) {
+    forceMessageRerender(activeRoom.id);
+    renderRoomMessages(activeRoom);
+  }
+}
+
+function beginMessageSelection(message) {
+  if (!message?.id) return;
+
+  setMessageSelectionMode(true);
+  selectedMessageIds.add(message.id);
+  syncMessageSelectionRow(message.id);
+  updateMessageSelectionToolbar();
+}
+
+function toggleMessageSelection(message) {
+  if (!messageSelectionMode || !message?.id) return;
+
+  if (selectedMessageIds.has(message.id)) {
+    selectedMessageIds.delete(message.id);
+  } else {
+    selectedMessageIds.add(message.id);
+  }
+
+  syncMessageSelectionRow(message.id);
+  updateMessageSelectionToolbar();
+}
+
+function syncMessageSelectionRow(messageId) {
+  if (!messageId) return;
+
+  const row = messages?.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
+  const isSelected = selectedMessageIds.has(messageId);
+  row?.classList.toggle("message-selected", isSelected);
+
+  const check = row?.querySelector(".message-select-button");
+  if (check) {
+    check.classList.toggle("is-selected", isSelected);
+    check.title = isSelected ? "Desmarcar mensagem" : "Selecionar mensagem";
+    check.setAttribute("aria-label", check.title);
+    check.innerHTML = `<i class="fa-solid ${isSelected ? "fa-check" : "fa-circle"}" aria-hidden="true"></i>`;
+  }
+}
+
+function ensureMessageSelectionToolbar() {
+  let toolbar = document.querySelector("#messageSelectionToolbar");
+  if (toolbar) return toolbar;
+
+  toolbar = document.createElement("section");
+  toolbar.id = "messageSelectionToolbar";
+  toolbar.className = "message-selection-toolbar";
+  toolbar.hidden = true;
+  toolbar.innerHTML = `
+    <strong id="messageSelectionCount">0 selecionadas</strong>
+    <div class="message-selection-actions">
+      <button class="message-selection-action" id="messageSelectionEditButton" type="button" title="Editar mensagem selecionada">
+        <i class="fa-solid fa-pen" aria-hidden="true"></i><span>Editar</span>
+      </button>
+      <button class="message-selection-action" id="messageSelectionForwardButton" type="button" title="Encaminhar mensagens para outras salas">
+        <i class="fa-solid fa-share" aria-hidden="true"></i><span>Encaminhar</span>
+      </button>
+      <button class="message-selection-action danger" id="messageSelectionDeleteButton" type="button" title="Apagar mensagens para todos">
+        <i class="fa-solid fa-trash-can" aria-hidden="true"></i><span>Apagar para todos</span>
+      </button>
+      <button class="message-selection-action ghost" id="messageSelectionCancelButton" type="button" title="Cancelar seleção">
+        <i class="fa-solid fa-xmark" aria-hidden="true"></i><span>Cancelar</span>
+      </button>
+    </div>
+  `;
+
+  const anchor = messageForm || typingPreviewPanel || null;
+  if (anchor?.parentNode) {
+    anchor.parentNode.insertBefore(toolbar, anchor);
+  } else {
+    chatPanel?.appendChild(toolbar);
+  }
+
+  toolbar.querySelector("#messageSelectionCancelButton")?.addEventListener("click", () => setMessageSelectionMode(false));
+  toolbar.querySelector("#messageSelectionDeleteButton")?.addEventListener("click", () => deleteSelectedMessagesForEveryone());
+  toolbar.querySelector("#messageSelectionEditButton")?.addEventListener("click", () => editSelectedMessage());
+  toolbar.querySelector("#messageSelectionForwardButton")?.addEventListener("click", () => openMessageForwardModal());
+  return toolbar;
+}
+
+function updateMessageSelectionToolbar() {
+  const toolbar = ensureMessageSelectionToolbar();
+  if (!toolbar) return;
+
+  const count = selectedMessageIds.size;
+  toolbar.hidden = !messageSelectionMode;
+
+  const countElement = toolbar.querySelector("#messageSelectionCount");
+  if (countElement) {
+    countElement.textContent = count === 1 ? "1 mensagem selecionada" : `${count} mensagens selecionadas`;
+  }
+
+  const selectedMessages = getSelectedMessages();
+  const editButton = toolbar.querySelector("#messageSelectionEditButton");
+  const deleteButton = toolbar.querySelector("#messageSelectionDeleteButton");
+  const forwardButton = toolbar.querySelector("#messageSelectionForwardButton");
+
+  if (editButton) {
+    editButton.disabled = !(selectedMessages.length === 1 && canEditMessageForEveryone(selectedMessages[0], getActiveRoom()));
+  }
+
+  if (forwardButton) {
+    forwardButton.disabled = !selectedMessages.some(canForwardMessage);
+  }
+
+  if (deleteButton) {
+    deleteButton.disabled = !selectedMessages.some((message) => canDeleteMessageForEveryone(message, getActiveRoom()));
+  }
+}
+
+function getSelectedMessages() {
+  const activeRoom = getActiveRoom();
+  if (!activeRoom?.id) return [];
+  const selectedIds = new Set(selectedMessageIds);
+  return (roomMessagesById.get(activeRoom.id) || activeRoom.messages || []).filter((message) => selectedIds.has(message.id));
+}
+
+function canForwardMessage(message) {
+  return Boolean(message?.id && getForwardMessageText(message));
+}
+
+function getForwardMessageText(message) {
+  return cleanMessageText(
+    message?.hydration?.text ||
+    getCurrentUserHydration(message)?.text ||
+    message?.translatedText ||
+    message?.originalText ||
+    getStoredTranslationSourceText(getActiveRoom()?.id || activeRoomId, message) ||
+    message?.translationSourceText ||
+    message?.text ||
+    getMessageAudioText(message) ||
+    "",
+    2000
+  );
+}
+
+function getForwardTargetRooms() {
+  const currentRoomId = getActiveRoom()?.id || "";
+  return getVisibleRooms()
+    .filter((room) => room?.id && room.id !== currentRoomId && !isAiRoom(room))
+    .sort(sortRoomsForList);
+}
+
+function ensureMessageForwardModal() {
+  let modal = document.querySelector("#messageForwardModal");
+  if (modal) return modal;
+
+  modal = document.createElement("section");
+  modal.id = "messageForwardModal";
+  modal.className = "modal-backdrop";
+  modal.hidden = true;
+  modal.setAttribute("aria-hidden", "true");
+  modal.innerHTML = `
+    <div class="modal-card message-forward-card">
+      <header class="modal-header">
+        <div>
+          <strong>Encaminhar mensagens</strong>
+          <span id="messageForwardSubtitle">Escolha as salas de destino.</span>
+        </div>
+        <button class="icon-button" id="closeMessageForwardButton" type="button" aria-label="Fechar">
+          <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+        </button>
+      </header>
+      <div class="select-list message-forward-list" id="messageForwardRooms"></div>
+      <footer class="modal-actions">
+        <button class="ghost-button" id="cancelMessageForwardButton" type="button">Cancelar</button>
+        <button class="login-button compact" id="confirmMessageForwardButton" type="button">
+          <span>Encaminhar</span>
+          <i class="fa-solid fa-share" aria-hidden="true"></i>
+        </button>
+      </footer>
+    </div>
+  `;
+
+  document.body.appendChild(modal);
+  modal.addEventListener("click", (event) => {
+    if (event.target === modal) closeMessageForwardModal();
+  });
+  modal.querySelector("#closeMessageForwardButton")?.addEventListener("click", closeMessageForwardModal);
+  modal.querySelector("#cancelMessageForwardButton")?.addEventListener("click", closeMessageForwardModal);
+  modal.querySelector("#confirmMessageForwardButton")?.addEventListener("click", forwardSelectedMessagesToRooms);
+  return modal;
+}
+
+function openMessageForwardModal() {
+  const selectedMessages = getSelectedMessages().filter(canForwardMessage);
+  if (!selectedMessages.length) {
+    showToast("Nada para encaminhar", "Selecione pelo menos uma mensagem com texto.");
+    return;
+  }
+
+  const targetRooms = getForwardTargetRooms();
+  if (!targetRooms.length) {
+    showToast("Sem salas de destino", "Crie ou entre em outra sala antes de encaminhar mensagens.");
+    return;
+  }
+
+  selectedForwardRoomIds.clear();
+  const modal = ensureMessageForwardModal();
+  const subtitle = modal.querySelector("#messageForwardSubtitle");
+  if (subtitle) {
+    subtitle.textContent = selectedMessages.length === 1
+      ? "1 mensagem selecionada."
+      : `${selectedMessages.length} mensagens selecionadas.`;
+  }
+  renderForwardRoomPicker(targetRooms);
+  modal.hidden = false;
+  modal.setAttribute("aria-hidden", "false");
+}
+
+function closeMessageForwardModal() {
+  const modal = document.querySelector("#messageForwardModal");
+  if (!modal) return;
+  modal.hidden = true;
+  modal.setAttribute("aria-hidden", "true");
+  selectedForwardRoomIds.clear();
+}
+
+function renderForwardRoomPicker(targetRooms = getForwardTargetRooms()) {
+  const modal = ensureMessageForwardModal();
+  const container = modal.querySelector("#messageForwardRooms");
+  if (!container) return;
+
+  container.innerHTML = "";
+
+  if (!targetRooms.length) {
+    container.appendChild(createEmptyState(
+      "fa-solid fa-door-open",
+      "Nenhuma sala disponivel",
+      "Crie ou entre em outra sala para encaminhar mensagens."
+    ));
+    return;
+  }
+
+  const header = document.createElement("div");
+  header.className = "select-list-toolbar";
+  header.innerHTML = `
+    <div>
+      <strong>${targetRooms.length} sala${targetRooms.length === 1 ? "" : "s"}</strong>
+      <span>Toque em uma ou mais salas de destino</span>
+    </div>
+    <button type="button" class="select-all-button" title="Selecionar todas" aria-label="Selecionar todas">
+      <i class="fa-solid fa-check-double" aria-hidden="true"></i>
+    </button>
+  `;
+  header.querySelector("button")?.addEventListener("click", () => {
+    const checkboxes = Array.from(container.querySelectorAll('input[type="checkbox"]'));
+    const shouldSelectAll = checkboxes.some((input) => !input.checked);
+    checkboxes.forEach((input) => {
+      input.checked = shouldSelectAll;
+      input.closest(".check-row")?.classList.toggle("is-selected", input.checked);
+      if (shouldSelectAll) {
+        selectedForwardRoomIds.add(input.value);
+      } else {
+        selectedForwardRoomIds.delete(input.value);
+      }
+    });
+  });
+  container.appendChild(header);
+
+  targetRooms.forEach((room) => {
+    const label = document.createElement("label");
+    label.className = "check-row friend-check-row forward-room-row flex-friend-check-row";
+    label.innerHTML = `
+      <input type="checkbox" value="${escapeHtml(room.id)}" />
+      <div style="display: flex;">
+        <div class="avatar forward-room-avatar" style="margin-right: 12px;"></div>
+        <span class="friend-check-info">
+          <strong>${escapeHtml(getRoomDisplayName(room))}</strong>
+          <small>${escapeHtml(getRoomStatus(room))}</small>
+        </span>
+      </div>
+      <i class="fa-solid fa-circle-check friend-check-icon" aria-hidden="true"></i>
+    `;
+
+    const avatar = label.querySelector(".avatar");
+    paintRoomAvatar(avatar, room);
+
+    const checkbox = label.querySelector('input[type="checkbox"]');
+    checkbox.addEventListener("change", () => {
+      label.classList.toggle("is-selected", checkbox.checked);
+      if (checkbox.checked) {
+        selectedForwardRoomIds.add(room.id);
+      } else {
+        selectedForwardRoomIds.delete(room.id);
+      }
+    });
+
+    container.appendChild(label);
+  });
+}
+
+async function forwardSelectedMessagesToRooms() {
+  const sourceRoom = getActiveRoom();
+  const selectedMessages = getSelectedMessages().filter(canForwardMessage);
+  const targetRoomIds = Array.from(selectedForwardRoomIds);
+  const targetRooms = getForwardTargetRooms().filter((room) => targetRoomIds.includes(room.id));
+
+  if (!sourceRoom?.id || !selectedMessages.length) {
+    showToast("Nada selecionado", "Escolha pelo menos uma mensagem para encaminhar.");
+    return;
+  }
+
+  if (!targetRooms.length) {
+    showToast("Escolha o destino", "Selecione uma ou mais salas para encaminhar.");
+    return;
+  }
+
+  if (!requireFirebaseConnection("encaminhar mensagens")) return;
+
+  const modal = ensureMessageForwardModal();
+  const confirmButton = modal.querySelector("#confirmMessageForwardButton");
+  setButtonBusy(confirmButton, true, "Encaminhando...");
+
+  try {
+    await forwardMessagesToRooms(selectedMessages, targetRooms);
+    closeMessageForwardModal();
+    selectedMessageIds.clear();
+    setMessageSelectionMode(false, { keepRender: true });
+    forceMessageRerender(sourceRoom.id);
+    renderActiveRoom(true);
+    renderRoomList(searchInput.value);
+    showToast(
+      "Mensagens encaminhadas",
+      `${selectedMessages.length} mensagem${selectedMessages.length === 1 ? "" : "s"} para ${targetRooms.length} sala${targetRooms.length === 1 ? "" : "s"}.`
+    );
+  } catch (error) {
+    console.error("Nao foi possivel encaminhar mensagens.", error);
+    showToast("Falha ao encaminhar", "Verifique a conexao e tente novamente.");
+  } finally {
+    setButtonBusy(confirmButton, false);
+  }
+}
+
+async function forwardMessagesToRooms(selectedMessages, targetRooms) {
+  const orderedMessages = selectedMessages.slice().sort(compareMessagesBySendOrder);
+  let offset = 0;
+
+  for (const room of targetRooms) {
+    for (const message of orderedMessages) {
+      const text = getForwardMessageText(message);
+      if (!text) continue;
+      await sendFirebaseMessage(room, text, {
+        ...getForwardSendOptions(room, text),
+        createdAtMillis: Date.now() + offset,
+        replyPayload: null
+      });
+      offset += 1;
+    }
+  }
+}
+
+function getForwardSendOptions(room, text) {
+  const language = getRoomLanguage(room);
+  if (!language?.code) {
+    return {
+      skipTranslation: false,
+      translationDisabled: false
+    };
+  }
+
+  return {
+    publicText: PUBLIC_TRANSLATION_PENDING_TEXT,
+    translationSourceText: text,
+    deferOriginalUntilTranslated: true,
+    skipTranslation: false,
+    translationStatus: "pending",
+    deliveryStatus: "processing",
+    processingType: MESSAGE_PROCESSING_TRANSLATION,
+    targetLanguageCode: language.code || "",
+    targetLanguageName: language.name || ""
+  };
+}
+
+function editSelectedMessage() {
+  const selectedMessages = getSelectedMessages();
+  if (selectedMessages.length !== 1) {
+    showToast("Selecione uma mensagem", "Para editar, escolha apenas uma mensagem sua.");
+    return;
+  }
+
+  startMessageEdit(selectedMessages[0]);
+}
+
+function startMessageEdit(message) {
+  const activeRoom = getActiveRoom();
+  if (!canEditMessageForEveryone(message, activeRoom)) {
+    showToast("Edição indisponível", "Você só pode editar mensagens suas que ainda existem nesta conversa.");
+    return;
+  }
+
+  setMessageSelectionMode(false);
+  messageEditTarget = {
+    roomId: activeRoom.id,
+    messageId: message.id,
+    originalText: getEditableMessageText(message)
+  };
+
+  clearReplyTarget();
+  messageInput.value = messageEditTarget.originalText;
+  messageInput.focus();
+  messageForm?.classList.add("is-editing-message");
+  updateMessageInputPlaceholder(activeRoom);
+  showToast("Editando mensagem", "Altere o texto e envie para salvar. Pressione Esc para cancelar.");
+}
+
+function cancelMessageEdit(options = {}) {
+  if (!messageEditTarget) return;
+  messageEditTarget = null;
+  messageForm?.classList.remove("is-editing-message");
+  if (!options.keepInput && messageInput) messageInput.value = "";
+  updateMessageInputPlaceholder(getActiveRoom());
+}
+
+async function submitMessageEdit(text) {
+  const activeRoom = getActiveRoom();
+  if (!messageEditTarget || !activeRoom || activeRoom.id !== messageEditTarget.roomId) {
+    cancelMessageEdit();
+    return;
+  }
+
+  const cleanText = cleanMessageText(text);
+  if (!cleanText) return;
+
+  const message = (roomMessagesById.get(activeRoom.id) || activeRoom.messages || []).find((item) => item.id === messageEditTarget.messageId);
+  if (!canEditMessageForEveryone(message, activeRoom)) {
+    showToast("Edição indisponível", "Essa mensagem não pode mais ser editada.");
+    cancelMessageEdit();
+    return;
+  }
+
+  try {
+    await updateFirebaseMessageTextForEveryone(activeRoom, message, cleanText);
+    messageInput.value = "";
+    cancelMessageEdit();
+    showToast("Mensagem editada", "A alteração foi salva para todos.");
+  } catch (error) {
+    console.error("Nao foi possivel editar a mensagem.", error);
+    showToast("Falha ao editar", "Verifique a conexão e tente novamente.");
+  }
+}
+
+function getEditableMessageText(message) {
+  return cleanMessageText(message?.translationSourceText || message?.originalText || message?.text || message?.translatedText || "");
+}
+
+function canEditMessageForEveryone(message, room = getActiveRoom()) {
+  if (!room?.id || !message?.id || isAiRoom(room)) return false;
+  if (!isMessageMine(message)) return false;
+  if (message.localOnly || message.localPending || message.pendingOffline) return false;
+  if (["queued", "sending", "processing", "failed"].includes(String(message.deliveryStatus || ""))) return false;
+  return Boolean(getEditableMessageText(message));
+}
+
+function canDeleteMessageForEveryone(message, room = getActiveRoom()) {
+  if (!room?.id || !message?.id || isAiRoom(room)) return false;
+  if (message.localOnly || message.localPending) return false;
+  return isMessageMine(message) || isRoomOwner(room);
+}
+
+async function updateFirebaseMessageTextForEveryone(room, message, cleanText) {
+  if (!room?.id || !message?.id || !cleanText) return;
+  if (!requireFirebaseConnection("editar mensagem")) throw new Error("Sem Firebase");
+
+  const now = Date.now();
+  const language = getRoomLanguage(room);
+  const wasLearningMessage = wasMessageSentWithLearningTest(message);
+  const shouldTranslateAgain = Boolean(language?.code && !wasLearningMessage && message.translationDisabled !== true);
+  const mentionPayload = extractMessageMentions(cleanText, room);
+  const displayText = shouldTranslateAgain ? PUBLIC_TRANSLATION_PENDING_TEXT : cleanText;
+  const patch = {
+    text: displayText,
+    originalText: shouldTranslateAgain ? "" : "",
+    translatedText: "",
+    mentionedUids: mentionPayload.mentionedUids,
+    mentionedNicks: mentionPayload.mentionedNicks,
+    mentions: mentionPayload.mentions,
+    translationError: false,
+    translationStatus: shouldTranslateAgain ? "pending" : "none",
+    targetLanguageCode: shouldTranslateAgain ? language.code || "" : message.targetLanguageCode || "",
+    targetLanguageName: shouldTranslateAgain ? language.name || "" : message.targetLanguageName || "",
+    learningTest: Boolean(wasLearningMessage),
+    learningFeedback: wasLearningMessage ? null : (message.learningFeedback || null),
+    learningFeedbackStatus: wasLearningMessage ? "pending" : "",
+    translationDisabled: wasLearningMessage ? true : Boolean(message.translationDisabled),
+    deliveryStatus: shouldTranslateAgain ? "processing" : "sent",
+    pendingOffline: false,
+    processingType: wasLearningMessage ? MESSAGE_PROCESSING_LEARNING_TEST : shouldTranslateAgain ? MESSAGE_PROCESSING_TRANSLATION : "",
+    edited: true,
+    editedAt: serverTimestamp(),
+    editedAtMillis: now,
+    editedByUid: currentFirebaseUid,
+    editedByNick: currentUser?.nick || "Você"
+  };
+
+  const updates = {};
+  Object.entries(patch).forEach(([key, value]) => {
+    updates[`rooms/${room.id}/messages/${message.id}/${key}`] = value;
+  });
+
+  if (room.lastMessageId === message.id) {
+    updates[`rooms/${room.id}/lastMessage`] = displayText;
+    updates[`rooms/${room.id}/lastOriginalMessage`] = shouldTranslateAgain ? "" : "";
+    updates[`rooms/${room.id}/lastMessageMentionedUids`] = mentionPayload.mentionedUids;
+    updates[`rooms/${room.id}/lastMessageMentionedNicks`] = mentionPayload.mentionedNicks;
+    updates[`rooms/${room.id}/updatedAt`] = serverTimestamp();
+    updates[`rooms/${room.id}/updatedAtMillis`] = now;
+  }
+
+  const updatedMessage = {
+    ...message,
+    ...patch,
+    translationSourceText: shouldTranslateAgain ? cleanText : "",
+    time: message.time || message.createdAtMillis || now
+  };
+
+  if (shouldTranslateAgain) {
+    upsertPendingTranslationJob(room, updatedMessage, cleanText, language);
+  } else {
+    removePendingTranslationJob(room.id, message.id);
+  }
+
+  upsertRoomMessage(room.id, updatedMessage);
+  forceMessageRerender(room.id);
+  renderRoomMessages({ ...room, messages: roomMessagesById.get(room.id) || [] });
+  renderRoomList(searchInput.value);
+
+  await update(ref(db), updates);
+
+  if (wasLearningMessage) {
+    startLearningFeedbackJob(room, updatedMessage, cleanText);
+  } else if (shouldTranslateAgain) {
+    startTranslationResumeJob(room, {
+      ...updatedMessage,
+      text: cleanText,
+      originalText: cleanText,
+      translationSourceText: cleanText
+    }, language, cleanText);
+  }
+}
+
+async function deleteSelectedMessagesForEveryone() {
+  const selectedMessages = getSelectedMessages();
+  if (!selectedMessages.length) {
+    showToast("Nada selecionado", "Escolha pelo menos uma mensagem para apagar.");
+    return;
+  }
+
+  await deleteMessagesForEveryone(selectedMessages.map((message) => message.id));
+}
+
+async function deleteMessagesForEveryone(messageIds = []) {
+  const activeRoom = getActiveRoom();
+  if (!activeRoom?.id || isAiRoom(activeRoom)) return;
+
+  const ids = unique(messageIds.filter(Boolean));
+  if (!ids.length) return;
+
+  const messagesForRoom = roomMessagesById.get(activeRoom.id) || activeRoom.messages || [];
+  const idSet = new Set(ids);
+  const deletableIds = messagesForRoom
+    .filter((message) => idSet.has(message.id) && canDeleteMessageForEveryone(message, activeRoom))
+    .map((message) => message.id);
+
+  if (!deletableIds.length) {
+    showToast("Sem permissão", "Você só pode apagar mensagens suas, ou mensagens da sala que você criou.");
+    return;
+  }
+
+  const ok = window.confirm(deletableIds.length === 1
+    ? "Apagar esta mensagem para todos?"
+    : `Apagar ${deletableIds.length} mensagens para todos?`);
+  if (!ok) return;
+
+  if (!requireFirebaseConnection("apagar mensagens")) return;
+
+  const now = Date.now();
+  const deleteSet = new Set(deletableIds);
+  const remainingMessages = messagesForRoom.filter((message) => !deleteSet.has(message.id));
+  const lastRemainingMessage = remainingMessages.slice().sort(compareMessagesBySendOrder).at(-1) || null;
+  const updates = {};
+
+  deletableIds.forEach((messageId) => {
+    updates[`rooms/${activeRoom.id}/messages/${messageId}`] = null;
+    removePendingTranslationJob(activeRoom.id, messageId);
+  });
+
+  if (!lastRemainingMessage) {
+    updates[`rooms/${activeRoom.id}/lastMessage`] = "";
+    updates[`rooms/${activeRoom.id}/lastMessageId`] = "";
+    updates[`rooms/${activeRoom.id}/lastOriginalMessage`] = "";
+    updates[`rooms/${activeRoom.id}/lastMessageAuthorUid`] = "";
+    updates[`rooms/${activeRoom.id}/lastMessageAuthorNick`] = "";
+    updates[`rooms/${activeRoom.id}/lastMessageMentionedUids`] = null;
+    updates[`rooms/${activeRoom.id}/lastMessageMentionedNicks`] = null;
+    updates[`rooms/${activeRoom.id}/lastMessageAt`] = now;
+    updates[`rooms/${activeRoom.id}/lastMessageAtMillis`] = now;
+  } else if (deleteSet.has(activeRoom.lastMessageId || messagesForRoom.at(-1)?.id || "")) {
+    updates[`rooms/${activeRoom.id}/lastMessage`] = getMessageDisplayText(lastRemainingMessage, 300);
+    updates[`rooms/${activeRoom.id}/lastMessageId`] = lastRemainingMessage.id || "";
+    updates[`rooms/${activeRoom.id}/lastOriginalMessage`] = lastRemainingMessage.originalText || "";
+    updates[`rooms/${activeRoom.id}/lastMessageAuthorUid`] = lastRemainingMessage.authorUid || "";
+    updates[`rooms/${activeRoom.id}/lastMessageAuthorNick`] = lastRemainingMessage.authorNick || lastRemainingMessage.author || "";
+    updates[`rooms/${activeRoom.id}/lastMessageMentionedUids`] = normalizeMentionUidMap(lastRemainingMessage.mentionedUids);
+    updates[`rooms/${activeRoom.id}/lastMessageMentionedNicks`] = normalizeMentionNickList(lastRemainingMessage.mentionedNicks);
+    updates[`rooms/${activeRoom.id}/lastMessageAt`] = lastRemainingMessage.createdAt || lastRemainingMessage.time || now;
+    updates[`rooms/${activeRoom.id}/lastMessageAtMillis`] = Number(lastRemainingMessage.createdAtMillis || lastRemainingMessage.time || now);
+  }
+
+  updates[`rooms/${activeRoom.id}/updatedAt`] = serverTimestamp();
+  updates[`rooms/${activeRoom.id}/updatedAtMillis`] = now;
+
+  try {
+    await update(ref(db), updates);
+    roomMessagesById.set(activeRoom.id, remainingMessages);
+    selectedMessageIds.clear();
+    setMessageSelectionMode(false, { keepRender: true });
+    forceMessageRerender(activeRoom.id);
+    renderActiveRoom(true);
+    renderRoomList(searchInput.value);
+    showToast("Mensagens apagadas", deletableIds.length === 1 ? "A mensagem foi removida para todos." : "As mensagens foram removidas para todos.");
+  } catch (error) {
+    console.error("Nao foi possivel apagar mensagens.", error);
+    showToast("Falha ao apagar", "Verifique a conexão e tente novamente.");
+  }
 }
 
 function normalizeSpeechPlaybackRate(value) {
@@ -10142,6 +11030,41 @@ function removeAiTypingIndicator(roomId = "") {
   typingIndicator.remove();
 }
 
+function getRoomMetadataSignature(roomId, data = {}) {
+  const memberNicks = data.memberNicks || {};
+  const memberUids = data.memberUids || {};
+  const invitedUids = data.invitedUids || {};
+  const invitedNicks = data.invitedNicks || {};
+  return JSON.stringify({
+    id: roomId || "",
+    type: data.type || "",
+    name: data.name || "",
+    description: data.description || "",
+    languageCode: data.languageCode || "",
+    languageName: data.languageName || "",
+    translationEnabled: Boolean(data.translationEnabled),
+    private: Boolean(data.private),
+    ownerUid: data.ownerUid || "",
+    ownerNick: data.ownerNick || "",
+    ownerAvatarIcon: data.ownerAvatarIcon || "",
+    memberUids,
+    memberNicks,
+    memberAvatarIcons: data.memberAvatarIcons || {},
+    invitedUids,
+    invitedNicks,
+    lastMessage: data.lastMessage || "",
+    lastMessageId: data.lastMessageId || "",
+    lastOriginalMessage: data.lastOriginalMessage || "",
+    lastMessageAuthorUid: data.lastMessageAuthorUid || "",
+    lastMessageAuthorNick: data.lastMessageAuthorNick || "",
+    lastMessageMentionedUids: data.lastMessageMentionedUids || {},
+    lastMessageMentionedNicks: data.lastMessageMentionedNicks || [],
+    lastMessageAtMillis: Number(data.lastMessageAtMillis || 0),
+    updatedAtMillis: Number(data.updatedAtMillis || 0),
+    createdAtMillis: Number(data.createdAtMillis || 0)
+  });
+}
+
 function mapRoomSnapshot(roomSnapshot) {
   const data = roomSnapshot.val() || {};
   const roomId = roomSnapshot.key;
@@ -10689,6 +11612,14 @@ function handleForegroundFcmChatMessage(payload = {}, options = {}) {
   markMessageAsUnreadOnce(roomId, key);
   refreshNotificationUi();
 
+  if (options.silentSystemNotification) {
+    if (!wasAlreadyNotified) {
+      markMessageNotificationShown(key);
+      refreshNotificationUi();
+    }
+    return;
+  }
+
   if (!options.silentSystemNotification && !wasAlreadyNotified) {
     const wasMentioned = isCurrentUserMentionedInNotificationData(data);
     const title = wasMentioned
@@ -10751,7 +11682,11 @@ function setupServiceWorkerMessageHandling() {
     }
 
     if (data.type === "ASTROCHAT_PUSH_RECEIVED") {
-      handleForegroundFcmChatMessage({ data: data.payloadData || {} }, { silentSystemNotification: true });
+      const payloadData = data.payloadData || {};
+      handleForegroundFcmChatMessage(
+        { data: payloadData },
+        { silentSystemNotification: payloadData.systemNotificationShown === true }
+      );
     }
   });
 }
@@ -10905,9 +11840,7 @@ function primeNotificationSound(context) {
 }
 
 function playNotificationSound(kind = "default") {
-  if (!areInternalPushNotificationsEnabled()) return;
-
-  if ("vibrate" in navigator) {
+  if ("vibrate" in navigator && areInternalPushNotificationsEnabled()) {
     navigator.vibrate(kind === "mention" ? [120, 60, 120, 60, 180] : [45, 35, 45]);
   }
 
@@ -10953,8 +11886,6 @@ function canShowSystemBrowserNotification() {
 }
 
 function playNotificationSoundAfterSystemNotification(systemNotificationPromise, kind = "default") {
-  if (!areInternalPushNotificationsEnabled()) return;
-
   if (!canShowSystemBrowserNotification()) {
     playNotificationSound(kind);
     return;
@@ -11435,6 +12366,23 @@ function setFormBusy(form, isBusy) {
   Array.from(form.querySelectorAll("button, input, textarea, select")).forEach((element) => {
     element.disabled = isBusy;
   });
+}
+
+function setButtonBusy(button, isBusy, busyText = "") {
+  if (!button) return;
+
+  if (isBusy) {
+    button.dataset.originalHtml = button.innerHTML;
+    button.disabled = true;
+    button.innerHTML = `<span>${escapeHtml(busyText || "Aguarde...")}</span><i class="fa-solid fa-spinner fa-spin" aria-hidden="true"></i>`;
+    return;
+  }
+
+  button.disabled = false;
+  if (button.dataset.originalHtml) {
+    button.innerHTML = button.dataset.originalHtml;
+    delete button.dataset.originalHtml;
+  }
 }
 
 function escapeHtml(value) {
