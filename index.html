@@ -209,6 +209,9 @@
           <i class="fa-solid fa-bell" aria-hidden="true"></i>
           <span class="notification-badge" id="mobileNotificationBadge" hidden>0</span>
         </button>
+        <button class="icon-button" id="conversationSearchButton" hidden title="Buscar mensagens" aria-label="Buscar mensagens">
+          <i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i>
+        </button>
         <button class="icon-button" id="inviteButton" title="Convidar amigos" aria-label="Convidar amigos">
           <i class="fa-solid fa-user-plus" aria-hidden="true"></i>
         </button>
@@ -219,6 +222,29 @@
           <i class="fa-solid fa-trash-can" aria-hidden="true"></i>
         </button>
       </header>
+
+      <section class="message-search-panel" id="messageSearchPanel" hidden aria-label="Busca dentro da conversa">
+        <div class="message-search-fields">
+          <label class="sr-only" for="messageSearchInput">Buscar palavra</label>
+          <input id="messageSearchInput" type="search" placeholder="Buscar palavra" autocomplete="off" />
+          <label class="sr-only" for="messageSearchUserInput">Buscar por usuario</label>
+          <input id="messageSearchUserInput" type="search" placeholder="Usuario" autocomplete="off" />
+          <label class="sr-only" for="messageSearchDateInput">Buscar por data</label>
+          <input id="messageSearchDateInput" type="date" title="Buscar por data" />
+        </div>
+        <div class="message-search-actions">
+          <span id="messageSearchResult">0 resultados</span>
+          <button class="icon-button" id="messageSearchPrevButton" type="button" title="Resultado anterior" aria-label="Resultado anterior">
+            <i class="fa-solid fa-chevron-up" aria-hidden="true"></i>
+          </button>
+          <button class="icon-button" id="messageSearchNextButton" type="button" title="Proximo resultado" aria-label="Proximo resultado">
+            <i class="fa-solid fa-chevron-down" aria-hidden="true"></i>
+          </button>
+          <button class="icon-button" id="closeMessageSearchButton" type="button" title="Fechar busca" aria-label="Fechar busca">
+            <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+          </button>
+        </div>
+      </section>
 
       <div class="messages" id="messages" aria-live="polite" hidden></div>
 
@@ -463,6 +489,11 @@
             <span>Limpar</span>
             <small>Conversa</small>
           </button>
+          <button class="room-menu-action" id="roomSettingsPinButton" type="button">
+            <i class="fa-solid fa-thumbtack" aria-hidden="true"></i>
+            <span>Fixar</span>
+            <small>Conversa</small>
+          </button>
         </div>
       </div>
 
@@ -639,8 +670,8 @@
       <button class="profile-notification-action profile-internal-push-action" id="internalPushToggleButton" type="button" aria-pressed="true">
         <i class="fa-solid fa-toggle-on" aria-hidden="true"></i>
         <span>
-          <strong>Push interno ativado</strong>
-          <small id="internalPushToggleStatus">Mostra pop-ups, notificacoes locais, som e vibracao.</small>
+          <strong>Avisos internos ativados</strong>
+          <small id="internalPushToggleStatus">Mostra pop-ups dentro do app, som e vibracao.</small>
         </span>
       </button>
 

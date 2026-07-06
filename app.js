@@ -50,18 +50,24 @@ const DATABASE_URL = "https://astro-chat-7d044-default-rtdb.firebaseio.com";
 const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
-const CHAT_VERSION = "v85";
+const CHAT_VERSION = "v91";
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
 const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
 const USER_STORAGE_KEY = "chat-pwa-user-v1";
 const NOTIFICATIONS_STORAGE_KEY = "chat-pwa-notificacoes-v1";
 const INTERNAL_PUSH_STORAGE_KEY = "astrochat-internal-push-enabled-v1";
+const SYSTEM_PUSH_STORAGE_KEY = "astrochat-system-push-enabled-v1";
 const FCM_DEVICE_ID_STORAGE_KEY = "astrochat-fcm-device-id-v1";
 const FCM_TOKEN_STORAGE_KEY = "astrochat-fcm-token-v1";
+const FCM_TOKEN_REFRESHED_AT_STORAGE_KEY = "astrochat-fcm-token-refreshed-at-v1";
+const SPEECH_RATE_STORAGE_KEY = "astrochat-speech-rate-v1";
 const LIVE_TYPING_STORAGE_KEY = "astrochat-live-typing-v1";
 const LEARNING_TEST_STORAGE_KEY = "astrochat-learning-test-v1";
 const PROCESSED_FRIEND_REQUESTS_STORAGE_KEY = "astrochat-friend-requests-processados-v1";
+const PINNED_CONVERSATIONS_STORAGE_KEY = "astrochat-pinned-conversations-v1";
+const OFFLINE_MESSAGE_QUEUE_STORAGE_KEY = "astrochat-offline-message-queue-v1";
+const REMOTE_CONVERSATION_CACHE_STORAGE_KEY = "astrochat-remote-conversation-cache-v1";
 
 const AI_ROOM_TYPE = "language-ai";
 const USER_ROOM_TYPE = "user-room";
@@ -70,6 +76,7 @@ const FRIEND_REQUEST_TYPE = "friend-request";
 const NICK_TAKEN_ERROR_CODE = "nick-taken";
 const MISSING_FIREBASE_USER_DATA_ERROR_CODE = "missing-firebase-user-data";
 const BACKGROUND_REFRESH_INTERVAL_MS = 45000;
+const FCM_TOKEN_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const ROOM_LAST_MESSAGE_LISTEN_LIMIT = 1;
 const AI_TEACHER_NAME = "Professor IA";
 const POLLINATIONS_CHAT_ENDPOINT = "https://text.pollinations.ai/openai";
@@ -152,11 +159,15 @@ let pendingRoomInviteFriendIds = new Set();
 let invites = [];
 let notificationState = normalizeNotificationState(loadFromStorage(NOTIFICATIONS_STORAGE_KEY, {}));
 let internalPushNotificationsEnabled = loadFromStorage(INTERNAL_PUSH_STORAGE_KEY, true) !== false;
+let systemPushNotificationsEnabled = loadFromStorage(SYSTEM_PUSH_STORAGE_KEY, true) !== false;
 let liveTypingByRoom = loadFromStorage(LIVE_TYPING_STORAGE_KEY, {});
 let learningTestByRoom = loadFromStorage(LEARNING_TEST_STORAGE_KEY, {});
 let processedFriendRequestIds = loadFromStorage(PROCESSED_FRIEND_REQUESTS_STORAGE_KEY, {});
+let pinnedConversationIds = new Set(loadFromStorage(PINNED_CONVERSATIONS_STORAGE_KEY, []));
+let offlineMessageQueue = normalizeOfflineMessageQueue(loadFromStorage(OFFLINE_MESSAGE_QUEUE_STORAGE_KEY, []));
 let activeTypingUsers = [];
 let replyTarget = null;
+let messageSearchState = createEmptyMessageSearchState();
 let currentUser = loadUser();
 let currentFirebaseUser = null;
 let currentFirebaseUid = null;
@@ -167,6 +178,11 @@ let activeView = "rooms";
 let deferredInstallPrompt = null;
 let aiReplyInProgress = false;
 let activeSpeechUtterance = null;
+let activeSpeechMessage = null;
+let activeSpeechMessageKey = "";
+let activeSpeechAnimationTimer = 0;
+let activeSpeechProgressClearTimer = 0;
+let speechPlaybackRate = normalizeSpeechPlaybackRate(loadFromStorage(SPEECH_RATE_STORAGE_KEY, 1));
 let firebaseReady = false;
 let firebaseInitPromise = null;
 let logoutInProgress = false;
@@ -191,6 +207,7 @@ let backgroundRefreshTimer = null;
 let backgroundRefreshInProgress = false;
 let roomLastMessageRefreshTimer = null;
 let roomLastMessageRefreshInProgress = false;
+let offlineQueueFlushInProgress = false;
 let firebaseMessaging = null;
 let firebaseMessagingSupportedPromise = null;
 let firebaseMessagingForegroundUnsubscribe = null;
@@ -212,6 +229,7 @@ const inviteSnapshotBuckets = {
   received: [],
   sent: []
 };
+const receiptUpdateRooms = new Set();
 
 const splashScreen = document.querySelector("#splashScreen");
 const splashStatus = document.querySelector("#splashStatus");
@@ -241,8 +259,17 @@ const activeName = document.querySelector("#activeName");
 const activeStatus = document.querySelector("#activeStatus");
 const clearChatButton = document.querySelector("#clearChatButton");
 const roomMenuButton = document.querySelector("#roomMenuButton");
+const conversationSearchButton = document.querySelector("#conversationSearchButton");
 const liveTypingButton = document.querySelector("#liveTypingButton");
 const typingPreviewPanel = document.querySelector("#typingPreviewPanel");
+const messageSearchPanel = document.querySelector("#messageSearchPanel");
+const messageSearchInput = document.querySelector("#messageSearchInput");
+const messageSearchUserInput = document.querySelector("#messageSearchUserInput");
+const messageSearchDateInput = document.querySelector("#messageSearchDateInput");
+const messageSearchResult = document.querySelector("#messageSearchResult");
+const messageSearchPrevButton = document.querySelector("#messageSearchPrevButton");
+const messageSearchNextButton = document.querySelector("#messageSearchNextButton");
+const closeMessageSearchButton = document.querySelector("#closeMessageSearchButton");
 const backButton = document.querySelector("#backButton");
 const installButton = document.querySelector("#installButton");
 const logoutButton = document.querySelector("#logoutButton");
@@ -332,6 +359,7 @@ const deleteRoomButton = document.querySelector("#deleteRoomButton");
 const roomDeleteHint = document.querySelector("#roomDeleteHint");
 const roomSettingsLiveTypingButton = document.querySelector("#roomSettingsLiveTypingButton");
 const roomSettingsClearChatButton = document.querySelector("#roomSettingsClearChatButton");
+const roomSettingsPinButton = document.querySelector("#roomSettingsPinButton");
 const toastRegion = document.querySelector("#toastRegion");
 const suggestTextButton = document.querySelector("#suggestTextButton");
 const spellcheckButton = document.querySelector("#spellcheckButton");
@@ -537,16 +565,26 @@ messageForm.addEventListener("submit", async (event) => {
     return;
   }
 
-  if (!requireFirebaseConnection("enviar mensagem")) return;
-
   const learningTestEnabled = isLearningTestEnabledForRoom(activeRoom);
+  const canSendOnline = firebaseReady && currentFirebaseUid && isInternetAvailable();
+
+  if (!canSendOnline) {
+    await clearCurrentTypingStatus();
+    messageInput.value = "";
+    queueOfflineMessage(activeRoom, text, {
+      learningTest: false,
+      skipTranslation: false
+    });
+    showToast("Aguardando conexão", "Mensagem salva. Ela será enviada automaticamente quando a internet voltar.");
+    return;
+  }
 
   try {
     await clearCurrentTypingStatus();
     messageInput.value = "";
-    setMessageSending(true, learningTestEnabled ? "Verificando" : getRoomLanguage(activeRoom)?.code ? "Traduzindo" : "Enviando");
 
     if (learningTestEnabled) {
+      setMessageSending(true, "Verificando");
       const feedbackResult = await checkLearningTestWriting(text, activeRoom);
       await sendFirebaseMessage(activeRoom, text, {
         skipTranslation: true,
@@ -554,10 +592,19 @@ messageForm.addEventListener("submit", async (event) => {
         learningFeedback: await createLearningFeedbackFromResult(text, feedbackResult, activeRoom)
       });
     } else {
-      await sendFirebaseMessage(activeRoom, text);
+      sendFirebaseMessage(activeRoom, text).catch((error) => {
+        console.error("Erro ao enviar mensagem.", error);
+        markLocalMessageSendFailure(activeRoom.id, error?.message || "Falha no envio");
+        showToast("Mensagem pendente", "Nao consegui confirmar o envio agora. Tentarei novamente quando a conexao voltar.");
+      });
     }
   } catch (error) {
     console.error("Erro ao enviar mensagem.", error);
+    const queuedAfterFailure = offlineMessageQueue.some((item) => item.roomId === activeRoom.id && item.text === cleanMessageText(text));
+    if (queuedAfterFailure) {
+      showToast("Mensagem pendente", "Mensagem salva. Tentarei enviar automaticamente quando a conexão voltar.");
+      return;
+    }
     messageInput.value = text;
     if (learningTestEnabled) {
       window.alert("Nao foi possivel verificar sua frase agora. Verifique sua conexao e tente novamente.");
@@ -586,6 +633,7 @@ window.addEventListener("focus", markVisibleActiveRoomAsRead);
 
 liveTypingButton?.addEventListener("click", toggleLiveTypingForActiveRoom);
 roomMenuButton?.addEventListener("click", openRoomSettingsModal);
+conversationSearchButton?.addEventListener("click", openMessageSearchPanel);
 closeRoomSettingsButton?.addEventListener("click", closeRoomSettingsModal);
 roomSettingsModal?.addEventListener("click", (event) => {
   if (event.target === roomSettingsModal) closeRoomSettingsModal();
@@ -594,6 +642,13 @@ saveRoomLanguageButton?.addEventListener("click", saveActiveRoomLanguageFromSett
 deleteRoomButton?.addEventListener("click", handleDeleteOrLeaveRoomFromSettings);
 roomSettingsLiveTypingButton?.addEventListener("click", toggleLiveTypingForActiveRoom);
 roomSettingsClearChatButton?.addEventListener("click", handleClearActiveChat);
+roomSettingsPinButton?.addEventListener("click", toggleActiveRoomPin);
+messageSearchInput?.addEventListener("input", updateMessageSearchFromControls);
+messageSearchUserInput?.addEventListener("input", updateMessageSearchFromControls);
+messageSearchDateInput?.addEventListener("input", updateMessageSearchFromControls);
+messageSearchPrevButton?.addEventListener("click", () => jumpToMessageSearchMatch(-1));
+messageSearchNextButton?.addEventListener("click", () => jumpToMessageSearchMatch(1));
+closeMessageSearchButton?.addEventListener("click", closeMessageSearchPanel);
 
 searchInput.addEventListener("input", () => {
   renderRoomList(searchInput.value);
@@ -899,6 +954,9 @@ function resetRuntimeSessionState() {
   liveTypingByRoom = {};
   learningTestByRoom = {};
   processedFriendRequestIds = {};
+  pinnedConversationIds = new Set();
+  offlineMessageQueue = [];
+  messageSearchState = createEmptyMessageSearchState();
   firebaseReady = false;
   firebaseInitPromise = null;
   aiReplyInProgress = false;
@@ -940,11 +998,17 @@ function clearStoredAstroChatData() {
     ROOMS_STORAGE_KEY,
     NOTIFICATIONS_STORAGE_KEY,
     INTERNAL_PUSH_STORAGE_KEY,
+    SYSTEM_PUSH_STORAGE_KEY,
     FCM_DEVICE_ID_STORAGE_KEY,
     FCM_TOKEN_STORAGE_KEY,
+    FCM_TOKEN_REFRESHED_AT_STORAGE_KEY,
+    SPEECH_RATE_STORAGE_KEY,
     LIVE_TYPING_STORAGE_KEY,
     LEARNING_TEST_STORAGE_KEY,
-    PROCESSED_FRIEND_REQUESTS_STORAGE_KEY
+    PROCESSED_FRIEND_REQUESTS_STORAGE_KEY,
+    PINNED_CONVERSATIONS_STORAGE_KEY,
+    OFFLINE_MESSAGE_QUEUE_STORAGE_KEY,
+    REMOTE_CONVERSATION_CACHE_STORAGE_KEY
   ].forEach((key) => localStorage.removeItem(key));
 }
 
@@ -953,9 +1017,14 @@ function loadLocalSessionData() {
   friends = loadFromStorage(FRIENDS_STORAGE_KEY, []);
   notificationState = normalizeNotificationState(loadFromStorage(NOTIFICATIONS_STORAGE_KEY, {}));
   internalPushNotificationsEnabled = loadFromStorage(INTERNAL_PUSH_STORAGE_KEY, true) !== false;
+  systemPushNotificationsEnabled = loadFromStorage(SYSTEM_PUSH_STORAGE_KEY, true) !== false;
+  syncSystemPushPreferenceToServiceWorker();
   liveTypingByRoom = loadFromStorage(LIVE_TYPING_STORAGE_KEY, {});
   learningTestByRoom = loadFromStorage(LEARNING_TEST_STORAGE_KEY, {});
   processedFriendRequestIds = loadFromStorage(PROCESSED_FRIEND_REQUESTS_STORAGE_KEY, {});
+  pinnedConversationIds = new Set(loadFromStorage(PINNED_CONVERSATIONS_STORAGE_KEY, []));
+  offlineMessageQueue = normalizeOfflineMessageQueue(loadFromStorage(OFFLINE_MESSAGE_QUEUE_STORAGE_KEY, []));
+  loadRemoteConversationCache();
 }
 
 async function safeSignOutFirebase() {
@@ -1176,10 +1245,15 @@ function setupConnectivityDetection() {
     internetOnline = true;
     document.body.classList.remove("is-offline");
     if (currentUser?.nick) updateUserHeader(firebaseReady ? "Online" : "Reconectando...");
-    showToast("Internet conectada", "Acoes online foram liberadas novamente.");
+    showToast("Internet conectada", offlineMessageQueue.length ? "Enviando mensagens pendentes..." : "Acoes online foram liberadas novamente.");
     if (currentUser?.nick && !firebaseReady) {
-      initFirebaseSession().catch((error) => console.warn("Nao foi possivel reconectar ao Firebase.", error));
+      initFirebaseSession()
+        .then(() => flushOfflineMessageQueue())
+        .catch((error) => console.warn("Nao foi possivel reconectar ao Firebase.", error));
+    } else {
+      flushOfflineMessageQueue();
     }
+    renderActiveRoom(false);
   });
 
   window.addEventListener("offline", () => {
@@ -1188,7 +1262,8 @@ function setupConnectivityDetection() {
     firebaseReady = false;
     firebaseInitPromise = null;
     updateUserHeader("Offline");
-    showToast("Sem internet", "Ações online, tradução e IA ficam pausadas até a conexão voltar.");
+    showToast("Sem internet", "Voce pode ler mensagens carregadas e escrever. Novas mensagens ficam aguardando conexao.");
+    renderActiveRoom(false);
   });
 }
 
@@ -1254,6 +1329,7 @@ async function runBackgroundRefresh(options = {}) {
     scheduleRoomLastMessagesRefresh(roomIds, options.foreground ? 0 : 500);
     syncInviteSubscriptions("received", Object.keys(receivedIndexSnapshot.val() || {}));
     syncInviteSubscriptions("sent", Object.keys(sentIndexSnapshot.val() || {}));
+    refreshFcmTokenRegistrationIfNeeded();
 
     if (options.foreground) {
       updateUserHeader("Online");
@@ -1481,6 +1557,7 @@ async function initFirebaseSession() {
     });
     registerFcmTokenIfNotificationGranted();
     updateUserHeader("Online");
+    flushOfflineMessageQueue();
   })();
 
   return firebaseInitPromise;
@@ -1524,6 +1601,7 @@ async function preloadFirebaseInitialData() {
     });
 
   remoteRooms = Array.from(remoteRoomMap.values());
+  saveRemoteConversationCache();
   inviteSnapshotBuckets.received = receivedInviteSnapshots
     .filter((snapshot) => snapshot?.exists())
     .map(mapInviteSnapshot);
@@ -1897,6 +1975,7 @@ function syncRoomSubscriptions(roomIds) {
         }
 
         remoteRooms = Array.from(remoteRoomMap.values());
+        saveRemoteConversationCache();
         validateActiveRoom();
         renderAll();
         subscribeToActiveRoomMessages();
@@ -1911,6 +1990,7 @@ function syncRoomSubscriptions(roomIds) {
   });
 
   remoteRooms = Array.from(remoteRoomMap.values());
+  saveRemoteConversationCache();
   validateActiveRoom();
   renderAll();
   scheduleRoomLastMessagesRefresh(roomIds, 500);
@@ -1994,7 +2074,8 @@ function subscribeToActiveRoomMessages() {
         nextMessages.push(mapMessageSnapshot(childSnapshot));
       });
       nextMessages.sort(compareMessagesBySendOrder);
-      roomMessagesById.set(activeRoom.id, nextMessages);
+      roomMessagesById.set(activeRoom.id, mergeQueuedMessagesForRoom(activeRoom.id, nextMessages));
+      saveRemoteConversationCache();
 
       if (activeRoomId === activeRoom.id) {
         const updatedRoom = getActiveRoom();
@@ -2295,6 +2376,8 @@ function updateLiveTypingButtonState() {
     if (small) small.textContent = activeRoom && isAiRoom(activeRoom) ? "Recomeça o professor" : "Remove mensagens";
     if (icon) icon.className = activeRoom && isAiRoom(activeRoom) ? "fa-solid fa-rotate-right" : "fa-solid fa-broom";
   }
+
+  updateRoomPinButtonState(activeRoom);
 }
 
 function isLiveTypingEnabledForRoom(roomId) {
@@ -2472,13 +2555,32 @@ async function handleProfileNotificationsButtonClickWithFcm() {
     return;
   }
 
+  if (status === "granted" && areSystemPushNotificationsEnabled() && localStorage.getItem(FCM_TOKEN_STORAGE_KEY)) {
+    profileNotificationsButton.disabled = true;
+    updateProfileNotificationsButtonState("Desativando push do sistema...");
+    setSystemPushNotificationsEnabled(false, { updateUi: false });
+
+    try {
+      await unregisterFcmTokenForCurrentUser({ deleteBrowserToken: true });
+      showToast("Push do sistema desativado", "Avisos internos, badges e lista de nao lidas continuam funcionando no app.");
+    } catch (error) {
+      console.warn("Nao foi possivel desativar o push do sistema.", error);
+      showToast("Push desativado neste aparelho", "Nao consegui remover tudo do Firebase agora, mas este app ja esta silenciando o push do sistema.");
+    } finally {
+      updateProfileNotificationsButtonState();
+    }
+    return;
+  }
+
   if (status === "granted") {
     profileNotificationsButton.disabled = true;
     updateProfileNotificationsButtonState("Registrando este navegador...");
+    setSystemPushNotificationsEnabled(true);
+
     try {
       const token = await ensureFcmTokenRegistration({ force: true, showErrors: true });
       showToast(
-        token ? "Notificacoes ja ativadas" : "Permissao ativada",
+        token ? "Push do sistema ativado" : "Permissao ativada",
         token
           ? "Este navegador ja pode receber avisos pelo Firebase Cloud Messaging."
           : "O navegador permitiu notificacoes, mas o FCM ainda nao retornou token."
@@ -2495,6 +2597,7 @@ async function handleProfileNotificationsButtonClickWithFcm() {
 
   profileNotificationsButton.disabled = true;
   updateProfileNotificationsButtonState("Solicitando permissao...");
+  setSystemPushNotificationsEnabled(true);
 
   try {
     const permission = await requestBrowserNotificationPermission();
@@ -2503,7 +2606,7 @@ async function handleProfileNotificationsButtonClickWithFcm() {
       updateProfileNotificationsButtonState("Registrando este navegador...");
       const token = await ensureFcmTokenRegistration({ force: true, showErrors: true });
       showToast(
-        token ? "Notificacoes ativadas" : "Permissao ativada",
+        token ? "Push do sistema ativado" : "Permissao ativada",
         token
           ? "Voce recebera avisos de mensagens pelo Firebase Cloud Messaging."
           : "O navegador permitiu notificacoes, mas o FCM ainda nao retornou token."
@@ -2526,6 +2629,8 @@ function updateProfileNotificationsButtonState(statusOverride = "") {
   if (!profileNotificationsButton || !profileNotificationsStatus) return;
 
   const status = getBrowserNotificationStatus();
+  const systemPushEnabled = areSystemPushNotificationsEnabled();
+  const hasFcmToken = Boolean(localStorage.getItem(FCM_TOKEN_STORAGE_KEY));
   const labels = {
     unsupported: {
       title: "Notificações indisponíveis",
@@ -2561,12 +2666,20 @@ function updateProfileNotificationsButtonState(statusOverride = "") {
 
   const config = { ...(labels[status] || labels.default) };
   const vapidKeyValidation = getFcmVapidKeyValidation();
-  if (status === "granted" && !vapidKeyValidation.valid) {
+  if (status === "granted" && !systemPushEnabled) {
+    config.title = "Push do sistema desativado";
+    config.detail = "Clique para ativar os avisos do navegador. Os avisos internos continuam no app.";
+    config.icon = "fa-solid fa-bell-slash";
+  } else if (status === "granted" && !vapidKeyValidation.valid) {
     config.title = "FCM pendente";
     config.detail = vapidKeyValidation.message;
     config.icon = "fa-solid fa-bell";
-  } else if (status === "granted" && localStorage.getItem(FCM_TOKEN_STORAGE_KEY)) {
+  } else if (status === "granted" && hasFcmToken) {
+    config.title = "Push do sistema ativado";
     config.detail = "Este navegador esta registrado no Firebase Cloud Messaging.";
+  } else if (status === "granted") {
+    config.title = "Ativar push do sistema";
+    config.detail = "Permissao concedida. Clique para registrar este navegador no FCM.";
   }
   const icon = profileNotificationsButton.querySelector("i");
   const title = profileNotificationsButton.querySelector("strong");
@@ -2575,12 +2688,16 @@ function updateProfileNotificationsButtonState(statusOverride = "") {
   if (title) title.textContent = config.title;
   profileNotificationsStatus.textContent = statusOverride || config.detail;
   profileNotificationsButton.disabled = Boolean(statusOverride) ? true : config.disabled;
-  profileNotificationsButton.classList.toggle("is-enabled", status === "granted");
-  profileNotificationsButton.classList.toggle("is-blocked", status === "denied" || status === "unsupported" || status === "insecure");
+  profileNotificationsButton.classList.toggle("is-enabled", status === "granted" && systemPushEnabled && hasFcmToken);
+  profileNotificationsButton.classList.toggle("is-blocked", status === "denied" || status === "unsupported" || status === "insecure" || (status === "granted" && !systemPushEnabled));
 }
 
 function areInternalPushNotificationsEnabled() {
   return internalPushNotificationsEnabled !== false;
+}
+
+function areSystemPushNotificationsEnabled() {
+  return systemPushNotificationsEnabled !== false;
 }
 
 function toggleInternalPushNotifications() {
@@ -2593,8 +2710,8 @@ function toggleInternalPushNotifications() {
   }
 
   showToast(
-    "Push interno ativado",
-    "Mensagens e pedidos voltam a mostrar pop-ups, notificacoes locais, som e vibracao."
+    "Avisos internos ativados",
+    "Mensagens e pedidos voltam a mostrar pop-ups dentro do app, som e vibracao."
   );
 }
 
@@ -2602,6 +2719,37 @@ function setInternalPushNotificationsEnabled(enabled) {
   internalPushNotificationsEnabled = Boolean(enabled);
   localStorage.setItem(INTERNAL_PUSH_STORAGE_KEY, JSON.stringify(internalPushNotificationsEnabled));
   updateInternalPushToggleState();
+}
+
+function setSystemPushNotificationsEnabled(enabled, options = {}) {
+  systemPushNotificationsEnabled = Boolean(enabled);
+  localStorage.setItem(SYSTEM_PUSH_STORAGE_KEY, JSON.stringify(systemPushNotificationsEnabled));
+  if (options.updateUi !== false) updateProfileNotificationsButtonState();
+  syncSystemPushPreferenceToServiceWorker();
+}
+
+function syncSystemPushPreferenceToServiceWorker() {
+  if (!("serviceWorker" in navigator)) return;
+
+  const message = {
+    type: "SET_SYSTEM_PUSH_ENABLED",
+    enabled: areSystemPushNotificationsEnabled()
+  };
+
+  try {
+    navigator.serviceWorker.controller?.postMessage(message);
+    navigator.serviceWorker.ready
+      .then((registration) => {
+        registration.active?.postMessage(message);
+        registration.waiting?.postMessage(message);
+        registration.installing?.postMessage(message);
+      })
+      .catch((error) => {
+        console.warn("Nao foi possivel sincronizar preferencia de push com o service worker.", error);
+      });
+  } catch (error) {
+    console.warn("Nao foi possivel avisar o service worker sobre a preferencia de push.", error);
+  }
 }
 
 function updateInternalPushToggleState() {
@@ -2616,9 +2764,9 @@ function updateInternalPushToggleState() {
   internalPushToggleButton.classList.toggle("is-blocked", !enabled);
 
   if (icon) icon.className = enabled ? "fa-solid fa-toggle-on" : "fa-solid fa-toggle-off";
-  if (title) title.textContent = enabled ? "Push interno ativado" : "Push interno desativado";
+  if (title) title.textContent = enabled ? "Avisos internos ativados" : "Avisos internos desativados";
   internalPushToggleStatus.textContent = enabled
-    ? "Mostra pop-ups, notificacoes locais, som e vibracao."
+    ? "Mostra pop-ups dentro do app, som e vibracao."
     : "Mantem apenas badges e lista de nao lidas neste aparelho.";
 }
 
@@ -2669,6 +2817,7 @@ async function saveProfileSettings(event) {
   saveUser(currentUser);
   updateUserHeader();
   ensureUserAiRoom();
+  saveRemoteConversationCache();
   renderAll(true);
 
   try {
@@ -3005,29 +3154,40 @@ function getRoomSearchText(room) {
 
 function getRoomListGroups(roomList) {
   const sortedRooms = roomList.slice().sort(sortRoomsForList);
+  const pinnedRooms = sortedRooms.filter((room) => isConversationPinned(room.id));
+  const unpinnedRooms = sortedRooms.filter((room) => !isConversationPinned(room.id));
   return [
+    {
+      key: "pinned",
+      title: "Fixadas",
+      icon: "fa-solid fa-thumbtack",
+      rooms: pinnedRooms
+    },
     {
       key: "assistant",
       title: "Professor IA",
       icon: "fa-solid fa-language",
-      rooms: sortedRooms.filter((room) => isAiRoom(room))
+      rooms: unpinnedRooms.filter((room) => isAiRoom(room))
     },
     {
       key: "private",
       title: "Conversas privadas",
       icon: "fa-solid fa-comment",
-      rooms: sortedRooms.filter((room) => !isAiRoom(room) && isPrivateRoom(room))
+      rooms: unpinnedRooms.filter((room) => !isAiRoom(room) && isPrivateRoom(room))
     },
     {
       key: "rooms",
       title: "Salas",
       icon: "fa-solid fa-door-open",
-      rooms: sortedRooms.filter((room) => !isAiRoom(room) && !isPrivateRoom(room))
+      rooms: unpinnedRooms.filter((room) => !isAiRoom(room) && !isPrivateRoom(room))
     }
   ].filter((group) => group.rooms.length);
 }
 
 function sortRoomsForList(a, b) {
+  const pinnedDifference = Number(isConversationPinned(b?.id)) - Number(isConversationPinned(a?.id));
+  if (pinnedDifference) return pinnedDifference;
+
   const timeDifference = getLastTime(b) - getLastTime(a);
   if (timeDifference) return timeDifference;
 
@@ -3065,6 +3225,7 @@ function createRoomListItem(room) {
   item.classList.toggle("ai-room", isAiRoom(room));
   item.classList.toggle("private-room", isPrivateRoom(room));
   item.classList.toggle("group-room", !isAiRoom(room) && !isPrivateRoom(room));
+  item.classList.toggle("is-pinned", isConversationPinned(room.id));
   paintRoomAvatar(avatar, room);
   name.textContent = getRoomDisplayName(room);
   updateRoomItemContent(item, room);
@@ -3098,6 +3259,8 @@ function renderActiveRoom(forceMessages = false) {
   if (!activeRoom) {
     messages.innerHTML = "";
     messages.dataset.roomId = "";
+    updateConversationSearchButton(null);
+    closeMessageSearchPanel();
     updateLearningTestButtonState(null);
     return;
   }
@@ -3107,6 +3270,8 @@ function renderActiveRoom(forceMessages = false) {
   paintRoomAvatar(activeAvatar, activeRoom);
   activeName.textContent = getRoomDisplayName(activeRoom);
   activeStatus.textContent = getRoomStatus(activeRoom);
+  updateConversationSearchButton(activeRoom);
+  syncMessageSearchRoom(activeRoom.id);
   if (isRoomCurrentlyVisible(activeRoom.id)) {
     markRoomAsRead(activeRoom);
   }
@@ -3130,6 +3295,7 @@ function renderActiveRoom(forceMessages = false) {
   }
 
   renderRoomMessages(activeRoom);
+  scheduleReceiptSyncForActiveRoom();
 }
 
 async function closeMobileConversationToMenu() {
@@ -3167,6 +3333,8 @@ function renderRoomMessages(room) {
       renderEmptyConversation();
     }
     renderTypingPreviewPanel();
+    updateMessageSearchResults();
+    scheduleReceiptSyncForActiveRoom();
     return;
   }
 
@@ -3209,6 +3377,8 @@ function renderRoomMessages(room) {
   }
 
   renderTypingPreviewPanel();
+  updateMessageSearchResults();
+  scheduleReceiptSyncForActiveRoom();
 
   if (appended && (isFirstBatch || wasNearBottom)) {
     scheduleMessagesScrollToBottom();
@@ -3243,45 +3413,40 @@ async function sendFirebaseMessage(room, text, options = {}) {
   }
 
   const now = Date.now();
+  const createdAtMillis = Number(options.createdAtMillis || 0) || now;
   const cleanText = cleanMessageText(text);
   const language = getRoomLanguage(room);
   const skipTranslation = Boolean(options.skipTranslation);
   const learningTest = Boolean(options.learningTest);
   const learningFeedback = normalizeLearningFeedback(options.learningFeedback);
-  let translatedText = "";
-  let translationError = false;
-
-  if (language?.code && !skipTranslation) {
-    try {
-      translatedText = await translateMessageText(cleanText, language);
-    } catch (error) {
-      console.warn("Não foi possível traduzir a mensagem antes de salvar.", error);
-      translatedText = "";
-      translationError = false;
-    }
-  }
-
-  const displayText = translatedText || cleanText;
-  const hasDeliveredTranslation = Boolean(language?.code && !skipTranslation && translatedText && translatedText !== cleanText);
-  const replyPayload = getReplyPayloadForMessage();
-  const messageRef = push(ref(db, `rooms/${room.id}/messages`));
+  const shouldTranslateInBackground = Boolean(language?.code && !skipTranslation);
+  const translationStatus = shouldTranslateInBackground ? "pending" : "none";
+  const displayText = cleanText;
+  const mentionPayload = options.mentionPayload || extractMessageMentions(cleanText, room);
+  const replyPayload = options.replyPayload !== undefined ? options.replyPayload : getReplyPayloadForMessage();
+  const messageId = options.messageId || push(ref(db, `rooms/${room.id}/messages`)).key;
   const message = {
-    id: messageRef.key,
+    id: messageId,
     text: displayText,
-    originalText: hasDeliveredTranslation ? cleanText : "",
-    translatedText: hasDeliveredTranslation ? displayText : "",
+    originalText: "",
+    translatedText: "",
     targetLanguageCode: language?.code || "",
     targetLanguageName: language?.name || "",
     learningTest,
     translationDisabled: skipTranslation,
-    translationError,
+    translationError: false,
+    translationStatus,
+    deliveryStatus: "sent",
+    mentionedUids: mentionPayload.mentionedUids,
+    mentionedNicks: mentionPayload.mentionedNicks,
+    mentions: mentionPayload.mentions,
     authorUid: currentFirebaseUid,
     authorNick: currentUser?.nick || "Você",
     authorAvatar: currentUser?.avatar || getInitials(currentUser?.nick || "Você"),
     authorAvatarIcon: getSafeSpaceAvatarIcon(currentUser?.avatarIcon),
-    time: now,
+    time: createdAtMillis,
     createdAt: serverTimestamp(),
-    createdAtMillis: now
+    createdAtMillis
   };
 
   if (learningFeedback) {
@@ -3292,26 +3457,61 @@ async function sendFirebaseMessage(room, text, options = {}) {
     message.replyTo = replyPayload;
   }
 
-  await update(ref(db), {
-    [`rooms/${room.id}/messages/${messageRef.key}`]: message,
-    [`rooms/${room.id}/lastMessage`]: displayText,
-    [`rooms/${room.id}/lastMessageId`]: messageRef.key,
-    [`rooms/${room.id}/lastOriginalMessage`]: hasDeliveredTranslation ? cleanText : "",
-    [`rooms/${room.id}/lastMessageAuthorUid`]: currentFirebaseUid,
-    [`rooms/${room.id}/lastMessageAuthorNick`]: message.authorNick,
-    [`rooms/${room.id}/lastMessageAt`]: serverTimestamp(),
-    [`rooms/${room.id}/lastMessageAtMillis`]: now,
-    [`rooms/${room.id}/updatedAt`]: serverTimestamp(),
-    [`rooms/${room.id}/updatedAtMillis`]: now
-  });
-
-  syncLocalSentFirebaseMessage(room, message, {
+  const localMessage = {
+    ...message,
+    deliveryStatus: options.fromOfflineQueue ? "sending" : "sending"
+  };
+  syncLocalSentFirebaseMessage(room, localMessage, {
     displayText,
-    originalText: hasDeliveredTranslation ? cleanText : "",
-    sentAt: now
+    originalText: "",
+    sentAt: createdAtMillis
   });
   clearReplyTarget();
   markRoomAsRead(room);
+
+  const updates = {
+    [`rooms/${room.id}/messages/${messageId}`]: message,
+    [`rooms/${room.id}/lastMessage`]: displayText,
+    [`rooms/${room.id}/lastMessageId`]: messageId,
+    [`rooms/${room.id}/lastOriginalMessage`]: "",
+    [`rooms/${room.id}/lastMessageAuthorUid`]: currentFirebaseUid,
+    [`rooms/${room.id}/lastMessageAuthorNick`]: message.authorNick,
+    [`rooms/${room.id}/lastMessageMentionedUids`]: mentionPayload.mentionedUids,
+    [`rooms/${room.id}/lastMessageMentionedNicks`]: mentionPayload.mentionedNicks,
+    [`rooms/${room.id}/lastMessageAt`]: serverTimestamp(),
+    [`rooms/${room.id}/lastMessageAtMillis`]: createdAtMillis,
+    [`rooms/${room.id}/updatedAt`]: serverTimestamp(),
+    [`rooms/${room.id}/updatedAtMillis`]: createdAtMillis
+  };
+
+  try {
+    await update(ref(db), updates);
+  } catch (error) {
+    queueOfflineMessageFromMessage(room, message, {
+      replyPayload,
+      skipTranslation,
+      learningTest,
+      learningFeedback,
+      mentionPayload
+    });
+    throw error;
+  }
+
+  syncLocalSentFirebaseMessage(room, message, {
+    displayText,
+    originalText: "",
+    sentAt: createdAtMillis
+  });
+
+  if (shouldTranslateInBackground) {
+    translateFirebaseMessageInBackground(room, {
+      ...message,
+      text: cleanText,
+      originalText: cleanText
+    }, language);
+  }
+
+  return message;
 }
 
 function syncLocalSentFirebaseMessage(room, message, { displayText = "", originalText = "", sentAt = Date.now() } = {}) {
@@ -3326,6 +3526,8 @@ function syncLocalSentFirebaseMessage(room, message, { displayText = "", origina
     lastOriginalMessage: originalText,
     lastMessageAuthorUid: message.authorUid || currentFirebaseUid || "",
     lastMessageAuthorNick: message.authorNick || currentUser?.nick || "Voce",
+    lastMessageMentionedUids: normalizeMentionUidMap(message.mentionedUids),
+    lastMessageMentionedNicks: normalizeMentionNickList(message.mentionedNicks),
     lastMessageAt: sentAt,
     updatedAt: sentAt,
     messages: messagesForRoom
@@ -3333,6 +3535,7 @@ function syncLocalSentFirebaseMessage(room, message, { displayText = "", origina
 
   remoteRoomMap.set(room.id, updatedRoom);
   remoteRooms = Array.from(remoteRoomMap.values());
+  saveRemoteConversationCache();
 
   if (activeRoomId === room.id) {
     renderRoomMessages(updatedRoom);
@@ -3351,6 +3554,844 @@ function upsertRoomMessage(roomId, message) {
   nextMessages.sort(compareMessagesBySendOrder);
   roomMessagesById.set(roomId, nextMessages);
   return nextMessages;
+}
+
+function mergeQueuedMessagesForRoom(roomId, remoteMessages = []) {
+  const queuedIds = new Set(offlineMessageQueue.filter((item) => item.roomId === roomId).map((item) => item.localId));
+  if (!queuedIds.size) return remoteMessages;
+
+  const remoteIds = new Set(remoteMessages.map((message) => message.id));
+  const queuedMessages = (roomMessagesById.get(roomId) || [])
+    .filter((message) => queuedIds.has(message.id) && !remoteIds.has(message.id));
+
+  return [...remoteMessages, ...queuedMessages].sort(compareMessagesBySendOrder);
+}
+
+function isConversationPinned(roomId) {
+  return Boolean(roomId && pinnedConversationIds.has(roomId));
+}
+
+function savePinnedConversations() {
+  localStorage.setItem(PINNED_CONVERSATIONS_STORAGE_KEY, JSON.stringify(Array.from(pinnedConversationIds)));
+}
+
+function toggleActiveRoomPin() {
+  const activeRoom = getActiveRoom();
+  if (!activeRoom) return;
+
+  if (isConversationPinned(activeRoom.id)) {
+    pinnedConversationIds.delete(activeRoom.id);
+    showToast("Conversa desafixada", `${getRoomDisplayName(activeRoom)} saiu do topo.`);
+  } else {
+    pinnedConversationIds.add(activeRoom.id);
+    showToast("Conversa fixada", `${getRoomDisplayName(activeRoom)} ficou no topo da lista.`);
+  }
+
+  savePinnedConversations();
+  updateRoomPinButtonState(activeRoom);
+  renderRoomList(searchInput.value);
+}
+
+function updateRoomPinButtonState(room = getActiveRoom()) {
+  if (!roomSettingsPinButton) return;
+
+  const available = Boolean(room);
+  const pinned = available && isConversationPinned(room.id);
+  roomSettingsPinButton.hidden = !available;
+  roomSettingsPinButton.classList.toggle("is-active", Boolean(pinned));
+  roomSettingsPinButton.setAttribute("aria-pressed", String(Boolean(pinned)));
+
+  const span = roomSettingsPinButton.querySelector("span");
+  const small = roomSettingsPinButton.querySelector("small");
+  const icon = roomSettingsPinButton.querySelector("i");
+  if (span) span.textContent = pinned ? "Desafixar" : "Fixar";
+  if (small) small.textContent = "Conversa";
+  if (icon) icon.className = pinned ? "fa-solid fa-thumbtack-slash" : "fa-solid fa-thumbtack";
+  roomSettingsPinButton.title = pinned ? "Desafixar conversa" : "Fixar conversa no topo";
+}
+
+function normalizeOfflineMessageQueue(value) {
+  if (!Array.isArray(value)) return [];
+
+  return value
+    .filter((item) => item && item.roomId && item.text)
+    .map((item) => ({
+      localId: sanitizeMessageLocalId(item.localId || createId("offline-msg")),
+      roomId: sanitizeNotificationRoomId(item.roomId),
+      text: cleanMessageText(item.text),
+      createdAtMillis: Number(item.createdAtMillis || item.time || Date.now()),
+      replyTo: item.replyTo || null,
+      skipTranslation: Boolean(item.skipTranslation),
+      learningTest: Boolean(item.learningTest),
+      learningFeedback: normalizeLearningFeedback(item.learningFeedback),
+      mentionPayload: {
+        mentionedUids: normalizeMentionUidMap(item.mentionPayload?.mentionedUids || item.mentionedUids),
+        mentionedNicks: normalizeMentionNickList(item.mentionPayload?.mentionedNicks || item.mentionedNicks),
+        mentions: normalizeMentions(item.mentionPayload?.mentions || item.mentions)
+      }
+    }))
+    .filter((item, index, list) => list.findIndex((candidate) => candidate.localId === item.localId) === index)
+    .slice(-100);
+}
+
+function sanitizeMessageLocalId(value) {
+  return String(value || createId("offline-msg")).replace(/[.#$\[\]/]/g, "-").slice(0, 160);
+}
+
+function saveOfflineMessageQueue() {
+  offlineMessageQueue = normalizeOfflineMessageQueue(offlineMessageQueue);
+  localStorage.setItem(OFFLINE_MESSAGE_QUEUE_STORAGE_KEY, JSON.stringify(offlineMessageQueue));
+  updateUserHeader();
+  renderRoomList(searchInput?.value || "");
+  renderActiveRoom(false);
+}
+
+function getOfflineQueueCountForRoom(roomId) {
+  if (!roomId) return 0;
+  return offlineMessageQueue.filter((item) => item.roomId === roomId).length;
+}
+
+function queueOfflineMessage(room, text, options = {}) {
+  if (!room?.id || isAiRoom(room)) return null;
+
+  const cleanText = cleanMessageText(text);
+  if (!cleanText) return null;
+
+  const createdAtMillis = Number(options.createdAtMillis || 0) || Date.now();
+  const localId = sanitizeMessageLocalId(options.messageId || options.localId || createId("offline-msg"));
+  const mentionPayload = options.mentionPayload || extractMessageMentions(cleanText, room);
+  const replyPayload = options.replyPayload !== undefined ? options.replyPayload : getReplyPayloadForMessage();
+  const message = {
+    id: localId,
+    text: cleanText,
+    originalText: "",
+    translatedText: "",
+    targetLanguageCode: getRoomLanguage(room)?.code || "",
+    targetLanguageName: getRoomLanguage(room)?.name || "",
+    learningTest: Boolean(options.learningTest),
+    translationDisabled: Boolean(options.skipTranslation),
+    translationStatus: getRoomLanguage(room)?.code && !options.skipTranslation ? "pending" : "none",
+    deliveryStatus: "queued",
+    pendingOffline: true,
+    mentionedUids: mentionPayload.mentionedUids,
+    mentionedNicks: mentionPayload.mentionedNicks,
+    mentions: mentionPayload.mentions,
+    replyTo: replyPayload,
+    authorUid: currentFirebaseUid || getCachedCurrentUserUidForRoom(room) || "",
+    authorNick: currentUser?.nick || "Você",
+    authorAvatar: currentUser?.avatar || getInitials(currentUser?.nick || "Você"),
+    authorAvatarIcon: getSafeSpaceAvatarIcon(currentUser?.avatarIcon),
+    from: "me",
+    time: createdAtMillis,
+    createdAtMillis
+  };
+
+  queueOfflineMessageFromMessage(room, message, {
+    replyPayload,
+    skipTranslation: Boolean(options.skipTranslation),
+    learningTest: Boolean(options.learningTest),
+    learningFeedback: normalizeLearningFeedback(options.learningFeedback),
+    mentionPayload
+  });
+  clearReplyTarget();
+  return message;
+}
+
+function queueOfflineMessageFromMessage(room, message, options = {}) {
+  if (!room?.id || !message?.id) return;
+
+  const queuedMessage = {
+    ...message,
+    deliveryStatus: "queued",
+    pendingOffline: true,
+    from: "me"
+  };
+
+  syncLocalSentFirebaseMessage(room, queuedMessage, {
+    displayText: queuedMessage.text || queuedMessage.originalText || "",
+    originalText: queuedMessage.originalText || "",
+    sentAt: Number(queuedMessage.createdAtMillis || queuedMessage.time || Date.now())
+  });
+
+  const queueItem = {
+    localId: sanitizeMessageLocalId(queuedMessage.id),
+    roomId: room.id,
+    text: cleanMessageText(queuedMessage.originalText || queuedMessage.text || ""),
+    createdAtMillis: Number(queuedMessage.createdAtMillis || queuedMessage.time || Date.now()),
+    replyTo: options.replyPayload || queuedMessage.replyTo || null,
+    skipTranslation: Boolean(options.skipTranslation || queuedMessage.translationDisabled),
+    learningTest: Boolean(options.learningTest || queuedMessage.learningTest),
+    learningFeedback: normalizeLearningFeedback(options.learningFeedback || queuedMessage.learningFeedback),
+    mentionPayload: options.mentionPayload || {
+      mentionedUids: normalizeMentionUidMap(queuedMessage.mentionedUids),
+      mentionedNicks: normalizeMentionNickList(queuedMessage.mentionedNicks),
+      mentions: normalizeMentions(queuedMessage.mentions)
+    }
+  };
+
+  offlineMessageQueue = [
+    ...offlineMessageQueue.filter((item) => item.localId !== queueItem.localId),
+    queueItem
+  ];
+  saveOfflineMessageQueue();
+}
+
+async function flushOfflineMessageQueue() {
+  if (offlineQueueFlushInProgress || !offlineMessageQueue.length) return;
+  if (!firebaseReady || !currentFirebaseUid || !isInternetAvailable()) return;
+
+  offlineQueueFlushInProgress = true;
+  const queuedItems = [...offlineMessageQueue];
+
+  try {
+    for (const item of queuedItems) {
+      if (!offlineMessageQueue.some((queued) => queued.localId === item.localId)) continue;
+
+      const room = getVisibleRooms().find((candidate) => candidate.id === item.roomId) || remoteRoomMap.get(item.roomId);
+      if (!room) continue;
+
+      updateQueuedLocalMessage(item.roomId, item.localId, {
+        deliveryStatus: "sending",
+        pendingOffline: false
+      });
+
+      try {
+        await sendFirebaseMessage(room, item.text, {
+          messageId: item.localId,
+          createdAtMillis: item.createdAtMillis,
+          replyPayload: item.replyTo || null,
+          skipTranslation: item.skipTranslation,
+          learningTest: item.learningTest,
+          learningFeedback: item.learningFeedback,
+          mentionPayload: item.mentionPayload,
+          fromOfflineQueue: true
+        });
+
+        offlineMessageQueue = offlineMessageQueue.filter((queued) => queued.localId !== item.localId);
+        localStorage.setItem(OFFLINE_MESSAGE_QUEUE_STORAGE_KEY, JSON.stringify(offlineMessageQueue));
+      } catch (error) {
+        console.warn("Mensagem offline ainda nao foi enviada.", item.localId, error);
+        updateQueuedLocalMessage(item.roomId, item.localId, {
+          deliveryStatus: "queued",
+          pendingOffline: true
+        });
+        break;
+      }
+    }
+  } finally {
+    offlineQueueFlushInProgress = false;
+    saveOfflineMessageQueue();
+  }
+}
+
+function updateQueuedLocalMessage(roomId, messageId, patch) {
+  if (!roomId || !messageId) return;
+  const currentMessages = roomMessagesById.get(roomId) || [];
+  const currentMessage = currentMessages.find((message) => message.id === messageId);
+  if (!currentMessage) return;
+
+  upsertRoomMessage(roomId, { ...currentMessage, ...patch });
+  const room = remoteRoomMap.get(roomId);
+  if (room) {
+    remoteRoomMap.set(roomId, {
+      ...room,
+      messages: roomMessagesById.get(roomId) || []
+    });
+    remoteRooms = Array.from(remoteRoomMap.values());
+  }
+
+  if (activeRoomId === roomId) {
+    forceMessageRerender(roomId);
+    renderActiveRoom(true);
+  }
+
+  saveRemoteConversationCache();
+}
+
+function markLocalMessageSendFailure(roomId, reason = "") {
+  const queuedIds = new Set(offlineMessageQueue.filter((item) => item.roomId === roomId).map((item) => item.localId));
+  const messagesForRoom = roomMessagesById.get(roomId) || [];
+  const sendingMessages = messagesForRoom.filter((message) => message.deliveryStatus === "sending" && !queuedIds.has(message.id));
+
+  sendingMessages.forEach((message) => {
+    upsertRoomMessage(roomId, {
+      ...message,
+      deliveryStatus: "failed",
+      deliveryError: reason || "Falha no envio"
+    });
+  });
+
+  if (sendingMessages.length && activeRoomId === roomId) {
+    forceMessageRerender(roomId);
+    renderActiveRoom(true);
+  }
+}
+
+function getCachedCurrentUserUidForRoom(room) {
+  if (!room || !currentUser?.nick) return "";
+  const normalizedNick = normalize(currentUser.nick);
+  return Object.entries(room.memberNickMap || {}).find(([, nick]) => normalize(nick) === normalizedNick)?.[0] || "";
+}
+
+async function translateFirebaseMessageInBackground(room, message, language) {
+  if (!room?.id || !message?.id || !language?.code || message.translationDisabled) return;
+
+  try {
+    if (!isInternetAvailable()) throw new Error("Sem internet para traduzir.");
+
+    const originalText = cleanMessageText(message.originalText || message.text || "");
+    const translated = cleanMessageText(await translateMessageText(originalText, language), 1000);
+    if (!translated) throw new Error("Tradução vazia.");
+
+    const hasDeliveredTranslation = translated && translated !== originalText;
+    const translatedMessage = {
+      ...message,
+      text: hasDeliveredTranslation ? translated : originalText,
+      originalText: hasDeliveredTranslation ? originalText : "",
+      translatedText: hasDeliveredTranslation ? translated : "",
+      translationStatus: "done",
+      translationError: false,
+      deliveryStatus: "sent",
+      pendingOffline: false
+    };
+
+    const updates = {
+      [`rooms/${room.id}/messages/${message.id}/text`]: translatedMessage.text,
+      [`rooms/${room.id}/messages/${message.id}/originalText`]: translatedMessage.originalText,
+      [`rooms/${room.id}/messages/${message.id}/translatedText`]: translatedMessage.translatedText,
+      [`rooms/${room.id}/messages/${message.id}/translationStatus`]: "done",
+      [`rooms/${room.id}/messages/${message.id}/translationError`]: false
+    };
+
+    try {
+      const lastMessageSnapshot = await get(ref(db, `rooms/${room.id}/lastMessageId`));
+      if (lastMessageSnapshot.val() === message.id) {
+        updates[`rooms/${room.id}/lastMessage`] = translatedMessage.text;
+        updates[`rooms/${room.id}/lastOriginalMessage`] = translatedMessage.originalText;
+      }
+    } catch (error) {
+      console.warn("Nao foi possivel conferir a ultima mensagem antes de salvar traducao.", error);
+    }
+
+    await update(ref(db), updates);
+    syncLocalSentFirebaseMessage(room, translatedMessage, {
+      displayText: translatedMessage.text,
+      originalText: translatedMessage.originalText,
+      sentAt: Number(message.createdAtMillis || message.time || Date.now())
+    });
+  } catch (error) {
+    console.warn("Nao foi possivel traduzir a mensagem em segundo plano.", error);
+    const failedMessage = {
+      ...message,
+      translationStatus: "error",
+      translationError: true,
+      deliveryStatus: "sent",
+      pendingOffline: false
+    };
+
+    syncLocalSentFirebaseMessage(room, failedMessage, {
+      displayText: failedMessage.text || failedMessage.originalText || "",
+      originalText: failedMessage.originalText || "",
+      sentAt: Number(message.createdAtMillis || message.time || Date.now())
+    });
+
+    if (firebaseReady && isInternetAvailable()) {
+      update(ref(db), {
+        [`rooms/${room.id}/messages/${message.id}/translationStatus`]: "error",
+        [`rooms/${room.id}/messages/${message.id}/translationError`]: true
+      }).catch((updateError) => {
+        console.warn("Nao foi possivel marcar erro de traducao no Firebase.", updateError);
+      });
+    }
+  }
+}
+
+function saveRemoteConversationCache() {
+  if (!currentUser?.nick) return;
+
+  const roomsForCache = remoteRooms
+    .filter((room) => room?.id && !isAiRoom(room))
+    .slice(0, 80)
+    .map((room) => ({
+      ...room,
+      messages: undefined
+    }));
+  const messagesByRoom = {};
+
+  roomsForCache.forEach((room) => {
+    messagesByRoom[room.id] = (roomMessagesById.get(room.id) || [])
+      .slice(-180)
+      .map(stripMessageForCache);
+  });
+
+  try {
+    localStorage.setItem(REMOTE_CONVERSATION_CACHE_STORAGE_KEY, JSON.stringify({
+      savedAt: Date.now(),
+      ownerNick: currentUser?.nick || "",
+      currentUid: currentFirebaseUid || "",
+      rooms: roomsForCache,
+      messagesByRoom
+    }));
+  } catch (error) {
+    console.warn("Nao foi possivel salvar cache local de conversas.", error);
+  }
+}
+
+function loadRemoteConversationCache() {
+  const cache = loadFromStorage(REMOTE_CONVERSATION_CACHE_STORAGE_KEY, null);
+  if (!cache?.rooms || !Array.isArray(cache.rooms)) return;
+  if (cache.ownerNick && normalize(cache.ownerNick) !== normalize(currentUser?.nick || "")) return;
+
+  cache.rooms.forEach((room) => {
+    if (!room?.id) return;
+    const cachedMessages = Array.isArray(cache.messagesByRoom?.[room.id])
+      ? cache.messagesByRoom[room.id].map((message) => mapMessageData(message.id || createId("cached-msg"), message))
+      : [];
+
+    cachedMessages.sort(compareMessagesBySendOrder);
+    roomMessagesById.set(room.id, cachedMessages);
+    remoteRoomMap.set(room.id, {
+      ...room,
+      messages: cachedMessages
+    });
+  });
+
+  remoteRooms = Array.from(remoteRoomMap.values());
+}
+
+function stripMessageForCache(message) {
+  return {
+    id: message.id || "",
+    text: message.text || "",
+    originalText: message.originalText || "",
+    translatedText: message.translatedText || "",
+    targetLanguageCode: message.targetLanguageCode || "",
+    targetLanguageName: message.targetLanguageName || "",
+    learningTest: Boolean(message.learningTest),
+    translationDisabled: Boolean(message.translationDisabled),
+    translationStatus: message.translationStatus || "",
+    translationError: Boolean(message.translationError),
+    deliveryStatus: message.deliveryStatus || "",
+    pendingOffline: Boolean(message.pendingOffline),
+    deliveredBy: message.deliveredBy || {},
+    readBy: message.readBy || {},
+    mentionedUids: message.mentionedUids || {},
+    mentionedNicks: message.mentionedNicks || [],
+    mentions: message.mentions || {},
+    replyTo: message.replyTo || null,
+    reactions: message.reactions || {},
+    hydration: message.hydration || null,
+    hydrations: message.hydrations || {},
+    authorUid: message.authorUid || "",
+    authorNick: message.authorNick || message.author || "",
+    authorAvatar: message.authorAvatar || "",
+    authorAvatarIcon: message.authorAvatarIcon || "",
+    from: message.from || "",
+    time: Number(message.time || message.createdAtMillis || Date.now()),
+    createdAtMillis: Number(message.createdAtMillis || message.time || Date.now())
+  };
+}
+
+function createEmptyMessageSearchState() {
+  return {
+    roomId: "",
+    open: false,
+    query: "",
+    user: "",
+    date: "",
+    matches: [],
+    activeIndex: -1
+  };
+}
+
+function updateConversationSearchButton(room = getActiveRoom()) {
+  if (!conversationSearchButton) return;
+  conversationSearchButton.hidden = !room;
+  conversationSearchButton.classList.toggle("is-active", Boolean(room && messageSearchState.open));
+}
+
+function syncMessageSearchRoom(roomId) {
+  if (!roomId || messageSearchState.roomId === roomId) return;
+
+  if (messageSearchState.open) {
+    closeMessageSearchPanel({ keepInputs: false });
+  }
+
+  messageSearchState.roomId = roomId;
+}
+
+function openMessageSearchPanel() {
+  const activeRoom = getActiveRoom();
+  if (!activeRoom || !messageSearchPanel) return;
+
+  messageSearchState.open = true;
+  messageSearchState.roomId = activeRoom.id;
+  messageSearchPanel.hidden = false;
+  updateConversationSearchButton(activeRoom);
+  updateMessageSearchFromControls();
+  window.setTimeout(() => messageSearchInput?.focus(), 0);
+}
+
+function closeMessageSearchPanel(options = {}) {
+  if (messageSearchPanel) messageSearchPanel.hidden = true;
+  messageSearchState = {
+    ...createEmptyMessageSearchState(),
+    roomId: options.keepRoomId ? messageSearchState.roomId : activeRoomId || ""
+  };
+
+  if (!options.keepInputs) {
+    if (messageSearchInput) messageSearchInput.value = "";
+    if (messageSearchUserInput) messageSearchUserInput.value = "";
+    if (messageSearchDateInput) messageSearchDateInput.value = "";
+  }
+
+  updateConversationSearchButton(getActiveRoom());
+  applyMessageSearchHighlights();
+}
+
+function updateMessageSearchFromControls() {
+  if (!messageSearchState.open && messageSearchPanel?.hidden) return;
+
+  const activeRoom = getActiveRoom();
+  if (!activeRoom) return;
+
+  messageSearchState.open = true;
+  messageSearchState.roomId = activeRoom.id;
+  messageSearchState.query = messageSearchInput?.value || "";
+  messageSearchState.user = messageSearchUserInput?.value || "";
+  messageSearchState.date = messageSearchDateInput?.value || "";
+  updateMessageSearchResults();
+}
+
+function updateMessageSearchResults() {
+  if (!messageSearchState.open) {
+    applyMessageSearchHighlights();
+    return;
+  }
+
+  const activeRoom = getActiveRoom();
+  if (!activeRoom || activeRoom.id !== messageSearchState.roomId) {
+    applyMessageSearchHighlights();
+    return;
+  }
+
+  const query = normalize(messageSearchState.query);
+  const user = normalize(messageSearchState.user);
+  const date = messageSearchState.date;
+  const hasFilters = Boolean(query || user || date);
+  const roomMessages = activeRoom.messages || [];
+
+  if (!hasFilters) {
+    messageSearchState.matches = [];
+    messageSearchState.activeIndex = -1;
+    if (messageSearchResult) messageSearchResult.textContent = "Digite termo, usuário ou data";
+    applyMessageSearchHighlights();
+    return;
+  }
+
+  messageSearchState.matches = roomMessages
+    .filter((message) => {
+      const textMatches = !query || getMessageSearchText(message).includes(query);
+      const userMatches = !user || normalize(message.authorNick || message.author || "").includes(user);
+      const dateMatches = !date || getLocalDateInputValue(message.time || message.createdAtMillis) === date;
+      return textMatches && userMatches && dateMatches;
+    })
+    .map((message) => message.id)
+    .filter(Boolean);
+
+  if (!messageSearchState.matches.length) {
+    messageSearchState.activeIndex = -1;
+    if (messageSearchResult) messageSearchResult.textContent = "0 resultados";
+    applyMessageSearchHighlights();
+    return;
+  }
+
+  if (messageSearchState.activeIndex < 0 || messageSearchState.activeIndex >= messageSearchState.matches.length) {
+    messageSearchState.activeIndex = 0;
+  }
+
+  if (messageSearchResult) {
+    messageSearchResult.textContent = `${messageSearchState.activeIndex + 1}/${messageSearchState.matches.length}`;
+  }
+  applyMessageSearchHighlights();
+}
+
+function getMessageSearchText(message) {
+  return normalize([
+    message?.text,
+    message?.originalText,
+    message?.translatedText,
+    message?.authorNick,
+    message?.author,
+    message?.replyTo?.text,
+    message?.replyTo?.authorNick
+  ].filter(Boolean).join(" "));
+}
+
+function getLocalDateInputValue(timestamp) {
+  const date = new Date(Number(timestamp || Date.now()));
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
+function applyMessageSearchHighlights() {
+  if (!messages) return;
+
+  const matchIds = new Set(messageSearchState.matches || []);
+  const activeId = messageSearchState.activeIndex >= 0 ? messageSearchState.matches[messageSearchState.activeIndex] : "";
+
+  messages.querySelectorAll(".message-row[data-message-id]").forEach((row) => {
+    const isMatch = matchIds.has(row.dataset.messageId);
+    const isActive = isMatch && row.dataset.messageId === activeId;
+    row.classList.toggle("is-search-match", isMatch);
+    row.classList.toggle("is-search-active", isActive);
+  });
+}
+
+function jumpToMessageSearchMatch(direction = 1) {
+  if (!messageSearchState.matches.length) return;
+
+  const total = messageSearchState.matches.length;
+  messageSearchState.activeIndex = (messageSearchState.activeIndex + direction + total) % total;
+  if (messageSearchResult) {
+    messageSearchResult.textContent = `${messageSearchState.activeIndex + 1}/${total}`;
+  }
+  applyMessageSearchHighlights();
+
+  const activeId = messageSearchState.matches[messageSearchState.activeIndex];
+  const row = messages?.querySelector(`[data-message-id="${CSS.escape(activeId)}"]`);
+  row?.scrollIntoView({ block: "center", behavior: "smooth" });
+}
+
+function extractMessageMentions(text, room) {
+  const tokens = new Set();
+  const mentionRegex = /(^|[\s([{"'])@([A-Za-zÀ-ÿ0-9._-]{1,32})/g;
+  let match = mentionRegex.exec(text);
+
+  while (match) {
+    tokens.add(normalizeMentionToken(match[2]));
+    match = mentionRegex.exec(text);
+  }
+
+  const mentions = {};
+  const mentionedUids = {};
+  const mentionedNicks = [];
+
+  getRoomMembers(room).forEach((member) => {
+    if (!member.uid || member.uid === currentFirebaseUid) return;
+    const aliases = getMentionAliases(member.nick);
+    if (!aliases.some((alias) => tokens.has(alias))) return;
+
+    mentionedUids[member.uid] = true;
+    mentionedNicks.push(member.nick);
+    mentions[member.uid] = {
+      uid: member.uid,
+      nick: member.nick
+    };
+  });
+
+  return {
+    mentionedUids,
+    mentionedNicks: unique(mentionedNicks),
+    mentions
+  };
+}
+
+function getMentionAliases(nick) {
+  const normalizedNick = normalizeMentionToken(nick);
+  const firstName = normalizeMentionToken(String(nick || "").split(/\s+/)[0] || "");
+  const pathKey = normalizeMentionToken(toDatabaseKey(nick));
+  return unique([normalizedNick, firstName, pathKey].filter(Boolean));
+}
+
+function normalizeMentionToken(value) {
+  return normalize(value).replace(/^@+/, "").replace(/[^a-z0-9_-]/g, "");
+}
+
+function renderMentionedText(element, text, message = {}) {
+  const rawText = String(text || "");
+  element.textContent = "";
+
+  if (!rawText) return;
+
+  const aliases = new Set(
+    [
+      ...normalizeMentionNickList(message.mentionedNicks).flatMap(getMentionAliases),
+      ...Object.values(normalizeMentions(message.mentions)).flatMap((mention) => getMentionAliases(mention.nick))
+    ].filter(Boolean)
+  );
+
+  if (!aliases.size) {
+    element.textContent = rawText;
+    return;
+  }
+
+  const mentionRegex = /@([A-Za-zÀ-ÿ0-9._-]{1,32})/g;
+  let cursor = 0;
+  let match = mentionRegex.exec(rawText);
+
+  while (match) {
+    if (match.index > cursor) {
+      element.appendChild(document.createTextNode(rawText.slice(cursor, match.index)));
+    }
+
+    const mentionText = match[0];
+    const token = normalizeMentionToken(match[1]);
+    if (aliases.has(token)) {
+      const mention = document.createElement("span");
+      mention.className = "message-mention";
+      mention.textContent = mentionText;
+      element.appendChild(mention);
+    } else {
+      element.appendChild(document.createTextNode(mentionText));
+    }
+
+    cursor = match.index + mentionText.length;
+    match = mentionRegex.exec(rawText);
+  }
+
+  if (cursor < rawText.length) {
+    element.appendChild(document.createTextNode(rawText.slice(cursor)));
+  }
+}
+
+function isCurrentUserMentionedInRoomLastMessage(room) {
+  if (!currentFirebaseUid) return false;
+  return Boolean(normalizeMentionUidMap(room?.lastMessageMentionedUids)[currentFirebaseUid]);
+}
+
+function isCurrentUserMentionedInNotificationData(data = {}) {
+  if (!currentFirebaseUid) return false;
+  if (String(data.mentioned || data.mention || "") === "1") return true;
+  return Boolean(parseMentionedUids(data.mentionedUids || data.mentions)[currentFirebaseUid]);
+}
+
+function parseMentionedUids(value) {
+  if (!value) return {};
+  if (typeof value === "object") return normalizeMentionUidMap(value);
+
+  const text = String(value || "").trim();
+  if (!text) return {};
+
+  try {
+    return normalizeMentionUidMap(JSON.parse(text));
+  } catch (error) {
+    return text.split(",").reduce((map, uid) => {
+      const cleanUid = String(uid || "").trim();
+      if (cleanUid) map[cleanUid] = true;
+      return map;
+    }, {});
+  }
+}
+
+function createMessageDeliveryStatusElement(message) {
+  const activeRoom = getActiveRoom();
+  if (!activeRoom || isAiRoom(activeRoom) || !isMessageMine(message)) return null;
+
+  const status = getMessageDeliveryInfo(message, activeRoom);
+  const wrap = document.createElement("span");
+  const checks = document.createElement("span");
+
+  wrap.className = `message-delivery-status ${status.className}`;
+  wrap.title = status.label;
+  wrap.setAttribute("aria-label", status.label);
+  checks.className = "checks";
+  if (status.iconClass) {
+    checks.innerHTML = `<i class="${status.iconClass}" aria-hidden="true"></i>`;
+  } else {
+    checks.textContent = status.checks;
+  }
+  wrap.appendChild(checks);
+  return wrap;
+}
+
+function getMessageDeliveryInfo(message, room) {
+  if (message.deliveryStatus === "failed") {
+    return { checks: "!", label: "Falha no envio", className: "is-failed" };
+  }
+
+  if (message.pendingOffline || message.deliveryStatus === "queued") {
+    return { iconClass: "fa-regular fa-clock", checks: "", label: "Aguardando conexao", className: "is-waiting" };
+  }
+
+  if (message.deliveryStatus === "sending") {
+    return { iconClass: "fa-regular fa-clock", checks: "", label: "Enviando", className: "is-waiting" };
+  }
+
+  const recipientUids = getReceiptRecipientUids(room, message);
+  const readBy = normalizeMessageReceipts(message.readBy);
+  const deliveredBy = normalizeMessageReceipts(message.deliveredBy);
+  const hasRecipients = recipientUids.length > 0;
+  const allRead = hasRecipients && recipientUids.every((uid) => readBy[uid]);
+  const allDelivered = hasRecipients && recipientUids.every((uid) => deliveredBy[uid] || readBy[uid]);
+  const anyDelivered = hasRecipients && recipientUids.some((uid) => deliveredBy[uid] || readBy[uid]);
+
+  if (allRead) {
+    return { checks: "\u2713\u2713", label: "Lida", className: "is-read" };
+  }
+
+  if (allDelivered || anyDelivered) {
+    return { checks: "\u2713", label: "Entregue", className: "is-delivered" };
+  }
+
+  return { checks: "\u2713", label: "Enviada", className: "is-sent" };
+}
+
+function getReceiptRecipientUids(room, message) {
+  const authorUid = message?.authorUid || currentFirebaseUid || "";
+  return unique((room?.memberUids || Object.keys(room?.memberNickMap || {}))
+    .filter((uid) => uid && uid !== authorUid));
+}
+
+function scheduleReceiptSyncForActiveRoom() {
+  const room = getActiveRoom();
+  if (!room || isAiRoom(room) || !room.id) return;
+  if (!firebaseReady || !currentFirebaseUid || !isInternetAvailable()) return;
+  if (receiptUpdateRooms.has(room.id)) return;
+
+  receiptUpdateRooms.add(room.id);
+  window.setTimeout(async () => {
+    try {
+      await syncReceiptsForRoom(room.id);
+    } catch (error) {
+      console.warn("Nao foi possivel sincronizar recibos da conversa.", error);
+    } finally {
+      receiptUpdateRooms.delete(room.id);
+    }
+  }, 200);
+}
+
+async function syncReceiptsForRoom(roomId) {
+  const room = getVisibleRooms().find((item) => item.id === roomId) || remoteRoomMap.get(roomId);
+  if (!room || isAiRoom(room) || !currentFirebaseUid) return;
+
+  const now = Date.now();
+  const visible = isRoomCurrentlyVisible(roomId);
+  const updates = {};
+  const receipt = {
+    uid: currentFirebaseUid,
+    nick: currentUser?.nick || "Você",
+    at: serverTimestamp(),
+    atMillis: now
+  };
+
+  (roomMessagesById.get(roomId) || [])
+    .filter((message) => message?.id && message.authorUid !== currentFirebaseUid)
+    .slice(-120)
+    .forEach((message) => {
+      if (!normalizeMessageReceipts(message.deliveredBy)[currentFirebaseUid]) {
+        updates[`rooms/${roomId}/messages/${message.id}/deliveredBy/${currentFirebaseUid}`] = receipt;
+      }
+      if (visible && !normalizeMessageReceipts(message.readBy)[currentFirebaseUid]) {
+        updates[`rooms/${roomId}/messages/${message.id}/readBy/${currentFirebaseUid}`] = receipt;
+      }
+    });
+
+  if (Object.keys(updates).length) {
+    await update(ref(db), updates);
+  }
 }
 
 function ensureRoomLastMessageSubscription(roomId) {
@@ -3478,6 +4519,8 @@ function syncRemoteRoomLastMessage(roomId, message, options = {}) {
       lastOriginalMessage: message.originalText || currentRoom.lastOriginalMessage || "",
       lastMessageAuthorUid: message.authorUid || currentRoom.lastMessageAuthorUid || "",
       lastMessageAuthorNick: message.authorNick || message.author || currentRoom.lastMessageAuthorNick || "Usuario",
+      lastMessageMentionedUids: normalizeMentionUidMap(message.mentionedUids),
+      lastMessageMentionedNicks: normalizeMentionNickList(message.mentionedNicks),
       lastMessageAt,
       updatedAt: Math.max(Number(currentRoom.updatedAt || 0), lastMessageAt),
       messages: messagesForRoom
@@ -3495,6 +4538,8 @@ function syncRemoteRoomLastMessage(roomId, message, options = {}) {
       lastOriginalMessage: message.originalText || "",
       lastMessageAuthorUid: message.authorUid || "",
       lastMessageAuthorNick: message.authorNick || message.author || "Usuario",
+      lastMessageMentionedUids: normalizeMentionUidMap(message.mentionedUids),
+      lastMessageMentionedNicks: normalizeMentionNickList(message.mentionedNicks),
       lastMessageAt,
       messages: messagesForRoom
     }, { initialSnapshot: options.initialSnapshot === true });
@@ -3525,6 +4570,8 @@ function createMessageElement(message, animated = false, options = {}) {
   const groupedWithPrevious = Boolean(options.groupedWithPrevious);
   const hasTranslation = Boolean(message.translatedText && message.originalText && message.translatedText !== message.originalText);
   row.className = `message-row ${isMine ? "sent" : "received"}${groupedWithPrevious ? " is-grouped" : ""}`;
+  row.classList.toggle("pending-offline", Boolean(message.pendingOffline || message.deliveryStatus === "queued"));
+  row.classList.toggle("delivery-failed", message.deliveryStatus === "failed");
   row.dataset.messageId = message.id || "";
   row.dataset.signature = getMessageSignature(message);
   stack.className = "message-stack";
@@ -3560,7 +4607,7 @@ function createMessageElement(message, animated = false, options = {}) {
   } else {
     const text = document.createElement("p");
     text.className = "message-text";
-    text.textContent = message.text || message.originalText || "";
+    renderMentionedText(text, message.text || message.originalText || "", message);
     bubble.appendChild(text);
   }
 
@@ -3573,6 +4620,11 @@ function createMessageElement(message, animated = false, options = {}) {
     warning.className = "translation-warning";
     warning.textContent = "Tradução indisponível no envio";
     bubble.appendChild(warning);
+  } else if (message.translationStatus === "pending" && !message.pendingOffline && message.deliveryStatus !== "queued") {
+    const warning = document.createElement("span");
+    warning.className = "translation-warning is-pending";
+    warning.textContent = "Traduzindo em segundo plano...";
+    bubble.appendChild(warning);
   }
 
   footer.className = "message-footer";
@@ -3582,11 +4634,17 @@ function createMessageElement(message, animated = false, options = {}) {
       ? createLearningTestMessageFooterTools(message)
       : null;
 
+  const deliveryStatus = createMessageDeliveryStatusElement(message);
+
   if (messageTools) {
     footer.classList.add("has-message-tools");
     footer.append(messageTools, time);
   } else {
     footer.appendChild(time);
+  }
+
+  if (deliveryStatus) {
+    footer.appendChild(deliveryStatus);
   }
 
   bubble.addEventListener("click", (event) => {
@@ -3863,46 +4921,11 @@ function createMessageTopBar(message, isMine, showAuthor = true) {
 }
 
 function createMessageFooterTools(message, blockInfo) {
-  const originalWrap = blockInfo?.originalWrap || blockInfo;
-  const translationWrap = blockInfo?.translationWrap || null;
-  if (!originalWrap && !translationWrap) return null;
-
-  const tools = document.createElement("div");
-  tools.className = "message-footer-tools";
-
-  if (originalWrap) {
-    const toggleOriginal = document.createElement("button");
-    toggleOriginal.className = "show-original-button translated-tool-button subtle-message-tool";
-    toggleOriginal.type = "button";
-    updateOriginalToggleButton(toggleOriginal, originalWrap.hidden);
-    toggleOriginal.addEventListener("click", (event) => {
-      event.stopPropagation();
-      toggleOriginalTextVisibility(message, originalWrap, toggleOriginal);
-    });
-    tools.appendChild(toggleOriginal);
-  }
-
-  if (translationWrap) {
-    const toggleTranslation = document.createElement("button");
-    toggleTranslation.className = "show-translation-button translated-tool-button subtle-message-tool";
-    toggleTranslation.type = "button";
-    updateTranslationToggleButton(toggleTranslation, translationWrap.hidden);
-    toggleTranslation.addEventListener("click", (event) => {
-      event.stopPropagation();
-      toggleTranslationTextVisibility(message, translationWrap, toggleTranslation);
-    });
-    tools.appendChild(toggleTranslation);
-  }
-
-  tools.appendChild(createListenMessageButton(message));
-  return tools;
+  return null;
 }
 
 function createLearningTestMessageFooterTools(message) {
-  const tools = document.createElement("div");
-  tools.className = "message-footer-tools";
-  tools.appendChild(createListenMessageButton(message));
-  return tools;
+  return null;
 }
 
 function getVisibleLearningFeedback(message) {
@@ -3985,13 +5008,13 @@ function createTranslatedMessageBlock(message, isMine) {
 
   wrapper.className = "translated-block";
   translated.className = "message-translated";
-  translated.textContent = message.translatedText;
+  renderMentionedText(translated, message.translatedText, message);
 
   divider.className = "message-divider";
   originalWrap.className = "message-original-wrap";
   originalWrap.dataset.revealKey = revealKey;
   original.className = "message-original";
-  original.textContent = message.originalText;
+  renderMentionedText(original, message.originalText, message);
 
   originalWrap.append(divider, original);
   originalWrap.hidden = shouldHideOriginal;
@@ -4142,7 +5165,8 @@ function openMessageMenu(message, row, bubble) {
     selectReplyTarget(message);
   });
 
-  const listenAction = createMenuButton("fa-solid fa-volume-high", "Ouvir", () => {
+  const isSpeakingThisMessage = isMessageCurrentlySpeaking(message);
+  const listenAction = createMenuButton(isSpeakingThisMessage ? "fa-solid fa-rotate-right" : "fa-solid fa-volume-high", isSpeakingThisMessage ? "Reiniciar áudio" : "Ouvir", () => {
     closeMessageMenus();
     speakMessage(message);
   });
@@ -4228,11 +5252,212 @@ function closeMessageMenus() {
   document.querySelectorAll(".message-menu").forEach((menu) => menu.remove());
 }
 
-function stopSpeaking() {
-  if (!("speechSynthesis" in window)) return;
+function normalizeSpeechPlaybackRate(value) {
+  const numericValue = Number(value);
+  const allowedRates = getSpeechPlaybackRateOptions();
+  if (!Number.isFinite(numericValue)) return 1;
 
-  window.speechSynthesis.cancel();
+  return allowedRates.reduce((closest, rate) => (
+    Math.abs(rate - numericValue) < Math.abs(closest - numericValue) ? rate : closest
+  ), 1);
+}
+
+function getSpeechPlaybackRateOptions() {
+  return [0.75, 1, 1.25, 1.5, 2];
+}
+
+function formatSpeechPlaybackRate(rate) {
+  const normalized = normalizeSpeechPlaybackRate(rate);
+  return `${Number.isInteger(normalized) ? normalized.toFixed(0) : String(normalized)}x`;
+}
+
+function cycleSpeechPlaybackRate() {
+  const rates = getSpeechPlaybackRateOptions();
+  const currentIndex = Math.max(0, rates.indexOf(normalizeSpeechPlaybackRate(speechPlaybackRate)));
+  const nextRate = rates[(currentIndex + 1) % rates.length];
+  const messageToRestart = isSpeechPlaybackActive() ? activeSpeechMessage : null;
+
+  setSpeechPlaybackRate(nextRate);
+
+  if (messageToRestart) {
+    speakMessage(messageToRestart);
+    showToast("Velocidade alterada", `Reproduzindo em ${formatSpeechPlaybackRate(nextRate)}.`);
+    return;
+  }
+
+  showToast("Velocidade alterada", `Próximos áudios serão reproduzidos em ${formatSpeechPlaybackRate(nextRate)}.`);
+}
+
+function setSpeechPlaybackRate(rate) {
+  speechPlaybackRate = normalizeSpeechPlaybackRate(rate);
+  localStorage.setItem(SPEECH_RATE_STORAGE_KEY, JSON.stringify(speechPlaybackRate));
+}
+
+function isSpeechPlaybackActive() {
+  return Boolean(activeSpeechUtterance) || Boolean(window.speechSynthesis?.speaking || window.speechSynthesis?.pending);
+}
+
+function getSpeechMessageKey(message) {
+  const roomId = getActiveRoom()?.id || activeRoomId || "room";
+  return `${roomId}:${message?.id || message?.time || message?.createdAtMillis || getMessageAudioText(message)}`;
+}
+
+function isMessageCurrentlySpeaking(message) {
+  return Boolean(activeSpeechUtterance && activeSpeechMessageKey && activeSpeechMessageKey === getSpeechMessageKey(message));
+}
+
+function startSpeechProgress(message) {
+  clearSpeechProgress();
+  updateSpeechProgressElement(message);
+
+  activeSpeechAnimationTimer = window.setInterval(() => {
+    if (!activeSpeechUtterance || !activeSpeechMessage) {
+      window.clearInterval(activeSpeechAnimationTimer);
+      activeSpeechAnimationTimer = 0;
+      return;
+    }
+
+    updateSpeechProgressElement(activeSpeechMessage);
+  }, 38);
+}
+
+function updateSpeechProgressElement(message) {
+  const bubble = getRenderedMessageBubble(message);
+  if (!bubble) return;
+
+  let progress = bubble.querySelector(".message-audio-progress");
+
+  if (!progress) {
+    progress = createSpeechProgressElement(message);
+    const footer = bubble.querySelector(".message-footer");
+    if (footer) bubble.insertBefore(progress, footer);
+    else bubble.appendChild(progress);
+  }
+
+  const speed = progress.querySelector(".message-audio-speed-value");
+
+  bubble.closest(".message-row")?.classList.add("is-speaking-message");
+  updateSpeechWaveBars(progress);
+  if (speed) speed.textContent = formatSpeechPlaybackRate(speechPlaybackRate);
+}
+
+function createSpeechProgressElement(message) {
+  const progress = document.createElement("div");
+  const stopButton = document.createElement("button");
+  const waveWrap = document.createElement("div");
+  const wave = document.createElement("div");
+  const speedButton = document.createElement("button");
+
+  progress.className = "message-audio-progress";
+  progress.dataset.messageId = message?.id || "";
+  progress.setAttribute("role", "group");
+  progress.setAttribute("aria-label", "Audio da mensagem em reproducao");
+
+  stopButton.className = "message-audio-control stop-audio-control";
+  stopButton.type = "button";
+  stopButton.title = "Parar audio";
+  stopButton.setAttribute("aria-label", "Parar audio da mensagem");
+  stopButton.innerHTML = `<i class="fa-solid fa-stop" aria-hidden="true"></i>`;
+  stopButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    stopSpeaking();
+  });
+
+  waveWrap.className = "message-audio-wave-wrap";
+  waveWrap.setAttribute("role", "img");
+  waveWrap.setAttribute("aria-label", "Barras de voz em reproducao");
+  wave.className = "message-audio-wave";
+  wave.setAttribute("aria-hidden", "true");
+  for (let index = 0; index < 30; index += 1) {
+    const bar = document.createElement("span");
+    bar.className = "message-audio-wave-bar";
+    bar.dataset.index = String(index);
+    bar.dataset.voiceSeed = (Math.random() * Math.PI * 2).toFixed(4);
+    bar.dataset.voiceRate = (0.75 + Math.random() * 1.35).toFixed(4);
+    bar.dataset.voiceBias = (0.68 + Math.random() * 0.42).toFixed(4);
+    bar.dataset.currentHeight = "4";
+    bar.style.height = "4px";
+    wave.appendChild(bar);
+  }
+
+  waveWrap.appendChild(wave);
+
+  speedButton.className = "message-audio-control speed-audio-control";
+  speedButton.type = "button";
+  speedButton.title = "Mudar velocidade";
+  speedButton.setAttribute("aria-label", "Mudar velocidade do audio");
+  speedButton.innerHTML = `<i class="fa-solid fa-gauge-high" aria-hidden="true"></i><span class="message-audio-speed-value">${escapeHtml(formatSpeechPlaybackRate(speechPlaybackRate))}</span>`;
+  speedButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    cycleSpeechPlaybackRate();
+  });
+
+  progress.append(stopButton, waveWrap, speedButton);
+  return progress;
+}
+
+function updateSpeechWaveBars(progress) {
+  const bars = Array.from(progress.querySelectorAll(".message-audio-wave-bar"));
+  const count = bars.length || 1;
+  const now = performance.now() / 1000;
+  const freeWaveEnergy = 0.58 + Math.random() * 0.62;
+
+  bars.forEach((bar, index) => {
+    const position = count === 1 ? 0 : index / (count - 1);
+    const seed = Number(bar.dataset.voiceSeed || index);
+    const rate = Number(bar.dataset.voiceRate || 1);
+    const bias = Number(bar.dataset.voiceBias || 1);
+    const waveShape = 0.18 + Math.pow(Math.sin(position * Math.PI), 0.85) * 0.82;
+    const fastPulse = (Math.sin(now * (7.2 + rate * 2.4) + seed) + 1) / 2;
+    const slowPulse = (Math.sin(now * (1.35 + rate * 0.25) + seed * 0.37) + 1) / 2;
+    const randomSpark = Math.random() > 0.72 ? Math.random() * 0.38 : 0;
+    const microPause = Math.random() > 0.93 ? 0.24 + Math.random() * 0.18 : 1;
+    const energy = 0.24 + fastPulse * 0.58 + slowPulse * 0.18 + randomSpark;
+    const targetHeight = 4 + (50 * waveShape * freeWaveEnergy * microPause * energy * bias);
+    const previousHeight = Number(bar.dataset.currentHeight || 4);
+    const smoothing = targetHeight > previousHeight ? 0.82 : 0.58;
+    const height = previousHeight + (targetHeight - previousHeight) * smoothing;
+    const clampedHeight = Math.max(4, Math.min(54, height));
+    const opacity = Math.max(0.5, Math.min(1, 0.52 + clampedHeight / 58));
+
+    bar.dataset.currentHeight = clampedHeight.toFixed(3);
+    bar.style.height = `${clampedHeight.toFixed(1)}px`;
+    bar.style.opacity = opacity.toFixed(2);
+  });
+}
+
+function finishSpeechProgress() {
+  if (activeSpeechMessage) updateSpeechProgressElement(activeSpeechMessage);
+  if (activeSpeechAnimationTimer) {
+    window.clearInterval(activeSpeechAnimationTimer);
+    activeSpeechAnimationTimer = 0;
+  }
+  window.clearTimeout(activeSpeechProgressClearTimer);
+  activeSpeechProgressClearTimer = window.setTimeout(clearSpeechProgress, 900);
+}
+
+function clearSpeechProgress() {
+  if (activeSpeechAnimationTimer) {
+    window.clearInterval(activeSpeechAnimationTimer);
+    activeSpeechAnimationTimer = 0;
+  }
+  window.clearTimeout(activeSpeechProgressClearTimer);
+  activeSpeechProgressClearTimer = 0;
+
+  document.querySelectorAll(".message-audio-progress").forEach((progress) => {
+    progress.closest(".message-row")?.classList.remove("is-speaking-message");
+    progress.remove();
+  });
+}
+
+function stopSpeaking() {
+  if ("speechSynthesis" in window) {
+    window.speechSynthesis.cancel();
+  }
   activeSpeechUtterance = null;
+  activeSpeechMessage = null;
+  activeSpeechMessageKey = "";
+  clearSpeechProgress();
 }
 
 function speakMessage(message) {
@@ -4244,17 +5469,31 @@ function speakMessage(message) {
     return;
   }
 
+  clearSpeechProgress();
   window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = getSpeechLanguageForMessage(message);
-  utterance.rate = 0.95;
+  utterance.rate = speechPlaybackRate;
   utterance.pitch = 1;
   activeSpeechUtterance = utterance;
+  activeSpeechMessage = message;
+  activeSpeechMessageKey = getSpeechMessageKey(message);
+  startSpeechProgress(message);
   utterance.onend = () => {
-    if (activeSpeechUtterance === utterance) activeSpeechUtterance = null;
+    if (activeSpeechUtterance === utterance) {
+      finishSpeechProgress();
+      activeSpeechUtterance = null;
+      activeSpeechMessage = null;
+      activeSpeechMessageKey = "";
+    }
   };
   utterance.onerror = () => {
-    if (activeSpeechUtterance === utterance) activeSpeechUtterance = null;
+    if (activeSpeechUtterance === utterance) {
+      activeSpeechUtterance = null;
+      activeSpeechMessage = null;
+      activeSpeechMessageKey = "";
+      clearSpeechProgress();
+    }
   };
   window.speechSynthesis.speak(utterance);
 }
@@ -4753,6 +5992,13 @@ function getMessageSignature(message) {
     translationDisabled: Boolean(message.translationDisabled),
     learningFeedback: message.learningFeedback || {},
     translationError: Boolean(message.translationError),
+    translationStatus: message.translationStatus || "",
+    deliveryStatus: message.deliveryStatus || "",
+    pendingOffline: Boolean(message.pendingOffline),
+    deliveredBy: message.deliveredBy || {},
+    readBy: message.readBy || {},
+    mentionedUids: message.mentionedUids || {},
+    mentionedNicks: message.mentionedNicks || [],
     replyTo: message.replyTo || null,
     reactions: message.reactions || {},
     hydration: message.hydration || {},
@@ -4910,7 +6156,27 @@ function updateRoomItemContent(item, room) {
 
   time.textContent = lastMessageTime ? formatTime(lastMessageTime) : "";
   item.classList.toggle("has-unread", unreadCount > 0);
+  renderRoomPinnedIndicator(item, isConversationPinned(room.id));
   renderRoomUnreadBadge(item, unreadCount);
+}
+
+function renderRoomPinnedIndicator(item, isPinned) {
+  let indicator = item.querySelector(".chat-pin-indicator");
+  const meta = item.querySelector(".chat-item-meta") || item.querySelector(".chat-item-top");
+
+  if (!isPinned) {
+    if (indicator) indicator.remove();
+    return;
+  }
+
+  if (!indicator) {
+    indicator = document.createElement("span");
+    indicator.className = "chat-pin-indicator";
+    indicator.title = "Conversa fixada";
+    indicator.setAttribute("aria-label", "Conversa fixada");
+    indicator.innerHTML = `<i class="fa-solid fa-thumbtack" aria-hidden="true"></i>`;
+    meta.appendChild(indicator);
+  }
 }
 
 function renderRoomUnreadBadge(item, count) {
@@ -5427,6 +6693,8 @@ async function clearFirebaseRoomMessages(roomId) {
     [`rooms/${roomId}/lastMessageId`]: "",
     [`rooms/${roomId}/lastMessageAuthorUid`]: "",
     [`rooms/${roomId}/lastMessageAuthorNick`]: "",
+    [`rooms/${roomId}/lastMessageMentionedUids`]: null,
+    [`rooms/${roomId}/lastMessageMentionedNicks`]: null,
     [`rooms/${roomId}/lastMessageAt`]: now,
     [`rooms/${roomId}/updatedAt`]: serverTimestamp(),
     [`rooms/${roomId}/updatedAtMillis`]: now
@@ -5503,6 +6771,7 @@ function renderRoomSettings(room = getActiveRoom()) {
   roomSettingsLanguageSelect.value = language?.code || "";
   saveRoomLanguageButton.disabled = !firebaseReady;
   updateLiveTypingButtonState();
+  updateRoomPinButtonState(room);
   // roomDeleteHint.textContent = isOwner
   //   ? "Você criou esta sala. Excluir remove a sala para todos."
   //   : "Você não criou esta sala. Você pode sair/remover esta sala da sua lista.";
@@ -6806,6 +8075,15 @@ function getPrivateRoomId(uidA, uidB) {
 }
 
 function getRoomStatus(room) {
+  const pendingOfflineCount = getOfflineQueueCountForRoom(room?.id);
+  if (pendingOfflineCount) {
+    return `Aguardando conexão · ${pendingOfflineCount} mensagem${pendingOfflineCount > 1 ? "s" : ""} pendente${pendingOfflineCount > 1 ? "s" : ""}`;
+  }
+
+  if (!isInternetAvailable() && !isAiRoom(room)) {
+    return "Offline · mensagens carregadas continuam disponíveis";
+  }
+
   if (isAiRoom(room)) {
     return "Professor de idiomas · Pollinations.ai";
   }
@@ -7561,9 +8839,10 @@ function mapRoomSnapshot(roomSnapshot) {
   if (snapshotMessages.length) {
     const currentLastId = messagesForRoom.at(-1)?.id || "";
     const snapshotLastId = snapshotMessages.at(-1)?.id || "";
+    const mergedSnapshotMessages = mergeQueuedMessagesForRoom(roomId, snapshotMessages);
 
-    if (!messagesForRoom.length || currentLastId !== snapshotLastId || snapshotMessages.length > messagesForRoom.length) {
-      messagesForRoom = snapshotMessages;
+    if (!messagesForRoom.length || currentLastId !== snapshotLastId || mergedSnapshotMessages.length > messagesForRoom.length) {
+      messagesForRoom = mergedSnapshotMessages;
       roomMessagesById.set(roomId, messagesForRoom);
     }
   }
@@ -7594,6 +8873,8 @@ function mapRoomSnapshot(roomSnapshot) {
     lastOriginalMessage: data.lastOriginalMessage || "",
     lastMessageAuthorUid: data.lastMessageAuthorUid || "",
     lastMessageAuthorNick: data.lastMessageAuthorNick || "",
+    lastMessageMentionedUids: normalizeMentionUidMap(data.lastMessageMentionedUids),
+    lastMessageMentionedNicks: normalizeMentionNickList(data.lastMessageMentionedNicks),
     lastMessageAt: getRealtimeMillis(data.lastMessageAt, data.lastMessageAtMillis || data.createdAtMillis || Date.now()),
     createdAt: getRealtimeMillis(data.createdAt, data.createdAtMillis || Date.now()),
     updatedAt: getRealtimeMillis(data.updatedAt, data.updatedAtMillis || data.createdAtMillis || Date.now()),
@@ -7653,6 +8934,14 @@ function mapMessageData(messageId, data = {}) {
     translationDisabled: Boolean(data.translationDisabled),
     learningFeedback: normalizeLearningFeedback(data.learningFeedback),
     translationError: Boolean(data.translationError),
+    translationStatus: data.translationStatus || "",
+    deliveryStatus: data.deliveryStatus || "",
+    pendingOffline: Boolean(data.pendingOffline),
+    deliveredBy: normalizeMessageReceipts(data.deliveredBy),
+    readBy: normalizeMessageReceipts(data.readBy),
+    mentionedUids: normalizeMentionUidMap(data.mentionedUids),
+    mentionedNicks: normalizeMentionNickList(data.mentionedNicks),
+    mentions: normalizeMentions(data.mentions),
     replyTo: data.replyTo || null,
     reactions: normalizeMessageReactions(data.reactions),
     hydration: normalizeMessageHydration(data.hydration),
@@ -7707,6 +8996,68 @@ function normalizeMessageReactions(reactions) {
           }
       ])
       .filter(([, reaction]) => reaction.emoji)
+  );
+}
+
+function normalizeMessageReceipts(receipts) {
+  if (!receipts || typeof receipts !== "object") return {};
+
+  return Object.fromEntries(
+    Object.entries(receipts)
+      .filter(([uid, receipt]) => uid && receipt)
+      .map(([uid, receipt]) => [
+        uid,
+        typeof receipt === "number"
+          ? { uid, atMillis: receipt }
+          : {
+            uid: receipt.uid || uid,
+            nick: receipt.nick || "",
+            atMillis: Number(receipt.atMillis || receipt.time || 0)
+          }
+      ])
+  );
+}
+
+function normalizeMentionUidMap(value) {
+  if (!value) return {};
+  if (Array.isArray(value)) {
+    return value.reduce((map, uid) => {
+      const key = String(uid || "").trim();
+      if (key) map[key] = true;
+      return map;
+    }, {});
+  }
+  if (typeof value !== "object") return parseMentionedUids(value);
+
+  return Object.entries(value).reduce((map, [uid, enabled]) => {
+    if (uid && enabled) map[uid] = true;
+    return map;
+  }, {});
+}
+
+function normalizeMentionNickList(value) {
+  if (!value) return [];
+  if (Array.isArray(value)) return unique(value.map((nick) => sanitizeText(nick, 32)).filter(Boolean));
+  if (typeof value === "object") return unique(Object.values(value).map((nick) => sanitizeText(nick, 32)).filter(Boolean));
+  return unique(String(value).split(",").map((nick) => sanitizeText(nick, 32)).filter(Boolean));
+}
+
+function normalizeMentions(value) {
+  if (!value || typeof value !== "object") return {};
+
+  return Object.fromEntries(
+    Object.entries(value)
+      .filter(([uid, mention]) => uid && mention)
+      .map(([uid, mention]) => [
+        uid,
+        typeof mention === "string"
+          ? { uid, nick: sanitizeText(mention, 32) }
+          : {
+            uid: mention.uid || uid,
+            nick: sanitizeText(mention.nick || mention.name || "", 32)
+          }
+      ])
+      .filter(([, mention]) => mention.nick)
   );
 }
 
@@ -7875,9 +9226,9 @@ function handleInviteNotifications() {
           openNotificationsModal();
         }
       );
-      showBrowserNotification(title, body, { tag: `invite:${invite.id}` });
       playNotificationSound();
     }
+    showBrowserNotification(title, body, { tag: `invite:${invite.id}` });
     seen.add(invite.id);
   });
 
@@ -7918,19 +9269,27 @@ function handleRoomMessageNotification(room, options = {}) {
   if (!wasAlreadyNotified && (!isInitialSnapshot || isRecentInitialSnapshot)) {
     const author = room.lastMessageAuthorNick || "Alguém";
     const text = truncateText(room.lastMessage || "Nova mensagem", 120);
+    const wasMentioned = isCurrentUserMentionedInRoomLastMessage(room);
+    const title = wasMentioned
+      ? `${author} mencionou você em ${getRoomDisplayName(room)}`
+      : `Nova mensagem de ${author}`;
+    const body = wasMentioned
+      ? text
+      : `${getRoomDisplayName(room)}: ${text}`;
     if (areInternalPushNotificationsEnabled()) {
       showToast(
-        `Nova mensagem de ${author}`,
-        `${getRoomDisplayName(room)}: ${text}`,
+        title,
+        body,
         "Abrir",
         () => openRoomFromNotification(room.id)
       );
-      showBrowserNotification(`Nova mensagem de ${author}`, `${getRoomDisplayName(room)}: ${text}`, {
-        tag: key,
-        roomId: room.id
-      });
-      playNotificationSound();
+      playNotificationSound(wasMentioned ? "mention" : "default");
     }
+    showBrowserNotification(title, body, {
+      tag: key,
+      roomId: room.id,
+      mentioned: wasMentioned
+    });
     markMessageNotificationShown(key);
   }
 
@@ -8011,18 +9370,24 @@ function handleForegroundFcmChatMessage(payload = {}, options = {}) {
   refreshNotificationUi();
 
   if (!options.silentSystemNotification && !wasAlreadyNotified) {
-    const title = data.title || `Nova mensagem de ${data.authorNick || "Alguem"}`;
-    const body = data.body || `${data.roomName || getRoomDisplayName(room) || "AstroChat"}: Nova mensagem`;
+    const wasMentioned = isCurrentUserMentionedInNotificationData(data);
+    const title = wasMentioned
+      ? `${data.authorNick || "Alguem"} mencionou você em ${data.roomName || getRoomDisplayName(room) || "AstroChat"}`
+      : data.title || `Nova mensagem de ${data.authorNick || "Alguem"}`;
+    const body = wasMentioned
+      ? data.body || "Toque para abrir a conversa."
+      : data.body || `${data.roomName || getRoomDisplayName(room) || "AstroChat"}: Nova mensagem`;
     if (areInternalPushNotificationsEnabled()) {
       showToast(title, body, "Abrir", () => openRoomFromNotification(roomId));
-      showBrowserNotification(title, body, {
-        tag: key,
-        roomId,
-        messageId: data.messageId || "",
-        timestamp
-      });
-      playNotificationSound();
+      playNotificationSound(wasMentioned ? "mention" : "default");
     }
+    showBrowserNotification(title, body, {
+      tag: key,
+      roomId,
+      messageId: data.messageId || "",
+      timestamp,
+      mentioned: wasMentioned
+    });
     markMessageNotificationShown(key);
     refreshNotificationUi();
     return;
@@ -8123,6 +9488,7 @@ function markRoomAsRead(room) {
   notificationState.unreadByRoom[room.id] = 0;
   saveNotificationState();
   updateBadges();
+  scheduleReceiptSyncForActiveRoom();
 }
 
 function markVisibleActiveRoomAsRead() {
@@ -8218,11 +9584,11 @@ function primeNotificationSound(context) {
   }
 }
 
-function playNotificationSound() {
+function playNotificationSound(kind = "default") {
   if (!areInternalPushNotificationsEnabled()) return;
 
   if ("vibrate" in navigator) {
-    navigator.vibrate([45, 35, 45]);
+    navigator.vibrate(kind === "mention" ? [120, 60, 120, 60, 180] : [45, 35, 45]);
   }
 
   let context;
@@ -8244,16 +9610,17 @@ function playNotificationSound() {
     const gain = context.createGain();
 
     oscillator.type = "sine";
-    oscillator.frequency.setValueAtTime(880, now);
-    oscillator.frequency.setValueAtTime(1175, now + 0.11);
+    oscillator.frequency.setValueAtTime(kind === "mention" ? 990 : 880, now);
+    oscillator.frequency.setValueAtTime(kind === "mention" ? 1320 : 1175, now + 0.11);
+    if (kind === "mention") oscillator.frequency.setValueAtTime(1568, now + 0.22);
     gain.gain.setValueAtTime(0.0001, now);
     gain.gain.exponentialRampToValueAtTime(0.13, now + 0.02);
-    gain.gain.exponentialRampToValueAtTime(0.001, now + 0.28);
+    gain.gain.exponentialRampToValueAtTime(0.001, now + (kind === "mention" ? 0.42 : 0.28));
 
     oscillator.connect(gain);
     gain.connect(context.destination);
     oscillator.start(now);
-    oscillator.stop(now + 0.3);
+    oscillator.stop(now + (kind === "mention" ? 0.44 : 0.3));
   } catch (error) {
     console.warn("Nao foi possivel tocar o som de notificacao.", error);
   }
@@ -8273,7 +9640,7 @@ async function requestBrowserNotificationPermission() {
 }
 
 function showBrowserNotification(title, body, data = {}) {
-  if (!areInternalPushNotificationsEnabled()) return;
+  if (!areSystemPushNotificationsEnabled()) return;
   if (!("Notification" in window)) return;
   if (Notification.permission !== "granted") return;
 
@@ -8283,6 +9650,8 @@ function showBrowserNotification(title, body, data = {}) {
     badge: "icons/icon-192.png",
     tag: data.tag || title,
     renotify: true,
+    requireInteraction: Boolean(data.mentioned),
+    vibrate: data.mentioned ? [120, 60, 120, 60, 180] : [45, 35, 45],
     data: {
       url: data.roomId ? getRoomNotificationUrl(data.roomId) : window.location.href,
       ...data
@@ -8411,6 +9780,7 @@ function getFcmDeviceId() {
 }
 
 function registerFcmTokenIfNotificationGranted(options = {}) {
+  if (!areSystemPushNotificationsEnabled()) return;
   if (!("Notification" in window) || Notification.permission !== "granted") return;
 
   ensureFcmTokenRegistration(options).catch((error) => {
@@ -8418,11 +9788,28 @@ function registerFcmTokenIfNotificationGranted(options = {}) {
   });
 }
 
+function refreshFcmTokenRegistrationIfNeeded(options = {}) {
+  if (!shouldRefreshFcmTokenRegistration(options)) return;
+
+  registerFcmTokenIfNotificationGranted({ force: true });
+}
+
+function shouldRefreshFcmTokenRegistration(options = {}) {
+  if (options.force) return true;
+  if (!currentFirebaseUid || !currentUser?.nick || !firebaseReady) return false;
+  if (!areSystemPushNotificationsEnabled()) return false;
+  if (!("Notification" in window) || Notification.permission !== "granted") return false;
+
+  const lastRefresh = Number(localStorage.getItem(FCM_TOKEN_REFRESHED_AT_STORAGE_KEY) || 0);
+  return !localStorage.getItem(FCM_TOKEN_STORAGE_KEY) || !lastRefresh || Date.now() - lastRefresh > FCM_TOKEN_REFRESH_INTERVAL_MS;
+}
+
 async function ensureFcmTokenRegistration(options = {}) {
   if (fcmTokenRegistrationPromise && !options.force) return fcmTokenRegistrationPromise;
 
   fcmTokenRegistrationPromise = (async () => {
     if (!currentFirebaseUid || !currentUser?.nick || !firebaseReady) return null;
+    if (!areSystemPushNotificationsEnabled()) return null;
     if (!("Notification" in window) || Notification.permission !== "granted") return null;
 
     const vapidKeyValidation = getFcmVapidKeyValidation();
@@ -8489,6 +9876,7 @@ async function saveFcmTokenForCurrentUser(token) {
   });
 
   localStorage.setItem(FCM_TOKEN_STORAGE_KEY, token);
+  localStorage.setItem(FCM_TOKEN_REFRESHED_AT_STORAGE_KEY, String(now));
 }
 
 async function unregisterFcmTokenForCurrentUser(options = {}) {
@@ -8515,6 +9903,7 @@ async function unregisterFcmTokenForCurrentUser(options = {}) {
   }
 
   localStorage.removeItem(FCM_TOKEN_STORAGE_KEY);
+  localStorage.removeItem(FCM_TOKEN_REFRESHED_AT_STORAGE_KEY);
 }
 
 async function setupFirebaseMessagingForegroundListener() {
@@ -8728,6 +10117,7 @@ async function registerServiceWorker() {
 
     const registration = await navigator.serviceWorker.register("service-worker.js", { updateViaCache: "none" });
     registration.waiting?.postMessage({ type: "SKIP_WAITING" });
+    syncSystemPushPreferenceToServiceWorker();
     await registration.update();
   } catch (error) {
     console.warn("Service worker não registrado.", error);

@@ -1,4 +1,6 @@
-const CACHE_NAME = "astrochat-cache-v85";
+const CACHE_NAME = "astrochat-cache-v91";
+const PUSH_SETTINGS_CACHE = "astrochat-push-settings-v1";
+const PUSH_SETTINGS_REQUEST = "./__astrochat-system-push-settings";
 const FIREBASE_MESSAGING_SDK_VERSION = "10.12.2";
 const FIREBASE_CONFIG = {
   apiKey: "AIzaSyC0eXt2QukMgcAJRzgflenD46JvRBfmczg",
@@ -10,6 +12,7 @@ const FIREBASE_CONFIG = {
   measurementId: "G-HTNLE1C4P4"
 };
 let firebaseMessagingReady = false;
+let systemPushNotificationsEnabled = true;
 const RECENT_NOTIFICATION_KEYS = new Map();
 const APP_FILES = [
   "./",
@@ -97,6 +100,11 @@ self.addEventListener("fetch", (event) => {
 self.addEventListener("message", (event) => {
   if (event.data?.type === "SKIP_WAITING") {
     self.skipWaiting();
+    return;
+  }
+
+  if (event.data?.type === "SET_SYSTEM_PUSH_ENABLED") {
+    event.waitUntil(setSystemPushNotificationsEnabled(event.data.enabled));
   }
 });
 
@@ -115,6 +123,36 @@ async function fetchAndRefreshCache(request) {
     await cache.put(request, response.clone());
   }
   return response;
+}
+
+async function setSystemPushNotificationsEnabled(enabled) {
+  systemPushNotificationsEnabled = Boolean(enabled);
+
+  try {
+    const cache = await caches.open(PUSH_SETTINGS_CACHE);
+    const response = new Response(
+      JSON.stringify({ systemPushNotificationsEnabled }),
+      { headers: { "Content-Type": "application/json" } }
+    );
+    await cache.put(PUSH_SETTINGS_REQUEST, response);
+  } catch (error) {
+    console.warn("Nao foi possivel salvar preferencia de push do sistema.", error);
+  }
+}
+
+async function areSystemPushNotificationsAllowed() {
+  try {
+    const cache = await caches.open(PUSH_SETTINGS_CACHE);
+    const response = await cache.match(PUSH_SETTINGS_REQUEST);
+    if (!response) return systemPushNotificationsEnabled !== false;
+
+    const settings = await response.json();
+    systemPushNotificationsEnabled = settings?.systemPushNotificationsEnabled !== false;
+  } catch (error) {
+    console.warn("Nao foi possivel ler preferencia de push do sistema.", error);
+  }
+
+  return systemPushNotificationsEnabled !== false;
 }
 
 self.addEventListener("notificationclick", (event) => {
@@ -190,7 +228,8 @@ function createNotificationFromPushPayload(payload = {}) {
       tag,
       renotify: true,
       timestamp,
-      vibrate: [120, 80, 120],
+      requireInteraction: data.mentioned === "1",
+      vibrate: data.mentioned === "1" ? [120, 60, 120, 60, 180] : [120, 80, 120],
       data: {
         url,
         roomId,
@@ -216,7 +255,11 @@ async function showAstroChatNotification(payload = {}, source = "push") {
   }
 
   markNotificationRecentlyShown(notificationKey);
-  notifyOpenClientsAboutPush(payloadData);
+  await notifyOpenClientsAboutPush(payloadData);
+
+  if (!(await areSystemPushNotificationsAllowed())) {
+    return;
+  }
 
   try {
     await self.registration.showNotification(title, options);
@@ -283,9 +326,6 @@ function initializeFirebaseMessaging() {
 
     messaging.onBackgroundMessage((payload) => {
       console.log("AstroChat FCM background payload recebido.", payload);
-      if (payload?.notification) {
-        return syncOpenClientsFromPushPayload(payload);
-      }
       return showAstroChatNotification(payload, "fcm");
     });
   } catch (error) {
@@ -298,11 +338,6 @@ function initializeFirebaseMessaging() {
 self.addEventListener("push", (event) => {
   const payload = getPayloadFromPushEvent(event);
   if (!payload || !isAstroChatFcmPayload(payload)) return;
-
-  if (payload.notification && firebaseMessagingReady) {
-    event.waitUntil(syncOpenClientsFromPushPayload(payload));
-    return;
-  }
 
   event.waitUntil(showAstroChatNotification(payload, "push"));
 });
@@ -326,4 +361,5 @@ function getPayloadFromPushEvent(event) {
   }
 }
 
+areSystemPushNotificationsAllowed();
 initializeFirebaseMessaging();
