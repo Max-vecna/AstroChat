@@ -1,4 +1,4 @@
-const CACHE_NAME = "astrochat-cache-v101";
+const CACHE_NAME = "astrochat-cache-v106";
 const PUSH_SETTINGS_CACHE = "astrochat-push-settings-v1";
 const PUSH_SETTINGS_REQUEST = "./__astrochat-system-push-settings";
 const FIREBASE_MESSAGING_SDK_VERSION = "10.12.2";
@@ -92,7 +92,10 @@ self.addEventListener("message", (event) => {
   }
 
   if (event.data?.type === "SET_SYSTEM_PUSH_ENABLED") {
-    event.waitUntil(setSystemPushNotificationsEnabled(event.data.enabled));
+    // Compatibilidade com versões antigas do app:
+    // este comando não deve mais desligar notificações do navegador.
+    // O botão "Avisos internos" controla apenas os toast-card dentro do app.
+    event.waitUntil(setSystemPushNotificationsEnabled(true));
   }
 });
 
@@ -129,18 +132,12 @@ async function setSystemPushNotificationsEnabled(enabled) {
 }
 
 async function areSystemPushNotificationsAllowed() {
-  try {
-    const cache = await caches.open(PUSH_SETTINGS_CACHE);
-    const response = await cache.match(PUSH_SETTINGS_REQUEST);
-    if (!response) return systemPushNotificationsEnabled !== false;
-
-    const settings = await response.json();
-    systemPushNotificationsEnabled = settings?.systemPushNotificationsEnabled !== false;
-  } catch (error) {
-    console.warn("Nao foi possivel ler preferencia de push do sistema.", error);
-  }
-
-  return systemPushNotificationsEnabled !== false;
+  // As notificações do navegador devem continuar funcionando mesmo quando
+  // os avisos internos/toast-card estiverem desativados no app.
+  // Mantemos esta função para compatibilidade com versões antigas, mas ela
+  // não bloqueia mais o showNotification.
+  systemPushNotificationsEnabled = true;
+  return true;
 }
 
 self.addEventListener("notificationclick", (event) => {

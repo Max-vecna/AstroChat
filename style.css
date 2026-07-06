@@ -7264,3 +7264,109 @@ body[data-chat-theme="galatico"] .message-form {
     linear-gradient(135deg, rgba(7, 10, 42, 0.96), rgba(15, 12, 61, 0.94)),
     rgba(9, 12, 48, 0.94);
 }
+
+/* AstroChat v104 - áudio abaixo do texto e ações da sala reorganizadas */
+.room-clear-section {
+  padding-top: 4px;
+  padding-bottom: 8px;
+}
+
+.room-clear-section .clear-room-action.full-width-action {
+  width: 100%;
+  min-height: 58px;
+  grid-template-columns: 34px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  column-gap: 10px;
+  row-gap: 1px;
+  align-items: center;
+  justify-items: start;
+}
+
+.room-clear-section .clear-room-action.full-width-action > i {
+  grid-row: 1 / 3;
+}
+
+.room-clear-section .clear-room-action.full-width-action span,
+.room-clear-section .clear-room-action.full-width-action small {
+  min-width: 0;
+}
+
+.room-menu-action[aria-pressed="true"] {
+  border-color: rgba(157, 255, 224, 0.32);
+}
+
+.message-audio-progress.audio-below-text,
+.bubble.audio-below-text .message-audio-progress {
+  margin-top: 8px;
+  margin-bottom: 4px;
+}
+
+
+/* AstroChat v106 - áudio abaixo do texto e toast-region controlada pelo botão */
+.message-row.is-speaking-message.audio-below-text .bubble > .message-text,
+.message-row.is-speaking-message.audio-below-text .bubble > .translated-block,
+.message-row.is-speaking-message.audio-below-text .bubble > .learning-feedback-card,
+.message-row.is-speaking-message.audio-below-text .bubble > .translation-warning,
+.message-row.is-speaking-message.audio-below-text .bubble > .hydrated-water-effect,
+.message-row.is-speaking-message .bubble.audio-below-text > .message-text,
+.message-row.is-speaking-message .bubble.audio-below-text > .translated-block,
+.message-row.is-speaking-message .bubble.audio-below-text > .learning-feedback-card,
+.message-row.is-speaking-message .bubble.audio-below-text > .translation-warning,
+.message-row.is-speaking-message .bubble.audio-below-text > .hydrated-water-effect {
+  display: revert !important;
+}
+
+.bubble.audio-below-text {
+  display: block;
+}
+
+.message-audio-progress.audio-below-text {
+  width: 100%;
+  margin: 9px 0 5px;
+}
+
+.room-quick-actions-section #roomSettingsAudioBelowTextButton {
+  grid-template-columns: 24px minmax(0, 1fr) !important;
+  grid-template-rows: auto auto !important;
+  min-height: 46px !important;
+  height: 46px !important;
+  row-gap: 1px !important;
+}
+
+.room-quick-actions-section #roomSettingsAudioBelowTextButton > i {
+  grid-row: 1 / 3 !important;
+}
+
+.room-quick-actions-section #roomSettingsAudioBelowTextButton span {
+  display: block !important;
+  font-size: 0.72rem !important;
+  line-height: 1 !important;
+}
+
+.room-quick-actions-section #roomSettingsAudioBelowTextButton small {
+  display: block !important;
+  font-size: 0.66rem !important;
+  line-height: 1 !important;
+  font-weight: 800;
+  letter-spacing: 0.01em;
+  color: var(--muted);
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.room-quick-actions-section #roomSettingsAudioBelowTextButton.is-active small {
+  color: var(--accent-strong, var(--accent-2));
+}
+
+.toast-region[hidden] {
+  display: none !important;
+}
+
+
+/* AstroChat v106 - botão Avisos internos controla totalmente a região de toast */
+body.internal-toasts-disabled .toast-region,
+.toast-region.is-disabled,
+.toast-region[hidden] {
+  display: none !important;
+}

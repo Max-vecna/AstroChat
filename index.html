@@ -131,7 +131,7 @@
       </div>
 
       <button class="login-button" type="submit">
-        <span>Entrar no AstroChat</span>
+        <span>Entrar no AstroChat v106</span>
         <i class="fa-solid fa-arrow-right-to-bracket" aria-hidden="true"></i>
       </button>
 
@@ -484,10 +484,10 @@
             <span>Desativado</span>
             <small>Digitação ao vivo</small>
           </button>
-          <button class="room-menu-action" id="roomSettingsClearChatButton" type="button">
-            <i class="fa-solid fa-broom" aria-hidden="true"></i>
-            <span>Limpar</span>
-            <small>Conversa</small>
+          <button class="room-menu-action" id="roomSettingsAudioBelowTextButton" type="button">
+            <i class="fa-solid fa-volume-high" aria-hidden="true"></i>
+            <span>Áudio desativado</span>
+            <small>Reprodução abaixo do texto</small>
           </button>
           <button class="room-menu-action" id="roomSettingsPinButton" type="button">
             <i class="fa-solid fa-thumbtack" aria-hidden="true"></i>
@@ -527,6 +527,14 @@
           <small>O criador pode remover participantes</small>
         </div>
         <div class="room-members-list" id="roomMembersList"></div>
+      </div>
+
+      <div class="room-settings-section room-clear-section" id="roomClearSettingsSection">
+        <button class="room-menu-action clear-room-action full-width-action" id="roomSettingsClearChatButton" type="button">
+          <i class="fa-solid fa-broom" aria-hidden="true"></i>
+          <span>Limpar conversa</span>
+          <small>Remove mensagens desta conversa</small>
+        </button>
       </div>
 
       <div class="room-settings-section danger-zone" id="roomDangerSettingsSection">
@@ -687,7 +695,7 @@
         <i class="fa-solid fa-toggle-on" aria-hidden="true"></i>
         <span>
           <strong>Avisos internos ativados</strong>
-          <small id="internalPushToggleStatus">Mostra pop-ups dentro do app, som e vibracao.</small>
+          <small id="internalPushToggleStatus">Ativado mostra toast-card e toast-region. Desativado remove os avisos internos. As notificações do navegador continuam separadas.</small>
         </span>
       </button>
 
@@ -707,7 +715,7 @@
       </footer>
 
       <footer class="profile-version-footer">
-        <span id="profileVersionLabel">AstroChat</span>
+        <span id="profileVersionLabel">AstroChat v106</span>
       </footer>
     </form>
   </section>
@@ -733,7 +741,7 @@
     </div>
   </section>
 
-  <section class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="false"></section>
+  <section class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="false" aria-hidden="true" hidden></section>
   <template id="roomItemTemplate">
     <button class="chat-item" type="button">
       <div class="avatar"></div>
