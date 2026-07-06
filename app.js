@@ -50,7 +50,7 @@ const DATABASE_URL = "https://astro-chat-7d044-default-rtdb.firebaseio.com";
 const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
-const CHAT_VERSION = "v99";
+const CHAT_VERSION = "v101";
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
 const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
@@ -100,6 +100,7 @@ const AI_TEACHER_NAME = "Professor IA";
 const MESSAGE_PROCESSING_TRANSLATION = "translation";
 const MESSAGE_PROCESSING_LEARNING_TEST = "learning-test";
 const PUBLIC_TRANSLATION_PENDING_TEXT = "O texto está sendo traduzido...";
+const PUBLIC_TRANSLATION_ERROR_TEXT = "Não foi possível traduzir este texto.";
 const POLLINATIONS_CHAT_ENDPOINT = "https://text.pollinations.ai/openai";
 const POLLINATIONS_TEXT_ENDPOINT = "https://text.pollinations.ai/";
 const LANGUAGE_OPTIONS = [
@@ -218,6 +219,8 @@ let activeMessagesRoomId = null;
 let activeTypingRoomId = null;
 let typingInputTimer = null;
 let typingIdleTimer = null;
+let typingStaleRenderTimer = null;
+let lastTypingStatusPublishAt = 0;
 let pendingMessagesScrollFrame = null;
 let internetOnline = navigator.onLine !== false;
 let notificationAudioContext = null;
@@ -2194,6 +2197,8 @@ function subscribeToActiveRoomTyping() {
     unsubscribeTyping = null;
     activeTypingRoomId = null;
     activeTypingUsers = [];
+    if (typingStaleRenderTimer) clearTimeout(typingStaleRenderTimer);
+    typingStaleRenderTimer = null;
     renderTypingPreviewPanel();
     return;
   }
@@ -2213,8 +2218,8 @@ function subscribeToActiveRoomTyping() {
         const data = childSnapshot.val() || {};
         const uid = childSnapshot.key;
         if (!uid || uid === currentFirebaseUid) return;
-        const updatedAtMillis = Number(data.updatedAtMillis || 0);
-        if (!updatedAtMillis || now - updatedAtMillis > 12000) return;
+        const updatedAtMillis = Number(data.updatedAtMillis || data.updatedAt || 0) || now;
+        if (now - updatedAtMillis > 12000) return;
         nextUsers.push({
           uid,
           nick: data.nick || "Usuário",
@@ -2225,6 +2230,7 @@ function subscribeToActiveRoomTyping() {
       });
       activeTypingUsers = nextUsers.sort((a, b) => b.updatedAtMillis - a.updatedAtMillis);
       renderTypingPreviewPanel();
+      scheduleTypingPreviewStaleCleanup();
     },
     (error) => {
       console.error("Erro ao escutar digitação em tempo real.", error);
@@ -2245,11 +2251,19 @@ function handleMessageInputTyping() {
   }
 
   if (typingInputTimer) clearTimeout(typingInputTimer);
-  typingInputTimer = setTimeout(() => {
-    publishTypingStatus(activeRoom, cleanText);
-  }, 180);
 
-  scheduleTypingClear(3200);
+  const now = Date.now();
+  if (!lastTypingStatusPublishAt || now - lastTypingStatusPublishAt > 1400) {
+    lastTypingStatusPublishAt = now;
+    publishTypingStatus(activeRoom, cleanText);
+  } else {
+    typingInputTimer = setTimeout(() => {
+      lastTypingStatusPublishAt = Date.now();
+      publishTypingStatus(activeRoom, cleanText);
+    }, 160);
+  }
+
+  scheduleTypingClear(3600);
 }
 
 function scheduleTypingClear(delay = 1200) {
@@ -2284,6 +2298,7 @@ async function clearCurrentTypingStatus() {
   if (typingIdleTimer) clearTimeout(typingIdleTimer);
   typingInputTimer = null;
   typingIdleTimer = null;
+  lastTypingStatusPublishAt = 0;
 
   const activeRoom = getActiveRoom();
   if (!isInternetAvailable() || !activeRoom?.id || isAiRoom(activeRoom) || !currentFirebaseUid || !firebaseReady) return;
@@ -2333,6 +2348,24 @@ function renderTypingPreviewPanel() {
   if (wasNearBottom) {
     scheduleMessagesScrollToBottom();
   }
+}
+
+function scheduleTypingPreviewStaleCleanup() {
+  if (typingStaleRenderTimer) clearTimeout(typingStaleRenderTimer);
+  typingStaleRenderTimer = null;
+
+  if (!activeTypingUsers.length) return;
+
+  const now = Date.now();
+  const nextExpiry = Math.min(...activeTypingUsers.map((user) => Number(user.updatedAtMillis || now) + 12100));
+  const delay = Math.max(600, nextExpiry - now);
+
+  typingStaleRenderTimer = window.setTimeout(() => {
+    const freshNow = Date.now();
+    activeTypingUsers = activeTypingUsers.filter((user) => freshNow - Number(user.updatedAtMillis || 0) <= 12000);
+    renderTypingPreviewPanel();
+    scheduleTypingPreviewStaleCleanup();
+  }, delay);
 }
 
 function removeLiveTypingRows() {
@@ -2437,7 +2470,7 @@ function updateLiveTypingButtonState() {
   const enabled = activeRoom && !isAiRoom(activeRoom) && isLiveTypingEnabledForRoom(activeRoom.id);
 
   if (liveTypingButton) {
-    liveTypingButton.hidden = true;
+    liveTypingButton.hidden = !activeRoom || isAiRoom(activeRoom);
     liveTypingButton.classList.toggle("is-active", Boolean(enabled));
     liveTypingButton.title = enabled
       ? "Digitação ao vivo ativada neste chat"
@@ -4301,11 +4334,17 @@ function isPendingTranslationMessage(message) {
   return message.deliveryStatus === "processing" && Boolean(message.targetLanguageCode);
 }
 
-function getPendingTranslationSourceText(roomId, message) {
-  if (!roomId || !message?.id || !isMessageMine(message) || !isPendingTranslationMessage(message)) return "";
+function getStoredTranslationSourceText(roomId, message) {
+  if (!roomId || !message?.id || !isMessageMine(message)) return "";
 
   const job = getPendingTranslationJob(roomId, message.id);
-  return cleanMessageText(job?.sourceText || message.translationSourceText || "", 2000);
+  const fallbackOriginal = isPendingTranslationMessage(message) ? message.originalText : "";
+  return cleanMessageText(job?.sourceText || message.translationSourceText || fallbackOriginal || "", 2000);
+}
+
+function getPendingTranslationSourceText(roomId, message) {
+  if (!roomId || !message?.id || !isMessageMine(message) || !isPendingTranslationMessage(message)) return "";
+  return getStoredTranslationSourceText(roomId, message);
 }
 
 function attachLocalTranslationJobToMessage(roomId, message) {
@@ -4441,12 +4480,20 @@ async function translateFirebaseMessageInBackground(room, message, language) {
     });
   } catch (error) {
     console.warn("Nao foi possivel traduzir a mensagem em segundo plano.", error);
+    const sourceText = cleanMessageText(
+      message.translationSourceText || getPendingTranslationSourceText(room.id, message) || message.originalText || "",
+      2000
+    );
+    if (sourceText) {
+      upsertPendingTranslationJob(room, message, sourceText, language);
+    }
+
     const failedMessage = {
       ...message,
-      text: cleanMessageText(message.originalText || message.text || "Tradução indisponível"),
+      text: PUBLIC_TRANSLATION_ERROR_TEXT,
       originalText: "",
       translatedText: "",
-      translationSourceText: "",
+      translationSourceText: sourceText,
       translationStatus: "error",
       translationError: true,
       deliveryStatus: "sent",
@@ -4472,7 +4519,6 @@ async function translateFirebaseMessageInBackground(room, message, language) {
           [`rooms/${room.id}/messages/${message.id}/pendingOffline`]: false,
           [`rooms/${room.id}/messages/${message.id}/processingType`]: null
         });
-        removePendingTranslationJob(room.id, message.id);
       } catch (updateError) {
         console.warn("Nao foi possivel marcar erro de traducao no Firebase.", updateError);
       }
@@ -5268,6 +5314,108 @@ function syncRemoteRoomLastMessage(roomId, message, options = {}) {
   refreshNotificationsModalIfOpen();
 }
 
+function getRoomById(roomId) {
+  if (!roomId) return null;
+  if (activeRoomId === roomId) return getActiveRoom();
+  return getVisibleRooms().find((room) => room.id === roomId) || remoteRoomMap.get(roomId) || null;
+}
+
+function createTranslationRetryButton(message, roomId = activeRoomId) {
+  if (!message?.translationError || !isMessageMine(message)) return null;
+
+  const sourceText = getStoredTranslationSourceText(roomId, message);
+  if (!sourceText || sourceText === PUBLIC_TRANSLATION_PENDING_TEXT || sourceText === PUBLIC_TRANSLATION_ERROR_TEXT) return null;
+
+  const button = document.createElement("button");
+  button.type = "button";
+  button.className = "translation-retry-button";
+  button.innerHTML = `<i class="fa-solid fa-rotate-right" aria-hidden="true"></i><span>Tentar traduzir novamente</span>`;
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    retryTranslationMessage(roomId, message.id, button);
+  });
+  return button;
+}
+
+async function retryTranslationMessage(roomId, messageId, button = null) {
+  const room = getRoomById(roomId);
+  if (!room?.id || !messageId) return;
+
+  if (!firebaseReady || !currentFirebaseUid || !isInternetAvailable()) {
+    showToast("Sem internet", "Conecte-se para tentar traduzir novamente.");
+    return;
+  }
+
+  const messagesForRoom = roomMessagesById.get(room.id) || room.messages || [];
+  const message = messagesForRoom.find((item) => item.id === messageId);
+  if (!message || !isMessageMine(message)) return;
+
+  const sourceText = getStoredTranslationSourceText(room.id, message);
+  if (!sourceText || sourceText === PUBLIC_TRANSLATION_PENDING_TEXT || sourceText === PUBLIC_TRANSLATION_ERROR_TEXT) {
+    showToast("Texto original não encontrado", "Não foi possível recuperar o texto salvo para repetir a tradução.");
+    return;
+  }
+
+  const savedJob = getPendingTranslationJob(room.id, message.id);
+  const language = getLanguageOption(message.targetLanguageCode || savedJob?.targetLanguageCode || "") || getRoomLanguage(room);
+  if (!language?.code) {
+    showToast("Idioma não definido", "Escolha um idioma para esta conversa antes de tentar novamente.");
+    return;
+  }
+
+  if (button) {
+    button.disabled = true;
+    button.classList.add("is-loading");
+  }
+
+  const retryMessage = {
+    ...message,
+    text: PUBLIC_TRANSLATION_PENDING_TEXT,
+    originalText: "",
+    translatedText: "",
+    translationSourceText: sourceText,
+    translationStatus: "pending",
+    translationError: false,
+    deliveryStatus: "processing",
+    pendingOffline: false,
+    processingType: MESSAGE_PROCESSING_TRANSLATION,
+    targetLanguageCode: language.code || "",
+    targetLanguageName: language.name || ""
+  };
+
+  upsertPendingTranslationJob(room, retryMessage, sourceText, language);
+  upsertRoomMessage(room.id, retryMessage);
+  if (activeRoomId === room.id) {
+    forceMessageRerender(room.id);
+    renderRoomMessages(getActiveRoom() || { ...room, messages: roomMessagesById.get(room.id) || [] });
+  }
+
+  try {
+    await update(ref(db), {
+      [`rooms/${room.id}/messages/${message.id}/text`]: PUBLIC_TRANSLATION_PENDING_TEXT,
+      [`rooms/${room.id}/messages/${message.id}/originalText`]: "",
+      [`rooms/${room.id}/messages/${message.id}/translatedText`]: "",
+      [`rooms/${room.id}/messages/${message.id}/translationStatus`]: "pending",
+      [`rooms/${room.id}/messages/${message.id}/translationError`]: false,
+      [`rooms/${room.id}/messages/${message.id}/deliveryStatus`]: "processing",
+      [`rooms/${room.id}/messages/${message.id}/pendingOffline`]: false,
+      [`rooms/${room.id}/messages/${message.id}/processingType`]: MESSAGE_PROCESSING_TRANSLATION,
+      [`rooms/${room.id}/messages/${message.id}/targetLanguageCode`]: language.code || "",
+      [`rooms/${room.id}/messages/${message.id}/targetLanguageName`]: language.name || ""
+    });
+
+    startTranslationResumeJob(room, retryMessage, language, sourceText);
+  } catch (error) {
+    console.warn("Nao foi possivel reiniciar a traducao.", error);
+    showToast("Não foi possível tentar novamente", "Verifique sua conexão e tente de novo.");
+    if (button) {
+      button.disabled = false;
+      button.classList.remove("is-loading");
+    }
+  }
+}
+
 function createMessageElement(message, animated = false, options = {}) {
   message = getMessageWithLiveAuthorProfile(message);
 
@@ -5287,8 +5435,9 @@ function createMessageElement(message, animated = false, options = {}) {
   row.dataset.signature = getMessageSignature(message);
   stack.className = "message-stack";
   bubble.className = `bubble${animated ? " is-new" : ""}`;
-  const localTranslationSourceText = getPendingTranslationSourceText(options.roomId || activeRoomId, message);
-  if (localTranslationSourceText && message.translationStatus === "pending" && isMine) {
+  const messageRoomId = options.roomId || activeRoomId;
+  const localTranslationSourceText = getStoredTranslationSourceText(messageRoomId, message);
+  if (localTranslationSourceText && isMine && (message.translationStatus === "pending" || message.translationError)) {
     bubble.dataset.translationSourceText = localTranslationSourceText;
     bubble.dataset.translationTargetLanguageCode = message.targetLanguageCode || "";
     bubble.dataset.translationMessageId = message.id || "";
@@ -5343,6 +5492,9 @@ function createMessageElement(message, animated = false, options = {}) {
     warning.className = "translation-warning";
     warning.textContent = "Tradução indisponível no envio";
     bubble.appendChild(warning);
+
+    const retryButton = createTranslationRetryButton(message, messageRoomId);
+    if (retryButton) bubble.appendChild(retryButton);
   } else if (message.translationStatus === "pending") {
     bubble.classList.add("is-translation-processing");
   }
