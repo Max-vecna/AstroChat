@@ -50,7 +50,7 @@ const DATABASE_URL = "https://astro-chat-7d044-default-rtdb.firebaseio.com";
 const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
-const CHAT_VERSION = "v106";
+const CHAT_VERSION = "v111";
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
 const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
@@ -62,6 +62,7 @@ const FCM_DEVICE_ID_STORAGE_KEY = "astrochat-fcm-device-id-v1";
 const FCM_TOKEN_STORAGE_KEY = "astrochat-fcm-token-v1";
 const FCM_TOKEN_REFRESHED_AT_STORAGE_KEY = "astrochat-fcm-token-refreshed-at-v1";
 const SPEECH_RATE_STORAGE_KEY = "astrochat-speech-rate-v1";
+const SPEECH_PLAYBACK_STORAGE_KEY = "astrochat-speech-playback-v1";
 const LIVE_TYPING_STORAGE_KEY = "astrochat-live-typing-v1";
 const LEARNING_TEST_STORAGE_KEY = "astrochat-learning-test-v1";
 const PROCESSED_FRIEND_REQUESTS_STORAGE_KEY = "astrochat-friend-requests-processados-v1";
@@ -101,6 +102,7 @@ const MESSAGE_PROCESSING_TRANSLATION = "translation";
 const MESSAGE_PROCESSING_LEARNING_TEST = "learning-test";
 const PUBLIC_TRANSLATION_PENDING_TEXT = "O texto está sendo traduzido...";
 const PUBLIC_TRANSLATION_ERROR_TEXT = "Não foi possível traduzir este texto.";
+const PUBLIC_LEARNING_TEST_PENDING_TEXT = "Verificando aprendizado em segundo plano...";
 const POLLINATIONS_CHAT_ENDPOINT = "https://text.pollinations.ai/openai";
 const POLLINATIONS_TEXT_ENDPOINT = "https://text.pollinations.ai/";
 const LANGUAGE_OPTIONS = [
@@ -207,6 +209,7 @@ let activeSpeechMessageKey = "";
 let activeSpeechAnimationTimer = 0;
 let activeSpeechProgressClearTimer = 0;
 let speechPlaybackRate = normalizeSpeechPlaybackRate(loadFromStorage(SPEECH_RATE_STORAGE_KEY, 1));
+let speechPlaybackByRoom = loadFromStorage(SPEECH_PLAYBACK_STORAGE_KEY, {});
 let firebaseReady = false;
 let firebaseInitPromise = null;
 let logoutInProgress = false;
@@ -246,6 +249,7 @@ const revealedOriginalMessageIds = new Set();
 const hydratingMessageIds = new Set();
 const dehydratingMessageIds = new Set();
 const hydratedTranslationCache = new Map();
+const pendingLearningAnalysisKeys = new Set();
 const remoteRoomMap = new Map();
 const roomMetadataUnsubscribers = new Map();
 const roomLastMessageUnsubscribers = new Map();
@@ -389,6 +393,9 @@ const roomMembersList = document.querySelector("#roomMembersList");
 const deleteRoomButton = document.querySelector("#deleteRoomButton");
 const roomDeleteHint = document.querySelector("#roomDeleteHint");
 const roomSettingsLiveTypingButton = document.querySelector("#roomSettingsLiveTypingButton");
+const roomSettingsLiveTypingCheckbox = document.querySelector("#roomSettingsLiveTypingCheckbox");
+const roomSettingsSpeechPlaybackButton = document.querySelector("#roomSettingsSpeechPlaybackButton");
+const roomSettingsSpeechPlaybackCheckbox = document.querySelector("#roomSettingsSpeechPlaybackCheckbox");
 const roomSettingsClearChatButton = document.querySelector("#roomSettingsClearChatButton");
 const roomSettingsPinButton = document.querySelector("#roomSettingsPinButton");
 const toastRegion = document.querySelector("#toastRegion");
@@ -407,6 +414,7 @@ if (profileVersionLabel) {
 }
 
 applyChatTheme(chatTheme);
+updateToastRegionVisibility();
 
 setupConnectivityDetection();
 setupBackgroundRuntime();
@@ -608,18 +616,38 @@ messageForm.addEventListener("submit", async (event) => {
   messageInput.value = "";
 
   if (learningTestEnabled) {
-    queueMessageForBackgroundProcessing(activeRoom, text, MESSAGE_PROCESSING_LEARNING_TEST, {
-      skipTranslation: true,
-      learningTest: true,
-      pendingOffline: !canSendOnline
-    });
-    showToast(
-      canSendOnline ? "Verificando em segundo plano" : "Aguardando conexão",
-      canSendOnline
-        ? "Você já pode enviar outra mensagem. A correção será anexada ao balão quando terminar."
-        : "Sua frase ficou salva e será verificada automaticamente quando a internet voltar."
-    );
-    flushOfflineMessageQueue();
+    if (canSendOnline) {
+      try {
+        const sentMessage = await sendFirebaseMessage(activeRoom, text, {
+          skipTranslation: true,
+          translationDisabled: true,
+          learningTest: true,
+          learningFeedbackStatus: "pending",
+          deliveryStatus: "sent",
+          processingType: MESSAGE_PROCESSING_LEARNING_TEST
+        });
+
+        startLearningFeedbackJob(activeRoom, sentMessage, text);
+        showToast("Verificando em segundo plano", "A mensagem já apareceu no chat. A análise será anexada ao balão quando terminar.");
+      } catch (error) {
+        console.error("Erro ao publicar mensagem de aprendizado.", error);
+        queueMessageForBackgroundProcessing(activeRoom, text, MESSAGE_PROCESSING_LEARNING_TEST, {
+          skipTranslation: true,
+          learningTest: true,
+          pendingOffline: !isInternetAvailable()
+        });
+        flushOfflineMessageQueue();
+        showToast("Mensagem pendente", "Não consegui publicar agora. Ela será enviada e analisada quando a conexão voltar.");
+      }
+    } else {
+      queueMessageForBackgroundProcessing(activeRoom, text, MESSAGE_PROCESSING_LEARNING_TEST, {
+        skipTranslation: true,
+        learningTest: true,
+        pendingOffline: true
+      });
+      flushOfflineMessageQueue();
+      showToast("Aguardando conexão", "Sua frase ficou salva e será enviada com análise quando a internet voltar.");
+    }
     return;
   }
 
@@ -702,7 +730,8 @@ roomSettingsModal?.addEventListener("click", (event) => {
 });
 saveRoomLanguageButton?.addEventListener("click", saveActiveRoomLanguageFromSettings);
 deleteRoomButton?.addEventListener("click", handleDeleteOrLeaveRoomFromSettings);
-roomSettingsLiveTypingButton?.addEventListener("click", toggleLiveTypingForActiveRoom);
+roomSettingsLiveTypingCheckbox?.addEventListener("change", () => toggleLiveTypingForActiveRoom());
+roomSettingsSpeechPlaybackCheckbox?.addEventListener("change", () => setSpeechPlaybackForActiveRoom(Boolean(roomSettingsSpeechPlaybackCheckbox.checked)));
 roomSettingsClearChatButton?.addEventListener("click", handleClearActiveChat);
 roomSettingsPinButton?.addEventListener("click", toggleActiveRoomPin);
 messageSearchInput?.addEventListener("input", updateMessageSearchFromControls);
@@ -1065,6 +1094,7 @@ function clearStoredAstroChatData() {
     FCM_TOKEN_STORAGE_KEY,
     FCM_TOKEN_REFRESHED_AT_STORAGE_KEY,
     SPEECH_RATE_STORAGE_KEY,
+    SPEECH_PLAYBACK_STORAGE_KEY,
     LIVE_TYPING_STORAGE_KEY,
     LEARNING_TEST_STORAGE_KEY,
     PROCESSED_FRIEND_REQUESTS_STORAGE_KEY,
@@ -1083,6 +1113,7 @@ function loadLocalSessionData() {
   systemPushNotificationsEnabled = loadFromStorage(SYSTEM_PUSH_STORAGE_KEY, true) !== false;
   syncSystemPushPreferenceToServiceWorker();
   liveTypingByRoom = loadFromStorage(LIVE_TYPING_STORAGE_KEY, {});
+  speechPlaybackByRoom = loadFromStorage(SPEECH_PLAYBACK_STORAGE_KEY, {});
   learningTestByRoom = loadFromStorage(LEARNING_TEST_STORAGE_KEY, {});
   processedFriendRequestIds = loadFromStorage(PROCESSED_FRIEND_REQUESTS_STORAGE_KEY, {});
   pinnedConversationIds = new Set(loadFromStorage(PINNED_CONVERSATIONS_STORAGE_KEY, []));
@@ -2479,17 +2510,23 @@ function updateLiveTypingButtonState() {
   }
 
   if (roomSettingsLiveTypingButton) {
-    roomSettingsLiveTypingButton.hidden = !activeRoom || isAiRoom(activeRoom);
+    const unavailable = !activeRoom || isAiRoom(activeRoom);
+    roomSettingsLiveTypingButton.hidden = unavailable;
     roomSettingsLiveTypingButton.classList.toggle("is-active", Boolean(enabled));
     roomSettingsLiveTypingButton.setAttribute("aria-pressed", String(Boolean(enabled)));
-    const span = roomSettingsLiveTypingButton.querySelector("span");
-    const small = roomSettingsLiveTypingButton.querySelector("small");
-    if (span) span.textContent = enabled ? "Ativado" : "Desativado";
-    if (small) small.textContent = "Digitação ao vivo";
+    const status = roomSettingsLiveTypingButton.querySelector(".room-menu-toggle-status") || roomSettingsLiveTypingButton.querySelector("small");
+    if (status) status.textContent = enabled ? "Ativado" : "Desativado";
     roomSettingsLiveTypingButton.title = enabled
       ? "Desativar digitação ao vivo neste chat"
       : "Ativar digitação ao vivo neste chat";
   }
+
+  if (roomSettingsLiveTypingCheckbox) {
+    roomSettingsLiveTypingCheckbox.checked = Boolean(enabled);
+    roomSettingsLiveTypingCheckbox.disabled = !activeRoom || isAiRoom(activeRoom);
+  }
+
+  updateSpeechPlaybackToggleState(activeRoom);
 
   if (roomSettingsClearChatButton) {
     roomSettingsClearChatButton.hidden = !activeRoom;
@@ -2502,6 +2539,59 @@ function updateLiveTypingButtonState() {
   }
 
   updateRoomPinButtonState(activeRoom);
+}
+
+function setSpeechPlaybackForActiveRoom(enabled) {
+  const activeRoom = getActiveRoom();
+  if (!activeRoom) return;
+
+  if (enabled) {
+    speechPlaybackByRoom[activeRoom.id] = true;
+  } else {
+    delete speechPlaybackByRoom[activeRoom.id];
+    if (activeSpeechMessageKey?.startsWith(`${activeRoom.id}:`)) stopSpeaking();
+  }
+
+  saveSpeechPlaybackSettings();
+  updateSpeechPlaybackToggleState(activeRoom);
+  forceMessageRerender(activeRoom.id);
+  renderRoomMessages(activeRoom);
+
+  showToast(
+    enabled ? "Simulador de voz ativado" : "Simulador de voz desativado",
+    enabled
+      ? "As mensagens deste chat mostram um botão de áudio abaixo do texto."
+      : "O botão de áudio saiu dos balões desta conversa."
+  );
+}
+
+function isSpeechPlaybackEnabledForRoom(roomId) {
+  return Boolean(roomId && speechPlaybackByRoom?.[roomId]);
+}
+
+function saveSpeechPlaybackSettings() {
+  localStorage.setItem(SPEECH_PLAYBACK_STORAGE_KEY, JSON.stringify(speechPlaybackByRoom || {}));
+}
+
+function updateSpeechPlaybackToggleState(activeRoom = getActiveRoom()) {
+  const enabled = Boolean(activeRoom?.id && isSpeechPlaybackEnabledForRoom(activeRoom.id));
+  const unavailable = !activeRoom;
+
+  if (roomSettingsSpeechPlaybackButton) {
+    roomSettingsSpeechPlaybackButton.hidden = unavailable;
+    roomSettingsSpeechPlaybackButton.classList.toggle("is-active", enabled);
+    roomSettingsSpeechPlaybackButton.setAttribute("aria-pressed", String(enabled));
+    const status = roomSettingsSpeechPlaybackButton.querySelector(".room-menu-toggle-status") || roomSettingsSpeechPlaybackButton.querySelector("small");
+    if (status) status.textContent = enabled ? "Áudio abaixo do texto ativado" : "Áudio abaixo do texto desativado";
+    roomSettingsSpeechPlaybackButton.title = enabled
+      ? "Remover botões de áudio dos balões deste chat"
+      : "Mostrar botões de áudio abaixo das mensagens deste chat";
+  }
+
+  if (roomSettingsSpeechPlaybackCheckbox) {
+    roomSettingsSpeechPlaybackCheckbox.checked = enabled;
+    roomSettingsSpeechPlaybackCheckbox.disabled = unavailable;
+  }
 }
 
 function isLiveTypingEnabledForRoom(roomId) {
@@ -2880,6 +2970,7 @@ function setInternalPushNotificationsEnabled(enabled) {
   internalPushNotificationsEnabled = Boolean(enabled);
   localStorage.setItem(INTERNAL_PUSH_STORAGE_KEY, JSON.stringify(internalPushNotificationsEnabled));
   updateInternalPushToggleState();
+  updateToastRegionVisibility();
 }
 
 function setSystemPushNotificationsEnabled(enabled, options = {}) {
@@ -2914,6 +3005,7 @@ function syncSystemPushPreferenceToServiceWorker() {
 }
 
 function updateInternalPushToggleState() {
+  updateToastRegionVisibility();
   if (!internalPushToggleButton || !internalPushToggleStatus) return;
 
   const enabled = areInternalPushNotificationsEnabled();
@@ -2929,6 +3021,17 @@ function updateInternalPushToggleState() {
   internalPushToggleStatus.textContent = enabled
     ? "Mostra pop-ups dentro do app, som e vibracao."
     : "Mantem apenas badges e lista de nao lidas neste aparelho.";
+}
+
+function updateToastRegionVisibility() {
+  if (!toastRegion) return;
+
+  const enabled = areInternalPushNotificationsEnabled();
+  toastRegion.hidden = !enabled;
+  toastRegion.setAttribute("aria-hidden", String(!enabled));
+  toastRegion.classList.toggle("is-disabled", !enabled);
+
+  if (!enabled) dismissToast();
 }
 
 async function saveProfileSettings(event) {
@@ -3553,6 +3656,7 @@ function renderRoomMessages(room) {
   updateMessageSearchResults();
   scheduleReceiptSyncForActiveRoom();
   schedulePendingTranslationResumeForRoom(room);
+  schedulePendingLearningAnalysisForRoom(room);
 
   const nextOrder = desiredOrder.join("|");
   if ((changedCount || previousOrder !== nextOrder) && (isFirstBatch || wasNearBottom)) {
@@ -3603,9 +3707,13 @@ async function sendFirebaseMessage(room, text, options = {}) {
   const shouldTranslateInBackground = Boolean(language?.code && !skipTranslation && !hasPresetTranslation);
   const translationStatus = options.translationStatus || (hasPresetTranslation ? "done" : shouldTranslateInBackground ? "pending" : "none");
   const translationDisabled = options.translationDisabled !== undefined ? Boolean(options.translationDisabled) : skipTranslation;
+  const processingType = getSafeMessageProcessingType(options.processingType);
+  const learningFeedbackStatus = sanitizeText(
+    options.learningFeedbackStatus || (learningFeedback ? "done" : (learningTest && processingType === MESSAGE_PROCESSING_LEARNING_TEST ? "pending" : "")),
+    24
+  );
   const displayText = publicText || cleanText;
   const deliveryStatus = sanitizeText(options.deliveryStatus || "sent", 24) || "sent";
-  const processingType = getSafeMessageProcessingType(options.processingType);
   const mentionPayload = options.mentionPayload || extractMessageMentions(cleanText, room);
   const replyPayload = options.replyPayload !== undefined ? options.replyPayload : getReplyPayloadForMessage();
   const messageId = options.messageId || push(ref(db, `rooms/${room.id}/messages`)).key;
@@ -3617,6 +3725,7 @@ async function sendFirebaseMessage(room, text, options = {}) {
     targetLanguageCode: options.targetLanguageCode || language?.code || "",
     targetLanguageName: options.targetLanguageName || language?.name || "",
     learningTest,
+    learningFeedbackStatus,
     translationDisabled,
     translationError: Boolean(options.translationError),
     translationStatus,
@@ -4122,26 +4231,165 @@ async function flushOfflineMessageQueue() {
   }
 }
 
+function getLearningAnalysisJobKey(roomId, messageId) {
+  return `${sanitizeNotificationRoomId(roomId)}:${sanitizeMessageLocalId(messageId)}`;
+}
+
+function getLearningAnalysisSourceText(message) {
+  return cleanMessageText(message?.originalText || message?.text || message?.translatedText || getMessageAudioText(message), 2000);
+}
+
+async function analyzeMessageWriting(message) {
+  const activeRoom = getActiveRoom();
+  if (!activeRoom || isAiRoom(activeRoom) || !message?.id) return;
+  if (isLearningAnalysisPending(message)) return;
+  if (!requireFirebaseConnection("analisar esta mensagem")) return;
+
+  const sourceText = getLearningAnalysisSourceText(message);
+  if (!sourceText) {
+    showToast("Sem texto", "Não encontrei texto para analisar nesse balão.");
+    return;
+  }
+
+  const pendingMessage = {
+    ...message,
+    text: message.text || sourceText,
+    learningTest: true,
+    learningFeedback: null,
+    learningFeedbackStatus: "pending",
+    translationDisabled: true,
+    deliveryStatus: "sent",
+    pendingOffline: false,
+    processingType: MESSAGE_PROCESSING_LEARNING_TEST
+  };
+
+  try {
+    await update(ref(db), {
+      [`rooms/${activeRoom.id}/messages/${message.id}/learningTest`]: true,
+      [`rooms/${activeRoom.id}/messages/${message.id}/learningFeedback`]: null,
+      [`rooms/${activeRoom.id}/messages/${message.id}/learningFeedbackStatus`]: "pending",
+      [`rooms/${activeRoom.id}/messages/${message.id}/translationDisabled`]: true,
+      [`rooms/${activeRoom.id}/messages/${message.id}/deliveryStatus`]: "sent",
+      [`rooms/${activeRoom.id}/messages/${message.id}/pendingOffline`]: false,
+      [`rooms/${activeRoom.id}/messages/${message.id}/processingType`]: MESSAGE_PROCESSING_LEARNING_TEST
+    });
+
+    updateQueuedLocalMessage(activeRoom.id, message.id, pendingMessage);
+
+    startLearningFeedbackJob(activeRoom, pendingMessage, sourceText);
+    showToast("Analisando texto", "A IA vai verificar ortografia, gramática e uso natural.");
+  } catch (error) {
+    console.error("Nao foi possivel iniciar a analise da mensagem.", error);
+    showToast("Falha ao analisar", "Verifique sua conexão e tente novamente.");
+  }
+}
+
+function startLearningFeedbackJob(room, message, sourceText = "") {
+  if (!room?.id || !message?.id) return;
+  const cleanSourceText = cleanMessageText(sourceText || getLearningAnalysisSourceText(message), 2000);
+  if (!cleanSourceText) return;
+
+  const key = getLearningAnalysisJobKey(room.id, message.id);
+  if (pendingLearningAnalysisKeys.has(key)) return;
+
+  pendingLearningAnalysisKeys.add(key);
+  analyzeFirebaseMessageLearning(room, {
+    ...message,
+    text: message.text || cleanSourceText,
+    learningTest: true,
+    learningFeedbackStatus: "pending",
+    translationDisabled: true,
+    deliveryStatus: "sent",
+    processingType: MESSAGE_PROCESSING_LEARNING_TEST
+  }, cleanSourceText).finally(() => {
+    pendingLearningAnalysisKeys.delete(key);
+  });
+}
+
+async function analyzeFirebaseMessageLearning(room, message, sourceText = "") {
+  const cleanSourceText = cleanMessageText(sourceText || getLearningAnalysisSourceText(message), 2000);
+  if (!room?.id || !message?.id || !cleanSourceText) return;
+
+  try {
+    if (!isInternetAvailable()) throw new Error("Sem internet para analisar.");
+
+    const feedbackResult = await checkLearningTestWriting(cleanSourceText, room);
+    const learningFeedback = await createLearningFeedbackFromResult(cleanSourceText, feedbackResult, room);
+    const updatedMessage = {
+      ...message,
+      text: message.text || cleanSourceText,
+      learningTest: true,
+      learningFeedback: learningFeedback || null,
+      learningFeedbackStatus: "done",
+      translationDisabled: true,
+      deliveryStatus: "sent",
+      pendingOffline: false,
+      processingType: ""
+    };
+
+    await update(ref(db), {
+      [`rooms/${room.id}/messages/${message.id}/learningTest`]: true,
+      [`rooms/${room.id}/messages/${message.id}/learningFeedback`]: learningFeedback || null,
+      [`rooms/${room.id}/messages/${message.id}/learningFeedbackStatus`]: "done",
+      [`rooms/${room.id}/messages/${message.id}/translationDisabled`]: true,
+      [`rooms/${room.id}/messages/${message.id}/deliveryStatus`]: "sent",
+      [`rooms/${room.id}/messages/${message.id}/pendingOffline`]: false,
+      [`rooms/${room.id}/messages/${message.id}/processingType`]: null
+    });
+
+    updateQueuedLocalMessage(room.id, message.id, updatedMessage);
+  } catch (error) {
+    console.warn("Nao foi possivel concluir a analise de aprendizado.", error);
+    const failedMessage = {
+      ...message,
+      learningTest: true,
+      learningFeedbackStatus: "error",
+      translationDisabled: true,
+      deliveryStatus: "sent",
+      pendingOffline: !isInternetAvailable(),
+      processingType: ""
+    };
+
+    updateQueuedLocalMessage(room.id, message.id, failedMessage);
+
+    if (firebaseReady && isInternetAvailable()) {
+      try {
+        await update(ref(db), {
+          [`rooms/${room.id}/messages/${message.id}/learningTest`]: true,
+          [`rooms/${room.id}/messages/${message.id}/learningFeedbackStatus`]: "error",
+          [`rooms/${room.id}/messages/${message.id}/translationDisabled`]: true,
+          [`rooms/${room.id}/messages/${message.id}/deliveryStatus`]: "sent",
+          [`rooms/${room.id}/messages/${message.id}/pendingOffline`]: false,
+          [`rooms/${room.id}/messages/${message.id}/processingType`]: null
+        });
+      } catch (updateError) {
+        console.warn("Nao foi possivel marcar erro de analise no Firebase.", updateError);
+      }
+    }
+  }
+}
+
 async function processQueuedMessageBeforePublishing(room, item, processingType) {
   if (!room?.id || !item?.localId) return;
 
   if (!isInternetAvailable()) throw new Error("Sem internet para concluir processamento.");
 
   if (processingType === MESSAGE_PROCESSING_LEARNING_TEST) {
-    const feedbackResult = await checkLearningTestWriting(item.text, room);
-    const learningFeedback = await createLearningFeedbackFromResult(item.text, feedbackResult, room);
-
-    await sendFirebaseMessage(room, item.text, {
+    const sentMessage = await sendFirebaseMessage(room, item.text, {
       messageId: item.localId,
       createdAtMillis: item.createdAtMillis,
       replyPayload: item.replyTo || null,
       skipTranslation: true,
       translationDisabled: true,
       learningTest: true,
-      learningFeedback,
+      learningFeedbackStatus: "pending",
+      deliveryStatus: "sent",
+      processingType: MESSAGE_PROCESSING_LEARNING_TEST,
       mentionPayload: item.mentionPayload,
       fromOfflineQueue: true
     });
+
+    startLearningFeedbackJob(room, sentMessage, item.text);
     return;
   }
 
@@ -4361,6 +4609,18 @@ function attachLocalTranslationJobToMessage(roomId, message) {
 
 function attachLocalTranslationJobsToMessages(roomId, messagesForRoom = []) {
   return messagesForRoom.map((message) => attachLocalTranslationJobToMessage(roomId, message));
+}
+
+function schedulePendingLearningAnalysisForRoom(room) {
+  if (!room?.id || isAiRoom(room)) return;
+  if (!firebaseReady || !currentFirebaseUid || !isInternetAvailable()) return;
+
+  window.setTimeout(() => {
+    const messagesForRoom = roomMessagesById.get(room.id) || room.messages || [];
+    messagesForRoom
+      .filter((message) => isMessageMine(message) && isLearningAnalysisPending(message))
+      .forEach((message) => startLearningFeedbackJob(room, message, getLearningAnalysisSourceText(message)));
+  }, 0);
 }
 
 function schedulePendingTranslationResumeForRoom(room) {
@@ -5450,6 +5710,15 @@ function createMessageElement(message, animated = false, options = {}) {
   const learningFeedback = getVisibleLearningFeedback(message);
   let translatedBlock = null;
 
+  if (message.learningTest) {
+    row.classList.add("is-learning-test-row");
+    bubble.classList.add("is-learning-test-message");
+  }
+
+  if (isLearningAnalysisPending(message)) {
+    bubble.classList.add("is-learning-analysis-pending");
+  }
+
   if (learningFeedback) {
     bubble.classList.add("has-learning-feedback");
   }
@@ -5457,15 +5726,30 @@ function createMessageElement(message, animated = false, options = {}) {
   const topBar = createMessageTopBar(message, isMine, !groupedWithPrevious);
   if (topBar) bubble.appendChild(topBar);
 
+  if (message.learningTest) {
+    bubble.appendChild(createLearningModeBadge(message));
+  }
+
   if (message.replyTo) {
     bubble.appendChild(createReplyQuoteElement(message.replyTo));
   }
 
   if (hasHydration) {
     bubble.classList.add("is-hydrated-message");
-    const gooeyEffect = createHydratedGooeyDropsEffectElement();
-    bubble.appendChild(gooeyEffect);
-    scheduleHydratedGooeyDropsPopulation(gooeyEffect);
+    const hydrationActionKey = messageRoomId && message?.id ? `${messageRoomId}:${message.id}` : "";
+    const shouldShowHydrationEffect = Boolean(hydrationActionKey && hydratingMessageIds.has(hydrationActionKey));
+
+    if (shouldShowHydrationEffect) {
+      bubble.classList.add("is-hydrating-message");
+      const gooeyEffect = createHydratedGooeyDropsEffectElement();
+      bubble.appendChild(gooeyEffect);
+      scheduleHydratedGooeyDropsPopulation(gooeyEffect);
+      window.setTimeout(() => {
+        gooeyEffect.remove();
+        bubble.classList.remove("is-hydrating-message");
+      }, HYDRATION_EFFECT_DURATION_MS + 450);
+    }
+
     translatedBlock = createHydratedMessageBlock(message, hydration);
     bubble.appendChild(translatedBlock.wrapper);
   } else if (hasTranslation) {
@@ -5482,10 +5766,19 @@ function createMessageElement(message, animated = false, options = {}) {
     bubble.appendChild(createLearningFeedbackElement(learningFeedback));
   }
 
-  if ((message.learningFeedbackStatus === "pending" || (message.processingType === MESSAGE_PROCESSING_LEARNING_TEST && message.deliveryStatus === "processing")) && !learningFeedback) {
+  if (shouldShowInlineSpeechPlaybackButton(message, messageRoomId)) {
+    bubble.appendChild(createInlineSpeechPlaybackElement(message));
+  }
+
+  if (isLearningAnalysisPending(message) && !learningFeedback) {
     const warning = document.createElement("span");
-    warning.className = "translation-warning is-pending";
-    warning.textContent = message.pendingOffline ? "Verificação aguardando internet..." : "Verificando aprendizado em segundo plano...";
+    warning.className = "translation-warning is-pending learning-analysis-warning";
+    warning.textContent = message.pendingOffline ? "Verificação aguardando internet..." : PUBLIC_LEARNING_TEST_PENDING_TEXT;
+    bubble.appendChild(warning);
+  } else if (message.learningFeedbackStatus === "error") {
+    const warning = document.createElement("span");
+    warning.className = "translation-warning learning-analysis-warning";
+    warning.textContent = "Não foi possível analisar este texto agora.";
     bubble.appendChild(warning);
   } else if (message.translationError) {
     const warning = document.createElement("span");
@@ -5557,6 +5850,8 @@ function createHydratedGooeyDropsEffectElement() {
   `;
   return effect;
 }
+
+const HYDRATION_EFFECT_DURATION_MS = 1800;
 
 const HYDRATED_GOOEY_DROP_SETTINGS = Object.freeze({
   downCount: 12,
@@ -5641,20 +5936,19 @@ function createHydratedGooeyDrop(direction, travel) {
   return drop;
 }
 
-const DEHYDRATE_EFFECT_DURATION_MS = 980;
-const DEHYDRATED_DUST_SETTINGS = Object.freeze({
-  count: 20,
-  minSize: 5,
-  maxSize: 12,
-  maxDelay: 0.28,
-  minRise: 12,
-  maxRise: 34,
-  maxDrift: 30,
-  minBlur: 4,
-  maxBlur: 11,
-  minScale: 0.12,
-  maxScale: 0.38
-});
+const DEHYDRATE_EFFECT_DURATION_MS = 2600;
+const DEHYDRATED_STEAM_SETTINGS = Object.freeze([
+  { left: 16, size: 10, duration: 2.1, delay: 0, x1: -8, x2: -28, x3: -60 },
+  { left: 28, size: 8, duration: 1.9, delay: 0.25, x1: 10, x2: -10, x3: -30 },
+  { left: 40, size: 12, duration: 2, delay: 0.5, x1: -6, x2: 16, x3: 40 },
+  { left: 52, size: 9, duration: 1.8, delay: 0.7, x1: 14, x2: 28, x3: 58 },
+  { left: 65, size: 11, duration: 2.15, delay: 0.95, x1: -10, x2: -24, x3: -55 },
+  { left: 76, size: 8, duration: 1.85, delay: 1.2, x1: 12, x2: 34, x3: 65 },
+  { left: 22, size: 7, duration: 1.75, delay: 1.45, x1: 14, x2: 40, x3: 85 },
+  { left: 46, size: 9, duration: 2.05, delay: 1.7, x1: -15, x2: -44, x3: -88 },
+  { left: 60, size: 8, duration: 1.95, delay: 1.95, x1: 8, x2: -8, x3: -28 },
+  { left: 72, size: 10, duration: 2.1, delay: 2.2, x1: -16, x2: -38, x3: -78 }
+]);
 
 function startMessageDehydrateEffect(message) {
   const bubble = getRenderedMessageBubble(message);
@@ -5668,12 +5962,13 @@ function startMessageDehydrateEffect(message) {
 
   bubble.classList.add("is-dehydrating-message");
   bubble.querySelector(".dehydrated-dust-effect")?.remove();
+  bubble.querySelector(".dehydrated-solar-effect")?.remove();
 
-  const dustEffect = createDehydratedDustEffectElement();
-  bubble.appendChild(dustEffect);
-  populateDehydratedDust(dustEffect);
+  const solarEffect = createDehydratedSolarEffectElement();
+  bubble.appendChild(solarEffect);
+  populateDehydratedSteam(solarEffect);
 
-  let cleanupTimer = window.setTimeout(cleanup, DEHYDRATE_EFFECT_DURATION_MS + 6000);
+  let cleanupTimer = window.setTimeout(cleanup, DEHYDRATE_EFFECT_DURATION_MS + 2600);
   const ready = new Promise((resolve) => window.setTimeout(resolve, DEHYDRATE_EFFECT_DURATION_MS));
 
   function cleanup() {
@@ -5681,7 +5976,7 @@ function startMessageDehydrateEffect(message) {
       window.clearTimeout(cleanupTimer);
       cleanupTimer = 0;
     }
-    dustEffect.remove();
+    solarEffect.remove();
     bubble.classList.remove("is-dehydrating-message");
   }
 
@@ -5690,7 +5985,7 @@ function startMessageDehydrateEffect(message) {
     cancel: cleanup,
     complete() {
       if (cleanupTimer) window.clearTimeout(cleanupTimer);
-      cleanupTimer = window.setTimeout(cleanup, 1200);
+      cleanupTimer = window.setTimeout(cleanup, 650);
     }
   };
 }
@@ -5702,66 +5997,40 @@ function getRenderedMessageBubble(message) {
   return messages.querySelector(`.message-row[data-message-id="${CSS.escape(messageId)}"] .bubble`);
 }
 
-function createDehydratedDustEffectElement() {
+function createDehydratedSolarEffectElement() {
   const effect = document.createElement("div");
-  const sun = document.createElement("div");
-  const heat = document.createElement("div");
-  const layer = document.createElement("div");
-
-  effect.className = "dehydrated-dust-effect";
+  effect.className = "dehydrated-solar-effect";
   effect.setAttribute("aria-hidden", "true");
-  sun.className = "dehydrated-sun";
-  heat.className = "dehydrated-heat-haze";
-  layer.className = "dehydrated-dust-layer";
-  effect.appendChild(sun);
-  effect.appendChild(heat);
-  effect.appendChild(layer);
+  effect.innerHTML = `
+    <div class="dehydrated-sun-light"></div>
+    <div class="dehydrated-sun-wrap">
+      <div class="dehydrated-sun-glow"></div>
+      <div class="dehydrated-sun-rays"></div>
+      <div class="dehydrated-sun-core"></div>
+    </div>
+    <div class="dehydrated-steam-layer"></div>
+  `;
   return effect;
 }
 
-function populateDehydratedDust(effect) {
-  const layer = effect?.querySelector(".dehydrated-dust-layer");
+function populateDehydratedSteam(effect) {
+  const layer = effect?.querySelector(".dehydrated-steam-layer");
   if (!layer) return;
 
   layer.innerHTML = "";
 
-  for (let index = 0; index < DEHYDRATED_DUST_SETTINGS.count; index += 1) {
-    layer.appendChild(createDehydratedDustGrain());
-  }
-}
-
-function createDehydratedDustGrain() {
-  const grain = document.createElement("span");
-  const size =
-    DEHYDRATED_DUST_SETTINGS.minSize +
-    Math.random() * (DEHYDRATED_DUST_SETTINGS.maxSize - DEHYDRATED_DUST_SETTINGS.minSize);
-  const left = 8 + Math.random() * 84;
-  const top = 16 + Math.random() * 68;
-  const delay = Math.random() * DEHYDRATED_DUST_SETTINGS.maxDelay;
-  const driftX = (Math.random() - 0.5) * DEHYDRATED_DUST_SETTINGS.maxDrift;
-  const rise =
-    DEHYDRATED_DUST_SETTINGS.minRise +
-    Math.random() * (DEHYDRATED_DUST_SETTINGS.maxRise - DEHYDRATED_DUST_SETTINGS.minRise);
-  const blur =
-    DEHYDRATED_DUST_SETTINGS.minBlur +
-    Math.random() * (DEHYDRATED_DUST_SETTINGS.maxBlur - DEHYDRATED_DUST_SETTINGS.minBlur);
-  const scale =
-    DEHYDRATED_DUST_SETTINGS.minScale +
-    Math.random() * (DEHYDRATED_DUST_SETTINGS.maxScale - DEHYDRATED_DUST_SETTINGS.minScale);
-
-  grain.className = "dehydrated-dust-grain dehydrated-dry-drop";
-  grain.style.setProperty("--size", `${size.toFixed(2)}px`);
-  grain.style.setProperty("--drop-height", `${(size * 1.32).toFixed(2)}px`);
-  grain.style.setProperty("--left", `${left.toFixed(2)}%`);
-  grain.style.setProperty("--top", `${top.toFixed(2)}%`);
-  grain.style.setProperty("--delay", `${delay.toFixed(3)}s`);
-  grain.style.setProperty("--drift-x", `${driftX.toFixed(2)}px`);
-  grain.style.setProperty("--drift-mid", `${(driftX * 0.45).toFixed(2)}px`);
-  grain.style.setProperty("--rise", `${rise.toFixed(2)}px`);
-  grain.style.setProperty("--rise-mid", `${(rise * 0.45).toFixed(2)}px`);
-  grain.style.setProperty("--blur-end", `${blur.toFixed(2)}px`);
-  grain.style.setProperty("--scale-end", scale.toFixed(2));
-  return grain;
+  DEHYDRATED_STEAM_SETTINGS.forEach((steamSettings) => {
+    const steam = document.createElement("span");
+    steam.className = "dehydrated-steam";
+    steam.style.setProperty("--left", `${steamSettings.left}%`);
+    steam.style.setProperty("--size", `${steamSettings.size}px`);
+    steam.style.setProperty("--duration", `${steamSettings.duration}s`);
+    steam.style.setProperty("--delay", `${steamSettings.delay}s`);
+    steam.style.setProperty("--x1", `${steamSettings.x1}px`);
+    steam.style.setProperty("--x2", `${steamSettings.x2}px`);
+    steam.style.setProperty("--x3", `${steamSettings.x3}px`);
+    layer.appendChild(steam);
+  });
 }
 
 let hydratedGooeyResizeFrame = 0;
@@ -5798,6 +6067,27 @@ function createMessageFooterTools(message, blockInfo) {
 
 function createLearningTestMessageFooterTools(message) {
   return null;
+}
+
+function isLearningAnalysisPending(message) {
+  return Boolean(
+    message?.learningFeedbackStatus === "pending" ||
+    (message?.processingType === MESSAGE_PROCESSING_LEARNING_TEST && message?.deliveryStatus === "processing")
+  );
+}
+
+function createLearningModeBadge(message) {
+  const badge = document.createElement("span");
+  const pending = isLearningAnalysisPending(message);
+  const hasFeedback = Boolean(getVisibleLearningFeedback(message));
+  const isDone = message?.learningFeedbackStatus === "done" || hasFeedback;
+
+  badge.className = "learning-mode-badge";
+  badge.innerHTML = `
+    <i class="fa-solid ${pending ? "fa-spinner fa-spin" : isDone ? "fa-circle-check" : "fa-graduation-cap"}" aria-hidden="true"></i>
+    <span>${pending ? "Teste de aprendizado" : isDone ? "Aprendizado analisado" : "Modo aprendizado"}</span>
+  `;
+  return badge;
 }
 
 function getVisibleLearningFeedback(message) {
@@ -5947,6 +6237,36 @@ function createHydratedMessageBlock(message, hydration) {
   return { wrapper, originalWrap, translationWrap };
 }
 
+function shouldShowInlineSpeechPlaybackButton(message, roomId = activeRoomId) {
+  if (!isSpeechPlaybackEnabledForRoom(roomId)) return false;
+  if (message?.translationStatus === "pending" && message?.deliveryStatus === "processing") return false;
+  return Boolean(getMessageAudioText(message));
+}
+
+function createInlineSpeechPlaybackElement(message) {
+  const wrap = document.createElement("div");
+  const button = document.createElement("button");
+  const isSpeaking = isMessageCurrentlySpeaking(message);
+
+  wrap.className = "message-inline-audio";
+  button.className = "message-inline-audio-button";
+  button.type = "button";
+  button.title = isSpeaking ? "Reiniciar áudio da mensagem" : "Reproduzir mensagem em áudio";
+  button.setAttribute("aria-label", button.title);
+  button.innerHTML = `
+    <i class="fa-solid ${isSpeaking ? "fa-rotate-right" : "fa-volume-high"}" aria-hidden="true"></i>
+    <span>${isSpeaking ? "Reiniciar voz" : "Ouvir mensagem"}</span>
+    <span class="message-audio-speed-value">${escapeHtml(formatSpeechPlaybackRate(speechPlaybackRate))}</span>
+  `;
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    speakMessage(message);
+  });
+
+  wrap.appendChild(button);
+  return wrap;
+}
+
 function createListenMessageButton(message) {
   const button = document.createElement("button");
   button.className = "listen-message-button translated-tool-button";
@@ -6012,6 +6332,29 @@ function toggleMessageExtraVisibility(message, wrap, button, updateButton) {
   }
 }
 
+function createLearningAnalysisMenuButton(message) {
+  const activeRoom = getActiveRoom();
+  if (!activeRoom || isAiRoom(activeRoom) || !message?.id) return null;
+
+  const isPending = isLearningAnalysisPending(message) || pendingLearningAnalysisKeys.has(getLearningAnalysisJobKey(activeRoom.id, message.id));
+  const hasText = Boolean(getLearningAnalysisSourceText(message));
+  const hasFeedback = Boolean(getVisibleLearningFeedback(message));
+  const label = isPending ? "Analisando..." : hasFeedback ? "Reanalisar" : "Analisar";
+  const button = createMenuButton(
+    isPending ? "fa-solid fa-spinner fa-spin" : "fa-solid fa-magnifying-glass-chart",
+    label,
+    () => analyzeMessageWriting(message)
+  );
+
+  button.disabled = isPending || !hasText;
+  button.title = isPending
+    ? "Aguarde a IA terminar a análise"
+    : hasText
+      ? "Pedir análise ortográfica para a IA"
+      : "Sem texto para analisar";
+  return button;
+}
+
 function openMessageMenu(message, row, bubble) {
   closeReactionPickers();
   closeMessageMenus();
@@ -6044,6 +6387,9 @@ function openMessageMenu(message, row, bubble) {
   });
 
   menu.append(reactionAnchor, replyAction, listenAction);
+
+  const analyzeAction = createLearningAnalysisMenuButton(message);
+  if (analyzeAction) menu.appendChild(analyzeAction);
 
   if (translationWrap) {
     const label = translationWrap.hidden ? "Ver tradução" : "Ocultar tradução";
@@ -10914,7 +11260,7 @@ function dismissToast(toast = activeToastElement) {
 }
 
 function showToast(title, message, actionLabel = "", action = null) {
-  if (!toastRegion) return;
+  if (!toastRegion || !areInternalPushNotificationsEnabled()) return;
 
   dismissToast();
 
