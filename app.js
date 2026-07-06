@@ -50,7 +50,7 @@ const DATABASE_URL = "https://astro-chat-7d044-default-rtdb.firebaseio.com";
 const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
-const CHAT_VERSION = "v92";
+const CHAT_VERSION = "v99";
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
 const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
@@ -67,7 +67,24 @@ const LEARNING_TEST_STORAGE_KEY = "astrochat-learning-test-v1";
 const PROCESSED_FRIEND_REQUESTS_STORAGE_KEY = "astrochat-friend-requests-processados-v1";
 const PINNED_CONVERSATIONS_STORAGE_KEY = "astrochat-pinned-conversations-v1";
 const OFFLINE_MESSAGE_QUEUE_STORAGE_KEY = "astrochat-offline-message-queue-v1";
+const PENDING_TRANSLATION_JOBS_STORAGE_KEY = "astrochat-pending-translation-jobs-v1";
 const REMOTE_CONVERSATION_CACHE_STORAGE_KEY = "astrochat-remote-conversation-cache-v1";
+const CHAT_THEME_STORAGE_KEY = "astrochat-chat-theme-v1";
+const DEFAULT_CHAT_THEME = "padrao";
+const GALACTIC_CHAT_THEME = "galatico";
+const CHAT_THEME_OPTIONS = [
+  { value: DEFAULT_CHAT_THEME, label: "Padrão", themeColor: "#0b8f6f" },
+  { value: GALACTIC_CHAT_THEME, label: "Galatico", themeColor: "#11135a" },
+  { value: "nebulosa", label: "Nebulosa", themeColor: "#5b2cff" },
+  { value: "aurora", label: "Aurora", themeColor: "#12c7a5" },
+  { value: "solar", label: "Solar", themeColor: "#f59e0b" },
+  { value: "oceano", label: "Oceano", themeColor: "#0ea5e9" },
+  { value: "rubi", label: "Rubi", themeColor: "#be123c" }
+];
+const CHAT_THEME_OPTION_MAP = CHAT_THEME_OPTIONS.reduce((map, option) => {
+  map[option.value] = option;
+  return map;
+}, {});
 
 const AI_ROOM_TYPE = "language-ai";
 const USER_ROOM_TYPE = "user-room";
@@ -80,6 +97,9 @@ const FCM_TOKEN_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const NOTIFICATION_SOUND_AFTER_SYSTEM_DELAY_MS = 180;
 const ROOM_LAST_MESSAGE_LISTEN_LIMIT = 1;
 const AI_TEACHER_NAME = "Professor IA";
+const MESSAGE_PROCESSING_TRANSLATION = "translation";
+const MESSAGE_PROCESSING_LEARNING_TEST = "learning-test";
+const PUBLIC_TRANSLATION_PENDING_TEXT = "O texto está sendo traduzido...";
 const POLLINATIONS_CHAT_ENDPOINT = "https://text.pollinations.ai/openai";
 const POLLINATIONS_TEXT_ENDPOINT = "https://text.pollinations.ai/";
 const LANGUAGE_OPTIONS = [
@@ -166,6 +186,8 @@ let learningTestByRoom = loadFromStorage(LEARNING_TEST_STORAGE_KEY, {});
 let processedFriendRequestIds = loadFromStorage(PROCESSED_FRIEND_REQUESTS_STORAGE_KEY, {});
 let pinnedConversationIds = new Set(loadFromStorage(PINNED_CONVERSATIONS_STORAGE_KEY, []));
 let offlineMessageQueue = normalizeOfflineMessageQueue(loadFromStorage(OFFLINE_MESSAGE_QUEUE_STORAGE_KEY, []));
+let pendingTranslationJobs = normalizePendingTranslationJobs(loadFromStorage(PENDING_TRANSLATION_JOBS_STORAGE_KEY, []));
+let chatTheme = getSafeChatTheme(loadFromStorage(CHAT_THEME_STORAGE_KEY, DEFAULT_CHAT_THEME));
 let activeTypingUsers = [];
 let replyTarget = null;
 let messageSearchState = createEmptyMessageSearchState();
@@ -233,6 +255,7 @@ const inviteSnapshotBuckets = {
   sent: []
 };
 const receiptUpdateRooms = new Set();
+const pendingTranslationResumeKeys = new Set();
 
 const splashScreen = document.querySelector("#splashScreen");
 const splashStatus = document.querySelector("#splashStatus");
@@ -293,6 +316,8 @@ const profilePreviewAvatar = document.querySelector("#profilePreviewAvatar");
 const profilePreviewNick = document.querySelector("#profilePreviewNick");
 const profilePreviewLanguage = document.querySelector("#profilePreviewLanguage");
 const profileNativeLanguageSelect = document.querySelector("#profileNativeLanguageSelect");
+const profileThemeSelect = document.querySelector("#profileThemeSelect");
+const themeColorMeta = document.querySelector('meta[name="theme-color"]');
 const profileAvatarInputs = Array.from(document.querySelectorAll('input[name="profileSpaceAvatar"]'));
 const profileAvatarSelect = document.querySelector("#profileAvatarSelect");
 const profileAvatarSelectPreview = document.querySelector("#profileAvatarSelectPreview");
@@ -377,6 +402,8 @@ const aiAssistContent = document.querySelector("#aiAssistContent");
 if (profileVersionLabel) {
   profileVersionLabel.textContent = `AstroChat ${CHAT_VERSION}`;
 }
+
+applyChatTheme(chatTheme);
 
 setupConnectivityDetection();
 setupBackgroundRuntime();
@@ -497,6 +524,7 @@ internalPushToggleButton?.addEventListener("click", toggleInternalPushNotificati
 
 profileNickInput?.addEventListener("input", updateProfileSettingsPreview);
 profileNativeLanguageSelect?.addEventListener("change", updateProfileSettingsPreview);
+profileThemeSelect?.addEventListener("change", handleProfileThemeSelectChange);
 profileAvatarInputs.forEach((input) => input.addEventListener("change", updateProfileSettingsPreview));
 profileAvatarSelect?.addEventListener("change", () => {
   updateProfileAvatarSelectPreview();
@@ -569,11 +597,69 @@ messageForm.addEventListener("submit", async (event) => {
   }
 
   const learningTestEnabled = isLearningTestEnabledForRoom(activeRoom);
+  const roomLanguage = getRoomLanguage(activeRoom);
+  const needsTranslationBeforePublishing = Boolean(roomLanguage?.code && !learningTestEnabled);
   const canSendOnline = firebaseReady && currentFirebaseUid && isInternetAvailable();
 
+  await clearCurrentTypingStatus();
+  messageInput.value = "";
+
+  if (learningTestEnabled) {
+    queueMessageForBackgroundProcessing(activeRoom, text, MESSAGE_PROCESSING_LEARNING_TEST, {
+      skipTranslation: true,
+      learningTest: true,
+      pendingOffline: !canSendOnline
+    });
+    showToast(
+      canSendOnline ? "Verificando em segundo plano" : "Aguardando conexão",
+      canSendOnline
+        ? "Você já pode enviar outra mensagem. A correção será anexada ao balão quando terminar."
+        : "Sua frase ficou salva e será verificada automaticamente quando a internet voltar."
+    );
+    flushOfflineMessageQueue();
+    return;
+  }
+
+  if (needsTranslationBeforePublishing) {
+    if (canSendOnline) {
+      sendFirebaseMessage(activeRoom, text, {
+        publicText: PUBLIC_TRANSLATION_PENDING_TEXT,
+        translationSourceText: text,
+        deferOriginalUntilTranslated: true,
+        skipTranslation: false,
+        translationStatus: "pending",
+        deliveryStatus: "processing",
+        processingType: MESSAGE_PROCESSING_TRANSLATION,
+        targetLanguageCode: roomLanguage.code || "",
+        targetLanguageName: roomLanguage.name || ""
+      }).catch((error) => {
+        console.error("Erro ao publicar mensagem para traducao.", error);
+        queueMessageForBackgroundProcessing(activeRoom, text, MESSAGE_PROCESSING_TRANSLATION, {
+          skipTranslation: false,
+          pendingOffline: !isInternetAvailable(),
+          targetLanguage: roomLanguage
+        });
+        showToast("Mensagem pendente", "Nao consegui publicar o aviso de traducao agora. Tentarei novamente quando a conexao voltar.");
+      });
+    } else {
+      queueMessageForBackgroundProcessing(activeRoom, text, MESSAGE_PROCESSING_TRANSLATION, {
+        skipTranslation: false,
+        pendingOffline: true,
+        targetLanguage: roomLanguage
+      });
+      flushOfflineMessageQueue();
+    }
+
+    showToast(
+      canSendOnline ? "Traduzindo em segundo plano" : "Aguardando conexão",
+      canSendOnline
+        ? "Todos verão o balão de tradução enquanto o texto é preparado."
+        : "A mensagem ficou salva e será publicada como tradução pendente quando a internet voltar."
+    );
+    return;
+  }
+
   if (!canSendOnline) {
-    await clearCurrentTypingStatus();
-    messageInput.value = "";
     queueOfflineMessage(activeRoom, text, {
       learningTest: false,
       skipTranslation: false
@@ -582,41 +668,11 @@ messageForm.addEventListener("submit", async (event) => {
     return;
   }
 
-  try {
-    await clearCurrentTypingStatus();
-    messageInput.value = "";
-
-    if (learningTestEnabled) {
-      setMessageSending(true, "Verificando");
-      const feedbackResult = await checkLearningTestWriting(text, activeRoom);
-      await sendFirebaseMessage(activeRoom, text, {
-        skipTranslation: true,
-        learningTest: true,
-        learningFeedback: await createLearningFeedbackFromResult(text, feedbackResult, activeRoom)
-      });
-    } else {
-      sendFirebaseMessage(activeRoom, text).catch((error) => {
-        console.error("Erro ao enviar mensagem.", error);
-        markLocalMessageSendFailure(activeRoom.id, error?.message || "Falha no envio");
-        showToast("Mensagem pendente", "Nao consegui confirmar o envio agora. Tentarei novamente quando a conexao voltar.");
-      });
-    }
-  } catch (error) {
+  sendFirebaseMessage(activeRoom, text).catch((error) => {
     console.error("Erro ao enviar mensagem.", error);
-    const queuedAfterFailure = offlineMessageQueue.some((item) => item.roomId === activeRoom.id && item.text === cleanMessageText(text));
-    if (queuedAfterFailure) {
-      showToast("Mensagem pendente", "Mensagem salva. Tentarei enviar automaticamente quando a conexão voltar.");
-      return;
-    }
-    messageInput.value = text;
-    if (learningTestEnabled) {
-      window.alert("Nao foi possivel verificar sua frase agora. Verifique sua conexao e tente novamente.");
-      return;
-    }
-    window.alert("Não foi possível enviar a mensagem. Verifique sua conexão e tente novamente.");
-  } finally {
-    setMessageSending(false);
-  }
+    markLocalMessageSendFailure(activeRoom.id, error?.message || "Falha no envio");
+    showToast("Mensagem pendente", "Nao consegui confirmar o envio agora. Tentarei novamente quando a conexao voltar.");
+  });
 });
 
 cancelReplyButton?.addEventListener("click", clearReplyTarget);
@@ -1011,6 +1067,7 @@ function clearStoredAstroChatData() {
     PROCESSED_FRIEND_REQUESTS_STORAGE_KEY,
     PINNED_CONVERSATIONS_STORAGE_KEY,
     OFFLINE_MESSAGE_QUEUE_STORAGE_KEY,
+    PENDING_TRANSLATION_JOBS_STORAGE_KEY,
     REMOTE_CONVERSATION_CACHE_STORAGE_KEY
   ].forEach((key) => localStorage.removeItem(key));
 }
@@ -1027,7 +1084,9 @@ function loadLocalSessionData() {
   processedFriendRequestIds = loadFromStorage(PROCESSED_FRIEND_REQUESTS_STORAGE_KEY, {});
   pinnedConversationIds = new Set(loadFromStorage(PINNED_CONVERSATIONS_STORAGE_KEY, []));
   offlineMessageQueue = normalizeOfflineMessageQueue(loadFromStorage(OFFLINE_MESSAGE_QUEUE_STORAGE_KEY, []));
+  pendingTranslationJobs = normalizePendingTranslationJobs(loadFromStorage(PENDING_TRANSLATION_JOBS_STORAGE_KEY, []));
   loadRemoteConversationCache();
+  restorePendingLocalMessagesAfterReload();
 }
 
 async function safeSignOutFirebase() {
@@ -1344,11 +1403,13 @@ async function runBackgroundRefresh(options = {}) {
 
     if (!currentFirebaseUid) return;
 
-    const [roomIndexSnapshot, receivedIndexSnapshot, sentIndexSnapshot] = await Promise.all([
+    await flushOfflineMessageQueue();
+
+    const [roomIndexSnapshot, receivedIndexSnapshot, sentIndexSnapshot] = await Promise.all(
       get(ref(db, `userRooms/${currentFirebaseUid}`)),
       get(ref(db, `userInvites/${currentFirebaseUid}/received`)),
       get(ref(db, `userInvites/${currentFirebaseUid}/sent`))
-    ]);
+    );
 
     const roomIds = Object.keys(roomIndexSnapshot.val() || {});
     syncRoomSubscriptions(roomIds);
@@ -2100,7 +2161,11 @@ function subscribeToActiveRoomMessages() {
         nextMessages.push(mapMessageSnapshot(childSnapshot));
       });
       nextMessages.sort(compareMessagesBySendOrder);
-      roomMessagesById.set(activeRoom.id, mergeQueuedMessagesForRoom(activeRoom.id, nextMessages));
+      const mergedMessages = attachLocalTranslationJobsToMessages(
+        activeRoom.id,
+        mergeQueuedMessagesForRoom(activeRoom.id, nextMessages)
+      );
+      roomMessagesById.set(activeRoom.id, mergedMessages);
       saveRemoteConversationCache();
 
       if (activeRoomId === activeRoom.id) {
@@ -2487,11 +2552,48 @@ function saveLearningTestSettings() {
   localStorage.setItem(LEARNING_TEST_STORAGE_KEY, JSON.stringify(learningTestByRoom || {}));
 }
 
+
+function getSafeChatTheme(value) {
+  const theme = String(value || "").trim().toLowerCase();
+  return CHAT_THEME_OPTION_MAP[theme] ? theme : DEFAULT_CHAT_THEME;
+}
+
+function getChatThemeOption(value) {
+  return CHAT_THEME_OPTION_MAP[getSafeChatTheme(value)] || CHAT_THEME_OPTION_MAP[DEFAULT_CHAT_THEME];
+}
+
+function getChatThemeLabel(value) {
+  return getChatThemeOption(value).label;
+}
+
+function saveChatTheme() {
+  localStorage.setItem(CHAT_THEME_STORAGE_KEY, JSON.stringify(chatTheme));
+}
+
+function applyChatTheme(theme = chatTheme) {
+  chatTheme = getSafeChatTheme(theme);
+  const themeOption = getChatThemeOption(chatTheme);
+  document.documentElement.dataset.chatTheme = chatTheme;
+  document.body.dataset.chatTheme = chatTheme;
+
+  if (themeColorMeta) {
+    themeColorMeta.setAttribute("content", themeOption.themeColor || "#0b8f6f");
+  }
+}
+
+function handleProfileThemeSelectChange() {
+  chatTheme = getSafeChatTheme(profileThemeSelect?.value || DEFAULT_CHAT_THEME);
+  applyChatTheme(chatTheme);
+  saveChatTheme();
+  updateProfileSettingsPreview();
+}
+
 function openProfileSettingsModal() {
   if (!profileSettingsModal || !currentUser?.nick) return;
 
   profileNickInput.value = currentUser.nick || "";
   if (profileNativeLanguageSelect) profileNativeLanguageSelect.value = getCurrentNativeLanguage().code;
+  if (profileThemeSelect) profileThemeSelect.value = getSafeChatTheme(chatTheme);
   selectProfileSpaceAvatar(currentUser.avatarIcon || DEFAULT_SPACE_AVATAR_ICON);
   updateProfileSettingsPreview();
   updateProfileNotificationsButtonState();
@@ -2803,6 +2905,7 @@ async function saveProfileSettings(event) {
   const nextNick = sanitizeText(profileNickInput.value, 24);
   const nextAvatarIcon = getSelectedProfileSpaceAvatarIcon();
   const nextNativeLanguage = getSelectedNativeLanguage(profileNativeLanguageSelect?.value || getCurrentNativeLanguage().code);
+  const nextTheme = getSafeChatTheme(profileThemeSelect?.value || chatTheme);
 
   if (!nextNick) {
     return;
@@ -2839,6 +2942,10 @@ async function saveProfileSettings(event) {
     nativeLanguageLabel: nextNativeLanguage.label,
     updatedAt: Date.now()
   };
+
+  chatTheme = nextTheme;
+  applyChatTheme(chatTheme);
+  saveChatTheme();
 
   saveUser(currentUser);
   updateUserHeader();
@@ -2898,7 +3005,7 @@ function updateProfileSettingsPreview() {
 
   const nativeLanguage = getSelectedNativeLanguage(profileNativeLanguageSelect?.value || getCurrentNativeLanguage().code);
   profilePreviewNick.textContent = nick;
-  if (profilePreviewLanguage) profilePreviewLanguage.textContent = `Idioma nativo: ${nativeLanguage.label}`;
+  if (profilePreviewLanguage) profilePreviewLanguage.textContent = `Idioma nativo: ${nativeLanguage.label} • Tema: ${getChatThemeLabel(profileThemeSelect?.value || chatTheme)}`;
   profilePreviewAvatar.innerHTML = `<i class="${escapeHtml(avatarIcon)}" aria-hidden="true"></i>`;
   profilePreviewAvatar.style.background = getGradientByText(nick);
 }
@@ -3341,7 +3448,7 @@ async function closeMobileConversationToMenu() {
 function renderRoomMessages(room) {
   if (!room) return;
 
-  const roomMessages = room.messages || [];
+  const roomMessages = (room.messages || []).slice().sort(compareMessagesBySendOrder);
   let renderedIds = renderedMessageIdsByRoom.get(room.id);
 
   if (!renderedIds) {
@@ -3349,15 +3456,12 @@ function renderRoomMessages(room) {
     renderedMessageIdsByRoom.set(room.id, renderedIds);
   }
 
-  if (roomMessages.length < renderedIds.size) {
-    messages.innerHTML = "";
-    renderedIds.clear();
-  }
+  removeLiveTypingRows();
 
   if (!roomMessages.length) {
-    if (!renderedIds.size && !messages.querySelector(".empty-state")) {
-      renderEmptyConversation();
-    }
+    messages.innerHTML = "";
+    renderedIds.clear();
+    renderEmptyConversation();
     renderTypingPreviewPanel();
     updateMessageSearchResults();
     scheduleReceiptSyncForActiveRoom();
@@ -3368,45 +3472,57 @@ function renderRoomMessages(room) {
   if (emptyState) emptyState.remove();
 
   const wasNearBottom = isMessagesNearBottom();
+  const previousOrder = Array.from(messages.querySelectorAll(".message-row[data-message-id]"))
+    .map((row) => row.dataset.messageId || "")
+    .join("|");
+  const desiredIds = new Set();
+  const desiredOrder = [];
+
+  roomMessages.forEach((message) => {
+    message.id = message.id || createId("msg");
+    desiredIds.add(message.id);
+    desiredOrder.push(message.id);
+  });
+
+  Array.from(messages.querySelectorAll(".message-row[data-message-id]")).forEach((row) => {
+    const messageId = row.dataset.messageId || "";
+    if (!desiredIds.has(messageId)) {
+      row.remove();
+      renderedIds.delete(messageId);
+    }
+  });
+
   const isFirstBatch = renderedIds.size === 0;
   const fragment = document.createDocumentFragment();
-  let appended = 0;
-
-  removeLiveTypingRows();
+  let changedCount = 0;
 
   roomMessages.forEach((message, index) => {
-    const messageId = message.id || createId("msg");
-    message.id = messageId;
+    const messageId = message.id;
     const previousMessage = roomMessages[index - 1] || null;
     const groupedWithPrevious = shouldGroupMessageWithPrevious(previousMessage, message);
     const signature = `${getMessageSignature(message)}|group:${groupedWithPrevious ? "1" : "0"}`;
+    let element = messages.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
 
-    if (renderedIds.has(messageId)) {
-      const currentElement = messages.querySelector(`[data-message-id="${CSS.escape(messageId)}"]`);
-      if (currentElement && currentElement.dataset.signature !== signature) {
-        const replacement = createMessageElement(message, false, { groupedWithPrevious });
-        replacement.dataset.signature = signature;
-        currentElement.replaceWith(replacement);
-      }
-      return;
+    if (!element || element.dataset.signature !== signature) {
+      if (element) element.remove();
+      element = createMessageElement(message, !renderedIds.has(messageId), { groupedWithPrevious, roomId: room.id });
+      element.dataset.signature = signature;
+      changedCount += 1;
     }
 
-    const element = createMessageElement(message, !isFirstBatch, { groupedWithPrevious });
-    element.dataset.signature = signature;
     fragment.appendChild(element);
     renderedIds.add(messageId);
-    appended += 1;
   });
 
-  if (appended) {
-    messages.appendChild(fragment);
-  }
+  messages.appendChild(fragment);
 
   renderTypingPreviewPanel();
   updateMessageSearchResults();
   scheduleReceiptSyncForActiveRoom();
+  schedulePendingTranslationResumeForRoom(room);
 
-  if (appended && (isFirstBatch || wasNearBottom)) {
+  const nextOrder = desiredOrder.join("|");
+  if ((changedCount || previousOrder !== nextOrder) && (isFirstBatch || wasNearBottom)) {
     scheduleMessagesScrollToBottom();
   }
 }
@@ -3441,28 +3557,41 @@ async function sendFirebaseMessage(room, text, options = {}) {
   const now = Date.now();
   const createdAtMillis = Number(options.createdAtMillis || 0) || now;
   const cleanText = cleanMessageText(text);
+  const publicText = cleanMessageText(options.publicText || "");
+  const translationSourceText = cleanMessageText(options.translationSourceText || cleanText);
   const language = getRoomLanguage(room);
   const skipTranslation = Boolean(options.skipTranslation);
   const learningTest = Boolean(options.learningTest);
   const learningFeedback = normalizeLearningFeedback(options.learningFeedback);
-  const shouldTranslateInBackground = Boolean(language?.code && !skipTranslation);
-  const translationStatus = shouldTranslateInBackground ? "pending" : "none";
-  const displayText = cleanText;
+  const shouldDeferOriginalText = Boolean(options.deferOriginalUntilTranslated);
+  const presetOriginalText = shouldDeferOriginalText ? "" : cleanMessageText(options.originalText || "");
+  const presetTranslatedText = cleanMessageText(options.translatedText || "");
+  const hasPresetTranslation = Boolean(presetOriginalText && presetTranslatedText && presetOriginalText !== presetTranslatedText);
+  const shouldTranslateInBackground = Boolean(language?.code && !skipTranslation && !hasPresetTranslation);
+  const translationStatus = options.translationStatus || (hasPresetTranslation ? "done" : shouldTranslateInBackground ? "pending" : "none");
+  const translationDisabled = options.translationDisabled !== undefined ? Boolean(options.translationDisabled) : skipTranslation;
+  const displayText = publicText || cleanText;
+  const deliveryStatus = sanitizeText(options.deliveryStatus || "sent", 24) || "sent";
+  const processingType = getSafeMessageProcessingType(options.processingType);
   const mentionPayload = options.mentionPayload || extractMessageMentions(cleanText, room);
   const replyPayload = options.replyPayload !== undefined ? options.replyPayload : getReplyPayloadForMessage();
   const messageId = options.messageId || push(ref(db, `rooms/${room.id}/messages`)).key;
   const message = {
     id: messageId,
     text: displayText,
-    originalText: "",
-    translatedText: "",
-    targetLanguageCode: language?.code || "",
-    targetLanguageName: language?.name || "",
+    originalText: presetOriginalText,
+    translatedText: presetTranslatedText,
+    targetLanguageCode: options.targetLanguageCode || language?.code || "",
+    targetLanguageName: options.targetLanguageName || language?.name || "",
     learningTest,
-    translationDisabled: skipTranslation,
-    translationError: false,
+    translationDisabled,
+    translationError: Boolean(options.translationError),
     translationStatus,
-    deliveryStatus: "sent",
+    deliveryStatus,
+    pendingOffline: false,
+    localPending: false,
+    localOnly: false,
+    processingType,
     mentionedUids: mentionPayload.mentionedUids,
     mentionedNicks: mentionPayload.mentionedNicks,
     mentions: mentionPayload.mentions,
@@ -3485,11 +3614,19 @@ async function sendFirebaseMessage(room, text, options = {}) {
 
   const localMessage = {
     ...message,
-    deliveryStatus: options.fromOfflineQueue ? "sending" : "sending"
+    deliveryStatus: deliveryStatus === "processing" ? "processing" : "sending",
+    pendingOffline: false,
+    localPending: true,
+    localOnly: true
   };
+
+  if (shouldTranslateInBackground) {
+    localMessage.translationSourceText = translationSourceText;
+    upsertPendingTranslationJob(room, localMessage, translationSourceText, language);
+  }
   syncLocalSentFirebaseMessage(room, localMessage, {
     displayText,
-    originalText: "",
+    originalText: presetOriginalText,
     sentAt: createdAtMillis
   });
   clearReplyTarget();
@@ -3499,7 +3636,7 @@ async function sendFirebaseMessage(room, text, options = {}) {
     [`rooms/${room.id}/messages/${messageId}`]: message,
     [`rooms/${room.id}/lastMessage`]: displayText,
     [`rooms/${room.id}/lastMessageId`]: messageId,
-    [`rooms/${room.id}/lastOriginalMessage`]: "",
+    [`rooms/${room.id}/lastOriginalMessage`]: presetOriginalText,
     [`rooms/${room.id}/lastMessageAuthorUid`]: currentFirebaseUid,
     [`rooms/${room.id}/lastMessageAuthorNick`]: message.authorNick,
     [`rooms/${room.id}/lastMessageMentionedUids`]: mentionPayload.mentionedUids,
@@ -3525,16 +3662,17 @@ async function sendFirebaseMessage(room, text, options = {}) {
 
   syncLocalSentFirebaseMessage(room, message, {
     displayText,
-    originalText: "",
+    originalText: presetOriginalText,
     sentAt: createdAtMillis
   });
 
   if (shouldTranslateInBackground) {
-    translateFirebaseMessageInBackground(room, {
+    startTranslationResumeJob(room, {
       ...message,
-      text: cleanText,
-      originalText: cleanText
-    }, language);
+      text: translationSourceText,
+      originalText: translationSourceText,
+      translationSourceText
+    }, language, translationSourceText);
   }
 
   return message;
@@ -3584,13 +3722,28 @@ function upsertRoomMessage(roomId, message) {
 
 function mergeQueuedMessagesForRoom(roomId, remoteMessages = []) {
   const queuedIds = new Set(offlineMessageQueue.filter((item) => item.roomId === roomId).map((item) => item.localId));
-  if (!queuedIds.size) return remoteMessages;
-
   const remoteIds = new Set(remoteMessages.map((message) => message.id));
-  const queuedMessages = (roomMessagesById.get(roomId) || [])
-    .filter((message) => queuedIds.has(message.id) && !remoteIds.has(message.id));
+  const localPendingMessages = (roomMessagesById.get(roomId) || [])
+    .filter((message) => !remoteIds.has(message.id) && shouldKeepLocalPendingMessage(roomId, message, queuedIds));
+  const mergedMessages = localPendingMessages.length
+    ? [...remoteMessages, ...localPendingMessages].sort(compareMessagesBySendOrder)
+    : remoteMessages;
 
-  return [...remoteMessages, ...queuedMessages].sort(compareMessagesBySendOrder);
+  return attachLocalTranslationJobsToMessages(roomId, mergedMessages);
+}
+
+function shouldKeepLocalPendingMessage(roomId, message, queuedIds = null) {
+  if (!roomId || !message?.id) return false;
+  const queueIds = queuedIds || new Set(offlineMessageQueue.filter((item) => item.roomId === roomId).map((item) => item.localId));
+  if (queueIds.has(message.id)) return true;
+  if (!isMessageMine(message)) return false;
+  if (message.localPending || message.localOnly || message.pendingOffline) return true;
+
+  const status = String(message.deliveryStatus || "");
+  if (["queued", "sending", "processing", "failed"].includes(status)) return true;
+  if (getSafeMessageProcessingType(message.processingType)) return true;
+
+  return false;
 }
 
 function isConversationPinned(roomId) {
@@ -3636,6 +3789,86 @@ function updateRoomPinButtonState(room = getActiveRoom()) {
   roomSettingsPinButton.title = pinned ? "Desafixar conversa" : "Fixar conversa no topo";
 }
 
+
+function getSafeMessageProcessingType(value) {
+  const type = String(value || "").trim();
+  if (type === MESSAGE_PROCESSING_TRANSLATION || type === MESSAGE_PROCESSING_LEARNING_TEST) return type;
+  return "";
+}
+
+function getQueuedMessageProcessingType(item, room) {
+  const explicitType = getSafeMessageProcessingType(item?.processingType);
+  if (explicitType) return explicitType;
+  if (item?.learningTest && !item?.learningFeedback) return MESSAGE_PROCESSING_LEARNING_TEST;
+  if (!item?.skipTranslation && getQueuedTargetLanguage(item, room)?.code) return MESSAGE_PROCESSING_TRANSLATION;
+  return "";
+}
+
+function getQueuedTargetLanguage(item, room) {
+  const queuedCode = sanitizeText(item?.targetLanguageCode || "", 16);
+  const roomLanguage = getRoomLanguage(room);
+  if (queuedCode) return getLanguageOption(queuedCode) || roomLanguage;
+  return roomLanguage;
+}
+
+function queueMessageForBackgroundProcessing(room, text, processingType, options = {}) {
+  if (!room?.id || isAiRoom(room)) return null;
+
+  const safeProcessingType = getSafeMessageProcessingType(processingType);
+  const cleanText = cleanMessageText(text);
+  if (!safeProcessingType || !cleanText) return null;
+
+  const createdAtMillis = Number(options.createdAtMillis || 0) || Date.now();
+  const localId = sanitizeMessageLocalId(options.messageId || options.localId || createId("queued-msg"));
+  const targetLanguage = options.targetLanguage || getRoomLanguage(room);
+  const mentionPayload = options.mentionPayload || extractMessageMentions(cleanText, room);
+  const replyPayload = options.replyPayload !== undefined ? options.replyPayload : getReplyPayloadForMessage();
+  const isLearningProcessing = safeProcessingType === MESSAGE_PROCESSING_LEARNING_TEST;
+  const isTranslationProcessing = safeProcessingType === MESSAGE_PROCESSING_TRANSLATION;
+  const message = {
+    id: localId,
+    text: isTranslationProcessing ? PUBLIC_TRANSLATION_PENDING_TEXT : cleanText,
+    originalText: isTranslationProcessing ? cleanText : "",
+    translatedText: "",
+    targetLanguageCode: targetLanguage?.code || "",
+    targetLanguageName: targetLanguage?.name || "",
+    learningTest: isLearningProcessing || Boolean(options.learningTest),
+    learningFeedbackStatus: isLearningProcessing ? "pending" : "",
+    translationDisabled: isLearningProcessing || Boolean(options.skipTranslation),
+    translationStatus: safeProcessingType === MESSAGE_PROCESSING_TRANSLATION ? "pending" : "none",
+    translationError: false,
+    deliveryStatus: "processing",
+    pendingOffline: Boolean(options.pendingOffline),
+    localPending: true,
+    localOnly: true,
+    processingType: safeProcessingType,
+    mentionedUids: mentionPayload.mentionedUids,
+    mentionedNicks: mentionPayload.mentionedNicks,
+    mentions: mentionPayload.mentions,
+    replyTo: replyPayload,
+    authorUid: currentFirebaseUid || getCachedCurrentUserUidForRoom(room) || "",
+    authorNick: currentUser?.nick || "Você",
+    authorAvatar: currentUser?.avatar || getInitials(currentUser?.nick || "Você"),
+    authorAvatarIcon: getSafeSpaceAvatarIcon(currentUser?.avatarIcon),
+    from: "me",
+    time: createdAtMillis,
+    createdAtMillis
+  };
+
+  queueOfflineMessageFromMessage(room, message, {
+    replyPayload,
+    skipTranslation: Boolean(options.skipTranslation),
+    learningTest: message.learningTest,
+    processingType: safeProcessingType,
+    deliveryStatus: "processing",
+    pendingOffline: Boolean(options.pendingOffline),
+    mentionPayload,
+    targetLanguage
+  });
+  clearReplyTarget();
+  return message;
+}
+
 function normalizeOfflineMessageQueue(value) {
   if (!Array.isArray(value)) return [];
 
@@ -3650,6 +3883,10 @@ function normalizeOfflineMessageQueue(value) {
       skipTranslation: Boolean(item.skipTranslation),
       learningTest: Boolean(item.learningTest),
       learningFeedback: normalizeLearningFeedback(item.learningFeedback),
+      processingType: getSafeMessageProcessingType(item.processingType),
+      targetLanguageCode: sanitizeText(item.targetLanguageCode || "", 16),
+      targetLanguageName: sanitizeText(item.targetLanguageName || "", 48),
+      targetLanguageLabel: sanitizeText(item.targetLanguageLabel || "", 48),
       mentionPayload: {
         mentionedUids: normalizeMentionUidMap(item.mentionPayload?.mentionedUids || item.mentionedUids),
         mentionedNicks: normalizeMentionNickList(item.mentionPayload?.mentionedNicks || item.mentionedNicks),
@@ -3685,20 +3922,25 @@ function queueOfflineMessage(room, text, options = {}) {
 
   const createdAtMillis = Number(options.createdAtMillis || 0) || Date.now();
   const localId = sanitizeMessageLocalId(options.messageId || options.localId || createId("offline-msg"));
+  const processingType = getSafeMessageProcessingType(options.processingType);
+  const isTranslationProcessing = processingType === MESSAGE_PROCESSING_TRANSLATION;
   const mentionPayload = options.mentionPayload || extractMessageMentions(cleanText, room);
   const replyPayload = options.replyPayload !== undefined ? options.replyPayload : getReplyPayloadForMessage();
   const message = {
     id: localId,
-    text: cleanText,
-    originalText: "",
+    text: isTranslationProcessing ? PUBLIC_TRANSLATION_PENDING_TEXT : cleanText,
+    originalText: isTranslationProcessing ? cleanText : "",
     translatedText: "",
     targetLanguageCode: getRoomLanguage(room)?.code || "",
     targetLanguageName: getRoomLanguage(room)?.name || "",
     learningTest: Boolean(options.learningTest),
     translationDisabled: Boolean(options.skipTranslation),
-    translationStatus: getRoomLanguage(room)?.code && !options.skipTranslation ? "pending" : "none",
-    deliveryStatus: "queued",
-    pendingOffline: true,
+    translationStatus: processingType === MESSAGE_PROCESSING_TRANSLATION || (getRoomLanguage(room)?.code && !options.skipTranslation) ? "pending" : "none",
+    deliveryStatus: processingType ? "processing" : "queued",
+    pendingOffline: options.pendingOffline !== undefined ? Boolean(options.pendingOffline) : true,
+    localPending: true,
+    localOnly: true,
+    processingType,
     mentionedUids: mentionPayload.mentionedUids,
     mentionedNicks: mentionPayload.mentionedNicks,
     mentions: mentionPayload.mentions,
@@ -3717,6 +3959,10 @@ function queueOfflineMessage(room, text, options = {}) {
     skipTranslation: Boolean(options.skipTranslation),
     learningTest: Boolean(options.learningTest),
     learningFeedback: normalizeLearningFeedback(options.learningFeedback),
+    processingType,
+    deliveryStatus: processingType ? "processing" : "queued",
+    pendingOffline: options.pendingOffline !== undefined ? Boolean(options.pendingOffline) : true,
+    targetLanguage: getRoomLanguage(room),
     mentionPayload
   });
   clearReplyTarget();
@@ -3726,10 +3972,14 @@ function queueOfflineMessage(room, text, options = {}) {
 function queueOfflineMessageFromMessage(room, message, options = {}) {
   if (!room?.id || !message?.id) return;
 
+  const processingType = getSafeMessageProcessingType(options.processingType || message.processingType);
   const queuedMessage = {
     ...message,
-    deliveryStatus: "queued",
-    pendingOffline: true,
+    deliveryStatus: options.deliveryStatus || (processingType ? "processing" : "queued"),
+    pendingOffline: options.pendingOffline !== undefined ? Boolean(options.pendingOffline) : true,
+    localPending: true,
+    localOnly: true,
+    processingType,
     from: "me"
   };
 
@@ -3739,27 +3989,38 @@ function queueOfflineMessageFromMessage(room, message, options = {}) {
     sentAt: Number(queuedMessage.createdAtMillis || queuedMessage.time || Date.now())
   });
 
-  const queueItem = {
-    localId: sanitizeMessageLocalId(queuedMessage.id),
-    roomId: room.id,
-    text: cleanMessageText(queuedMessage.originalText || queuedMessage.text || ""),
-    createdAtMillis: Number(queuedMessage.createdAtMillis || queuedMessage.time || Date.now()),
-    replyTo: options.replyPayload || queuedMessage.replyTo || null,
-    skipTranslation: Boolean(options.skipTranslation || queuedMessage.translationDisabled),
-    learningTest: Boolean(options.learningTest || queuedMessage.learningTest),
-    learningFeedback: normalizeLearningFeedback(options.learningFeedback || queuedMessage.learningFeedback),
-    mentionPayload: options.mentionPayload || {
-      mentionedUids: normalizeMentionUidMap(queuedMessage.mentionedUids),
-      mentionedNicks: normalizeMentionNickList(queuedMessage.mentionedNicks),
-      mentions: normalizeMentions(queuedMessage.mentions)
-    }
-  };
+  const queueItem = createOfflineQueueItemFromMessage(room, queuedMessage, options);
 
   offlineMessageQueue = [
     ...offlineMessageQueue.filter((item) => item.localId !== queueItem.localId),
     queueItem
   ];
   saveOfflineMessageQueue();
+}
+
+function createOfflineQueueItemFromMessage(room, message, options = {}) {
+  const processingType = getSafeMessageProcessingType(options.processingType || message.processingType);
+  const targetLanguage = options.targetLanguage || getRoomLanguage(room);
+
+  return {
+    localId: sanitizeMessageLocalId(message.id),
+    roomId: room.id,
+    text: cleanMessageText(message.originalText || message.text || ""),
+    createdAtMillis: Number(message.createdAtMillis || message.time || Date.now()),
+    replyTo: options.replyPayload !== undefined ? options.replyPayload : message.replyTo || null,
+    skipTranslation: Boolean(options.skipTranslation || message.translationDisabled),
+    learningTest: Boolean(options.learningTest || message.learningTest),
+    learningFeedback: normalizeLearningFeedback(options.learningFeedback || message.learningFeedback),
+    processingType,
+    targetLanguageCode: targetLanguage?.code || message.targetLanguageCode || "",
+    targetLanguageName: targetLanguage?.name || message.targetLanguageName || "",
+    targetLanguageLabel: targetLanguage?.label || message.targetLanguageLabel || "",
+    mentionPayload: options.mentionPayload || {
+      mentionedUids: normalizeMentionUidMap(message.mentionedUids),
+      mentionedNicks: normalizeMentionNickList(message.mentionedNicks),
+      mentions: normalizeMentions(message.mentions)
+    }
+  };
 }
 
 async function flushOfflineMessageQueue() {
@@ -3776,30 +4037,48 @@ async function flushOfflineMessageQueue() {
       const room = getVisibleRooms().find((candidate) => candidate.id === item.roomId) || remoteRoomMap.get(item.roomId);
       if (!room) continue;
 
+      const processingType = getQueuedMessageProcessingType(item, room);
+      const isProcessingBeforePublish = Boolean(processingType);
+
       updateQueuedLocalMessage(item.roomId, item.localId, {
-        deliveryStatus: "sending",
-        pendingOffline: false
+        deliveryStatus: isProcessingBeforePublish ? "processing" : "sending",
+        pendingOffline: false,
+        localPending: true,
+        localOnly: true,
+        processingType,
+        learningFeedbackStatus: processingType === MESSAGE_PROCESSING_LEARNING_TEST ? "pending" : "",
+        translationStatus: processingType === MESSAGE_PROCESSING_TRANSLATION ? "pending" : undefined
       });
 
       try {
-        await sendFirebaseMessage(room, item.text, {
-          messageId: item.localId,
-          createdAtMillis: item.createdAtMillis,
-          replyPayload: item.replyTo || null,
-          skipTranslation: item.skipTranslation,
-          learningTest: item.learningTest,
-          learningFeedback: item.learningFeedback,
-          mentionPayload: item.mentionPayload,
-          fromOfflineQueue: true
-        });
+        if (isProcessingBeforePublish) {
+          await processQueuedMessageBeforePublishing(room, item, processingType);
+        } else {
+          await sendFirebaseMessage(room, item.text, {
+            messageId: item.localId,
+            createdAtMillis: item.createdAtMillis,
+            replyPayload: item.replyTo || null,
+            skipTranslation: Boolean(item.skipTranslation),
+            translationDisabled: Boolean(item.learningTest),
+            learningTest: item.learningTest,
+            learningFeedback: item.learningFeedback,
+            mentionPayload: item.mentionPayload,
+            fromOfflineQueue: true
+          });
+        }
 
         offlineMessageQueue = offlineMessageQueue.filter((queued) => queued.localId !== item.localId);
         localStorage.setItem(OFFLINE_MESSAGE_QUEUE_STORAGE_KEY, JSON.stringify(offlineMessageQueue));
       } catch (error) {
-        console.warn("Mensagem offline ainda nao foi enviada.", item.localId, error);
+        console.warn("Mensagem pendente ainda nao foi concluida.", item.localId, error);
         updateQueuedLocalMessage(item.roomId, item.localId, {
-          deliveryStatus: "queued",
-          pendingOffline: true
+          deliveryStatus: isProcessingBeforePublish ? "processing" : "queued",
+          pendingOffline: !isInternetAvailable(),
+          localPending: true,
+          localOnly: true,
+          processingType,
+          learningFeedbackStatus: processingType === MESSAGE_PROCESSING_LEARNING_TEST ? "pending" : "",
+          translationStatus: processingType === MESSAGE_PROCESSING_TRANSLATION ? "pending" : undefined
         });
         break;
       }
@@ -3810,13 +4089,89 @@ async function flushOfflineMessageQueue() {
   }
 }
 
+async function processQueuedMessageBeforePublishing(room, item, processingType) {
+  if (!room?.id || !item?.localId) return;
+
+  if (!isInternetAvailable()) throw new Error("Sem internet para concluir processamento.");
+
+  if (processingType === MESSAGE_PROCESSING_LEARNING_TEST) {
+    const feedbackResult = await checkLearningTestWriting(item.text, room);
+    const learningFeedback = await createLearningFeedbackFromResult(item.text, feedbackResult, room);
+
+    await sendFirebaseMessage(room, item.text, {
+      messageId: item.localId,
+      createdAtMillis: item.createdAtMillis,
+      replyPayload: item.replyTo || null,
+      skipTranslation: true,
+      translationDisabled: true,
+      learningTest: true,
+      learningFeedback,
+      mentionPayload: item.mentionPayload,
+      fromOfflineQueue: true
+    });
+    return;
+  }
+
+  if (processingType === MESSAGE_PROCESSING_TRANSLATION) {
+    const language = getQueuedTargetLanguage(item, room);
+    const originalText = cleanMessageText(item.text);
+
+    if (!language?.code) {
+      await sendFirebaseMessage(room, originalText, {
+        messageId: item.localId,
+        createdAtMillis: item.createdAtMillis,
+        replyPayload: item.replyTo || null,
+        skipTranslation: true,
+        translationDisabled: false,
+        mentionPayload: item.mentionPayload,
+        fromOfflineQueue: true
+      });
+      return;
+    }
+
+    const existingMessageSnapshot = await get(ref(db, `rooms/${room.id}/messages/${item.localId}`));
+    if (existingMessageSnapshot.exists()) {
+      const existingMessage = mapMessageData(item.localId, existingMessageSnapshot.val());
+      if (isPendingTranslationMessage(existingMessage)) {
+        startTranslationResumeJob(room, {
+          ...existingMessage,
+          text: originalText,
+          originalText,
+          translationSourceText: originalText
+        }, language, originalText);
+        return;
+      }
+    }
+
+    await sendFirebaseMessage(room, originalText, {
+      messageId: item.localId,
+      createdAtMillis: item.createdAtMillis,
+      replyPayload: item.replyTo || null,
+      publicText: PUBLIC_TRANSLATION_PENDING_TEXT,
+      translationSourceText: originalText,
+      deferOriginalUntilTranslated: true,
+      skipTranslation: false,
+      translationDisabled: false,
+      translationStatus: "pending",
+      translationError: false,
+      deliveryStatus: "processing",
+      processingType: MESSAGE_PROCESSING_TRANSLATION,
+      targetLanguageCode: language.code || "",
+      targetLanguageName: language.name || "",
+      mentionPayload: item.mentionPayload,
+      fromOfflineQueue: true
+    });
+  }
+}
+
 function updateQueuedLocalMessage(roomId, messageId, patch) {
   if (!roomId || !messageId) return;
   const currentMessages = roomMessagesById.get(roomId) || [];
   const currentMessage = currentMessages.find((message) => message.id === messageId);
   if (!currentMessage) return;
 
-  upsertRoomMessage(roomId, { ...currentMessage, ...patch });
+  const cleanPatch = Object.fromEntries(Object.entries(patch || {}).filter(([, value]) => value !== undefined));
+  upsertRoomMessage(roomId, { ...currentMessage, ...cleanPatch });
   const room = remoteRoomMap.get(roomId);
   if (room) {
     remoteRoomMap.set(roomId, {
@@ -3859,13 +4214,186 @@ function getCachedCurrentUserUidForRoom(room) {
   return Object.entries(room.memberNickMap || {}).find(([, nick]) => normalize(nick) === normalizedNick)?.[0] || "";
 }
 
+
+function normalizePendingTranslationJobs(value) {
+  const rawJobs = Array.isArray(value) ? value : Object.values(value || {});
+
+  return rawJobs
+    .filter((job) => job && job.roomId && job.messageId)
+    .map((job) => {
+      const roomId = sanitizeNotificationRoomId(job.roomId);
+      const messageId = sanitizeMessageLocalId(job.messageId);
+      const sourceText = cleanMessageText(job.sourceText || job.text || job.translationSourceText || "", 2000);
+      return {
+        key: getPendingTranslationJobKey(roomId, messageId),
+        roomId,
+        messageId,
+        sourceText,
+        targetLanguageCode: sanitizeText(job.targetLanguageCode || "", 16),
+        targetLanguageName: sanitizeText(job.targetLanguageName || "", 48),
+        targetLanguageLabel: sanitizeText(job.targetLanguageLabel || "", 48),
+        authorUid: sanitizeText(job.authorUid || "", 160),
+        createdAtMillis: Number(job.createdAtMillis || job.time || Date.now()),
+        savedAt: Number(job.savedAt || Date.now())
+      };
+    })
+    .filter((job) => job.roomId && job.messageId && job.sourceText && job.sourceText !== PUBLIC_TRANSLATION_PENDING_TEXT)
+    .filter((job, index, list) => list.findIndex((candidate) => candidate.key === job.key) === index)
+    .slice(-120);
+}
+
+function getPendingTranslationJobKey(roomId, messageId) {
+  return `${sanitizeNotificationRoomId(roomId)}:${sanitizeMessageLocalId(messageId)}`;
+}
+
+function savePendingTranslationJobs() {
+  pendingTranslationJobs = normalizePendingTranslationJobs(pendingTranslationJobs);
+  localStorage.setItem(PENDING_TRANSLATION_JOBS_STORAGE_KEY, JSON.stringify(pendingTranslationJobs));
+}
+
+function getPendingTranslationJob(roomId, messageId) {
+  const key = getPendingTranslationJobKey(roomId, messageId);
+  return pendingTranslationJobs.find((job) => job.key === key) || null;
+}
+
+function upsertPendingTranslationJob(room, message, sourceText, language = null) {
+  if (!room?.id || !message?.id || !isMessageMine(message)) return null;
+
+  const cleanSourceText = cleanMessageText(sourceText || message.translationSourceText || message.originalText || "", 2000);
+  if (!cleanSourceText || cleanSourceText === PUBLIC_TRANSLATION_PENDING_TEXT) return null;
+
+  const targetLanguage = language || getRoomLanguage(room) || getLanguageOption(message.targetLanguageCode || "");
+  const job = {
+    key: getPendingTranslationJobKey(room.id, message.id),
+    roomId: room.id,
+    messageId: message.id,
+    sourceText: cleanSourceText,
+    targetLanguageCode: targetLanguage?.code || message.targetLanguageCode || "",
+    targetLanguageName: targetLanguage?.name || message.targetLanguageName || "",
+    targetLanguageLabel: targetLanguage?.label || "",
+    authorUid: message.authorUid || currentFirebaseUid || "",
+    createdAtMillis: Number(message.createdAtMillis || message.time || Date.now()),
+    savedAt: Date.now()
+  };
+
+  pendingTranslationJobs = [
+    ...pendingTranslationJobs.filter((item) => item.key !== job.key),
+    job
+  ];
+  savePendingTranslationJobs();
+  return job;
+}
+
+function removePendingTranslationJob(roomId, messageId) {
+  const key = getPendingTranslationJobKey(roomId, messageId);
+  const previousLength = pendingTranslationJobs.length;
+  pendingTranslationJobs = pendingTranslationJobs.filter((job) => job.key !== key);
+  pendingTranslationResumeKeys.delete(key);
+  if (pendingTranslationJobs.length !== previousLength) {
+    savePendingTranslationJobs();
+  }
+}
+
+function isPendingTranslationMessage(message) {
+  if (!message?.id) return false;
+  if (message.translationStatus === "pending") return true;
+  if (message.processingType === MESSAGE_PROCESSING_TRANSLATION) return true;
+  return message.deliveryStatus === "processing" && Boolean(message.targetLanguageCode);
+}
+
+function getPendingTranslationSourceText(roomId, message) {
+  if (!roomId || !message?.id || !isMessageMine(message) || !isPendingTranslationMessage(message)) return "";
+
+  const job = getPendingTranslationJob(roomId, message.id);
+  return cleanMessageText(job?.sourceText || message.translationSourceText || "", 2000);
+}
+
+function attachLocalTranslationJobToMessage(roomId, message) {
+  if (!message?.id || !isPendingTranslationMessage(message) || !isMessageMine(message)) return message;
+
+  const sourceText = getPendingTranslationSourceText(roomId, message);
+  if (!sourceText) return message;
+
+  return {
+    ...message,
+    translationSourceText: sourceText
+  };
+}
+
+function attachLocalTranslationJobsToMessages(roomId, messagesForRoom = []) {
+  return messagesForRoom.map((message) => attachLocalTranslationJobToMessage(roomId, message));
+}
+
+function schedulePendingTranslationResumeForRoom(room) {
+  if (!room?.id || isAiRoom(room)) return;
+  if (!firebaseReady || !currentFirebaseUid || !isInternetAvailable()) return;
+
+  window.setTimeout(() => resumePendingTranslationsFromRenderedBubbles(room), 0);
+}
+
+function resumePendingTranslationsFromRenderedBubbles(room) {
+  if (!room?.id || isAiRoom(room)) return;
+  if (!firebaseReady || !currentFirebaseUid || !isInternetAvailable()) return;
+  if (activeRoomId !== room.id || messages.dataset.roomId !== room.id) return;
+
+  const messagesForRoom = roomMessagesById.get(room.id) || room.messages || [];
+  const messageMap = new Map(messagesForRoom.map((message) => [message.id, message]));
+
+  messages
+    .querySelectorAll('.message-row[data-message-id] .bubble.is-translation-processing[data-translation-source-text]')
+    .forEach((bubble) => {
+      const row = bubble.closest('.message-row[data-message-id]');
+      const messageId = row?.dataset.messageId || bubble.dataset.translationMessageId || "";
+      const message = messageMap.get(messageId);
+      const sourceText = cleanMessageText(bubble.dataset.translationSourceText || "", 2000);
+      if (!message || !sourceText || !isPendingTranslationMessage(message) || !isMessageMine(message)) return;
+
+      const language = getLanguageOption(message.targetLanguageCode || bubble.dataset.translationTargetLanguageCode || "") || getRoomLanguage(room);
+      if (!language?.code) return;
+
+      startTranslationResumeJob(room, {
+        ...message,
+        text: sourceText,
+        originalText: sourceText,
+        translationSourceText: sourceText
+      }, language, sourceText);
+    });
+}
+
+function startTranslationResumeJob(room, message, language, sourceText = "") {
+  if (!room?.id || !message?.id || !language?.code) return;
+  const cleanSourceText = cleanMessageText(sourceText || message.translationSourceText || message.originalText || message.text || "", 2000);
+  if (!cleanSourceText || cleanSourceText === PUBLIC_TRANSLATION_PENDING_TEXT) return;
+
+  upsertPendingTranslationJob(room, message, cleanSourceText, language);
+  const key = getPendingTranslationJobKey(room.id, message.id);
+  if (pendingTranslationResumeKeys.has(key)) return;
+
+  pendingTranslationResumeKeys.add(key);
+  translateFirebaseMessageInBackground(room, {
+    ...message,
+    text: cleanSourceText,
+    originalText: cleanSourceText,
+    translationSourceText: cleanSourceText
+  }, language).finally(() => {
+    pendingTranslationResumeKeys.delete(key);
+  });
+}
+
 async function translateFirebaseMessageInBackground(room, message, language) {
   if (!room?.id || !message?.id || !language?.code || message.translationDisabled) return;
 
   try {
     if (!isInternetAvailable()) throw new Error("Sem internet para traduzir.");
 
-    const originalText = cleanMessageText(message.originalText || message.text || "");
+    const originalText = cleanMessageText(
+      message.translationSourceText || getPendingTranslationSourceText(room.id, message) || message.originalText || message.text || "",
+      2000
+    );
+    if (!originalText || originalText === PUBLIC_TRANSLATION_PENDING_TEXT) {
+      throw new Error("Texto original da tradução não encontrado.");
+    }
+
     const translated = cleanMessageText(await translateMessageText(originalText, language), 1000);
     if (!translated) throw new Error("Tradução vazia.");
 
@@ -3875,10 +4403,12 @@ async function translateFirebaseMessageInBackground(room, message, language) {
       text: hasDeliveredTranslation ? translated : originalText,
       originalText: hasDeliveredTranslation ? originalText : "",
       translatedText: hasDeliveredTranslation ? translated : "",
+      translationSourceText: "",
       translationStatus: "done",
       translationError: false,
       deliveryStatus: "sent",
-      pendingOffline: false
+      pendingOffline: false,
+      processingType: ""
     };
 
     const updates = {
@@ -3886,7 +4416,10 @@ async function translateFirebaseMessageInBackground(room, message, language) {
       [`rooms/${room.id}/messages/${message.id}/originalText`]: translatedMessage.originalText,
       [`rooms/${room.id}/messages/${message.id}/translatedText`]: translatedMessage.translatedText,
       [`rooms/${room.id}/messages/${message.id}/translationStatus`]: "done",
-      [`rooms/${room.id}/messages/${message.id}/translationError`]: false
+      [`rooms/${room.id}/messages/${message.id}/translationError`]: false,
+      [`rooms/${room.id}/messages/${message.id}/deliveryStatus`]: "sent",
+      [`rooms/${room.id}/messages/${message.id}/pendingOffline`]: false,
+      [`rooms/${room.id}/messages/${message.id}/processingType`]: null
     };
 
     try {
@@ -3900,6 +4433,7 @@ async function translateFirebaseMessageInBackground(room, message, language) {
     }
 
     await update(ref(db), updates);
+    removePendingTranslationJob(room.id, message.id);
     syncLocalSentFirebaseMessage(room, translatedMessage, {
       displayText: translatedMessage.text,
       originalText: translatedMessage.originalText,
@@ -3909,10 +4443,15 @@ async function translateFirebaseMessageInBackground(room, message, language) {
     console.warn("Nao foi possivel traduzir a mensagem em segundo plano.", error);
     const failedMessage = {
       ...message,
+      text: cleanMessageText(message.originalText || message.text || "Tradução indisponível"),
+      originalText: "",
+      translatedText: "",
+      translationSourceText: "",
       translationStatus: "error",
       translationError: true,
       deliveryStatus: "sent",
-      pendingOffline: false
+      pendingOffline: false,
+      processingType: ""
     };
 
     syncLocalSentFirebaseMessage(room, failedMessage, {
@@ -3922,12 +4461,21 @@ async function translateFirebaseMessageInBackground(room, message, language) {
     });
 
     if (firebaseReady && isInternetAvailable()) {
-      update(ref(db), {
-        [`rooms/${room.id}/messages/${message.id}/translationStatus`]: "error",
-        [`rooms/${room.id}/messages/${message.id}/translationError`]: true
-      }).catch((updateError) => {
+      try {
+        await update(ref(db), {
+          [`rooms/${room.id}/messages/${message.id}/text`]: failedMessage.text,
+          [`rooms/${room.id}/messages/${message.id}/originalText`]: "",
+          [`rooms/${room.id}/messages/${message.id}/translatedText`]: "",
+          [`rooms/${room.id}/messages/${message.id}/translationStatus`]: "error",
+          [`rooms/${room.id}/messages/${message.id}/translationError`]: true,
+          [`rooms/${room.id}/messages/${message.id}/deliveryStatus`]: "sent",
+          [`rooms/${room.id}/messages/${message.id}/pendingOffline`]: false,
+          [`rooms/${room.id}/messages/${message.id}/processingType`]: null
+        });
+        removePendingTranslationJob(room.id, message.id);
+      } catch (updateError) {
         console.warn("Nao foi possivel marcar erro de traducao no Firebase.", updateError);
-      });
+      }
     }
   }
 }
@@ -3985,20 +4533,151 @@ function loadRemoteConversationCache() {
   remoteRooms = Array.from(remoteRoomMap.values());
 }
 
+function restorePendingLocalMessagesAfterReload() {
+  let changedQueue = false;
+  let changedMessages = false;
+  const queuedIdsByRoom = new Map();
+
+  offlineMessageQueue.forEach((item) => {
+    if (!queuedIdsByRoom.has(item.roomId)) queuedIdsByRoom.set(item.roomId, new Set());
+    queuedIdsByRoom.get(item.roomId).add(item.localId);
+  });
+
+  offlineMessageQueue.forEach((item) => {
+    const room = remoteRoomMap.get(item.roomId);
+    if (!room) return;
+
+    const hasMessage = (roomMessagesById.get(item.roomId) || []).some((message) => message.id === item.localId);
+    if (hasMessage) return;
+
+    const restoredMessage = createLocalMessageFromOfflineQueueItem(room, item);
+    upsertRoomMessage(item.roomId, restoredMessage);
+    remoteRoomMap.set(item.roomId, {
+      ...room,
+      lastMessage: restoredMessage.text || room.lastMessage || "",
+      lastMessageId: restoredMessage.id,
+      lastOriginalMessage: restoredMessage.originalText || room.lastOriginalMessage || "",
+      lastMessageAuthorUid: restoredMessage.authorUid || room.lastMessageAuthorUid || "",
+      lastMessageAuthorNick: restoredMessage.authorNick || room.lastMessageAuthorNick || "",
+      lastMessageAt: Number(restoredMessage.createdAtMillis || restoredMessage.time || Date.now()),
+      updatedAt: Math.max(Number(room.updatedAt || 0), Number(restoredMessage.createdAtMillis || restoredMessage.time || Date.now())),
+      messages: roomMessagesById.get(item.roomId) || []
+    });
+    changedMessages = true;
+  });
+
+  roomMessagesById.forEach((messagesForRoom, roomId) => {
+    const room = remoteRoomMap.get(roomId);
+    if (!room) return;
+
+    const queuedIds = queuedIdsByRoom.get(roomId) || new Set();
+    messagesForRoom.forEach((message) => {
+      if (!shouldKeepLocalPendingMessage(roomId, message, queuedIds)) return;
+      if (queuedIds.has(message.id)) return;
+
+      const queueItem = createOfflineQueueItemFromMessage(room, {
+        ...message,
+        localPending: true,
+        localOnly: true,
+        pendingOffline: message.pendingOffline || !isInternetAvailable()
+      }, {
+        processingType: message.processingType,
+        replyPayload: message.replyTo || null,
+        skipTranslation: Boolean(message.translationDisabled),
+        learningTest: Boolean(message.learningTest),
+        learningFeedback: message.learningFeedback,
+        mentionPayload: {
+          mentionedUids: normalizeMentionUidMap(message.mentionedUids),
+          mentionedNicks: normalizeMentionNickList(message.mentionedNicks),
+          mentions: normalizeMentions(message.mentions)
+        }
+      });
+
+      upsertRoomMessage(roomId, {
+        ...message,
+        deliveryStatus: getSafeMessageProcessingType(message.processingType) ? "processing" : "queued",
+        pendingOffline: message.pendingOffline || !isInternetAvailable(),
+        localPending: true,
+        localOnly: true
+      });
+      offlineMessageQueue.push(queueItem);
+      queuedIds.add(queueItem.localId);
+      changedQueue = true;
+      changedMessages = true;
+    });
+  });
+
+  if (changedQueue) {
+    offlineMessageQueue = normalizeOfflineMessageQueue(offlineMessageQueue);
+    localStorage.setItem(OFFLINE_MESSAGE_QUEUE_STORAGE_KEY, JSON.stringify(offlineMessageQueue));
+  }
+
+  if (changedMessages || changedQueue) {
+    remoteRooms = Array.from(remoteRoomMap.values());
+    saveRemoteConversationCache();
+  }
+}
+
+function createLocalMessageFromOfflineQueueItem(room, item) {
+  const processingType = getQueuedMessageProcessingType(item, room);
+  const language = getQueuedTargetLanguage(item, room);
+  const isLearningProcessing = processingType === MESSAGE_PROCESSING_LEARNING_TEST;
+  const isTranslationProcessing = processingType === MESSAGE_PROCESSING_TRANSLATION;
+  const createdAtMillis = Number(item.createdAtMillis || Date.now());
+
+  return {
+    id: item.localId,
+    text: isTranslationProcessing ? PUBLIC_TRANSLATION_PENDING_TEXT : cleanMessageText(item.text),
+    originalText: isTranslationProcessing ? cleanMessageText(item.text) : "",
+    translatedText: "",
+    translationSourceText: isTranslationProcessing ? cleanMessageText(item.text) : "",
+    targetLanguageCode: language?.code || item.targetLanguageCode || "",
+    targetLanguageName: language?.name || item.targetLanguageName || "",
+    learningTest: Boolean(item.learningTest || isLearningProcessing),
+    learningFeedback: normalizeLearningFeedback(item.learningFeedback),
+    learningFeedbackStatus: isLearningProcessing && !item.learningFeedback ? "pending" : "",
+    processingType,
+    translationDisabled: Boolean(item.skipTranslation || isLearningProcessing),
+    translationStatus: isTranslationProcessing || (language?.code && !item.skipTranslation) ? "pending" : "none",
+    translationError: false,
+    deliveryStatus: processingType ? "processing" : "queued",
+    pendingOffline: !isInternetAvailable(),
+    localPending: true,
+    localOnly: true,
+    mentionedUids: normalizeMentionUidMap(item.mentionPayload?.mentionedUids),
+    mentionedNicks: normalizeMentionNickList(item.mentionPayload?.mentionedNicks),
+    mentions: normalizeMentions(item.mentionPayload?.mentions),
+    replyTo: item.replyTo || null,
+    authorUid: currentFirebaseUid || getCachedCurrentUserUidForRoom(room) || "",
+    authorNick: currentUser?.nick || "Voce",
+    authorAvatar: currentUser?.avatar || getInitials(currentUser?.nick || "Voce"),
+    authorAvatarIcon: getSafeSpaceAvatarIcon(currentUser?.avatarIcon),
+    from: "me",
+    time: createdAtMillis,
+    createdAtMillis
+  };
+}
+
 function stripMessageForCache(message) {
   return {
     id: message.id || "",
     text: message.text || "",
     originalText: message.originalText || "",
     translatedText: message.translatedText || "",
+    translationSourceText: isPendingTranslationMessage(message) ? message.translationSourceText || "" : "",
     targetLanguageCode: message.targetLanguageCode || "",
     targetLanguageName: message.targetLanguageName || "",
     learningTest: Boolean(message.learningTest),
+    learningFeedbackStatus: message.learningFeedbackStatus || "",
+    processingType: getSafeMessageProcessingType(message.processingType),
     translationDisabled: Boolean(message.translationDisabled),
     translationStatus: message.translationStatus || "",
     translationError: Boolean(message.translationError),
     deliveryStatus: message.deliveryStatus || "",
+    deliveryError: message.deliveryError || "",
     pendingOffline: Boolean(message.pendingOffline),
+    localPending: Boolean(message.localPending),
+    localOnly: Boolean(message.localOnly),
     deliveredBy: message.deliveredBy || {},
     readBy: message.readBy || {},
     mentionedUids: message.mentionedUids || {},
@@ -4014,6 +4693,8 @@ function stripMessageForCache(message) {
     authorAvatarIcon: message.authorAvatarIcon || "",
     from: message.from || "",
     time: Number(message.time || message.createdAtMillis || Date.now()),
+    clientTime: Number(message.clientTime || message.createdAtMillis || message.time || Date.now()),
+    serverTime: Number(message.serverTime || 0),
     createdAtMillis: Number(message.createdAtMillis || message.time || Date.now())
   };
 }
@@ -4342,6 +5023,10 @@ function getMessageDeliveryInfo(message, room) {
     return { iconClass: "fa-regular fa-clock", checks: "", label: "Aguardando conexao", className: "is-waiting" };
   }
 
+  if (message.deliveryStatus === "processing") {
+    return { iconClass: "fa-regular fa-clock", checks: "", label: message.processingType === MESSAGE_PROCESSING_TRANSLATION ? "Traduzindo antes de enviar" : "Verificando antes de enviar", className: "is-waiting" };
+  }
+
   if (message.deliveryStatus === "sending") {
     return { iconClass: "fa-regular fa-clock", checks: "", label: "Enviando", className: "is-waiting" };
   }
@@ -4596,12 +5281,19 @@ function createMessageElement(message, animated = false, options = {}) {
   const groupedWithPrevious = Boolean(options.groupedWithPrevious);
   const hasTranslation = Boolean(message.translatedText && message.originalText && message.translatedText !== message.originalText);
   row.className = `message-row ${isMine ? "sent" : "received"}${groupedWithPrevious ? " is-grouped" : ""}`;
-  row.classList.toggle("pending-offline", Boolean(message.pendingOffline || message.deliveryStatus === "queued"));
+  row.classList.toggle("pending-offline", Boolean(message.pendingOffline || message.deliveryStatus === "queued" || message.deliveryStatus === "processing"));
   row.classList.toggle("delivery-failed", message.deliveryStatus === "failed");
   row.dataset.messageId = message.id || "";
   row.dataset.signature = getMessageSignature(message);
   stack.className = "message-stack";
   bubble.className = `bubble${animated ? " is-new" : ""}`;
+  const localTranslationSourceText = getPendingTranslationSourceText(options.roomId || activeRoomId, message);
+  if (localTranslationSourceText && message.translationStatus === "pending" && isMine) {
+    bubble.dataset.translationSourceText = localTranslationSourceText;
+    bubble.dataset.translationTargetLanguageCode = message.targetLanguageCode || "";
+    bubble.dataset.translationMessageId = message.id || "";
+    row.dataset.translationSourceAvailable = "1";
+  }
   time.textContent = formatTime(message.time);
 
   const hydration = getCurrentUserHydration(message);
@@ -4641,16 +5333,18 @@ function createMessageElement(message, animated = false, options = {}) {
     bubble.appendChild(createLearningFeedbackElement(learningFeedback));
   }
 
-  if (message.translationError) {
+  if ((message.learningFeedbackStatus === "pending" || (message.processingType === MESSAGE_PROCESSING_LEARNING_TEST && message.deliveryStatus === "processing")) && !learningFeedback) {
+    const warning = document.createElement("span");
+    warning.className = "translation-warning is-pending";
+    warning.textContent = message.pendingOffline ? "Verificação aguardando internet..." : "Verificando aprendizado em segundo plano...";
+    bubble.appendChild(warning);
+  } else if (message.translationError) {
     const warning = document.createElement("span");
     warning.className = "translation-warning";
     warning.textContent = "Tradução indisponível no envio";
     bubble.appendChild(warning);
-  } else if (message.translationStatus === "pending" && !message.pendingOffline && message.deliveryStatus !== "queued") {
-    const warning = document.createElement("span");
-    warning.className = "translation-warning is-pending";
-    warning.textContent = "Traduzindo em segundo plano...";
-    bubble.appendChild(warning);
+  } else if (message.translationStatus === "pending") {
+    bubble.classList.add("is-translation-processing");
   }
 
   footer.className = "message-footer";
@@ -5317,6 +6011,27 @@ function cycleSpeechPlaybackRate() {
 function setSpeechPlaybackRate(rate) {
   speechPlaybackRate = normalizeSpeechPlaybackRate(rate);
   localStorage.setItem(SPEECH_RATE_STORAGE_KEY, JSON.stringify(speechPlaybackRate));
+  refreshSpeechPlaybackRateLabels();
+}
+
+function refreshSpeechPlaybackRateLabels() {
+  document.querySelectorAll(".message-audio-speed-value").forEach((speedLabel) => {
+    speedLabel.textContent = formatSpeechPlaybackRate(speechPlaybackRate);
+  });
+}
+
+function createSpeechSpeedButton() {
+  const speedButton = document.createElement("button");
+  speedButton.className = "message-audio-control speed-audio-control";
+  speedButton.type = "button";
+  speedButton.title = "Mudar velocidade";
+  speedButton.setAttribute("aria-label", "Mudar velocidade do audio");
+  speedButton.innerHTML = `<i class="fa-solid fa-gauge-high" aria-hidden="true"></i><span class="message-audio-speed-value">${escapeHtml(formatSpeechPlaybackRate(speechPlaybackRate))}</span>`;
+  speedButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    cycleSpeechPlaybackRate();
+  });
+  return speedButton;
 }
 
 function isSpeechPlaybackActive() {
@@ -5372,7 +6087,7 @@ function createSpeechProgressElement(message) {
   const stopButton = document.createElement("button");
   const waveWrap = document.createElement("div");
   const wave = document.createElement("div");
-  const speedButton = document.createElement("button");
+  const speedButton = createSpeechSpeedButton();
 
   progress.className = "message-audio-progress";
   progress.dataset.messageId = message?.id || "";
@@ -5408,16 +6123,6 @@ function createSpeechProgressElement(message) {
 
   waveWrap.appendChild(wave);
 
-  speedButton.className = "message-audio-control speed-audio-control";
-  speedButton.type = "button";
-  speedButton.title = "Mudar velocidade";
-  speedButton.setAttribute("aria-label", "Mudar velocidade do audio");
-  speedButton.innerHTML = `<i class="fa-solid fa-gauge-high" aria-hidden="true"></i><span class="message-audio-speed-value">${escapeHtml(formatSpeechPlaybackRate(speechPlaybackRate))}</span>`;
-  speedButton.addEventListener("click", (event) => {
-    event.stopPropagation();
-    cycleSpeechPlaybackRate();
-  });
-
   progress.append(stopButton, waveWrap, speedButton);
   return progress;
 }
@@ -5452,14 +6157,67 @@ function updateSpeechWaveBars(progress) {
   });
 }
 
-function finishSpeechProgress() {
-  if (activeSpeechMessage) updateSpeechProgressElement(activeSpeechMessage);
+function finishSpeechProgress(message = activeSpeechMessage) {
   if (activeSpeechAnimationTimer) {
     window.clearInterval(activeSpeechAnimationTimer);
     activeSpeechAnimationTimer = 0;
   }
   window.clearTimeout(activeSpeechProgressClearTimer);
-  activeSpeechProgressClearTimer = window.setTimeout(clearSpeechProgress, 900);
+  activeSpeechProgressClearTimer = 0;
+  showSpeechFinishedControls(message);
+}
+
+function showSpeechFinishedControls(message) {
+  const bubble = getRenderedMessageBubble(message);
+  if (!bubble) {
+    clearSpeechProgress();
+    return;
+  }
+
+  let progress = bubble.querySelector(".message-audio-progress");
+  if (!progress) {
+    progress = createSpeechProgressElement(message);
+    const footer = bubble.querySelector(".message-footer");
+    if (footer) bubble.insertBefore(progress, footer);
+    else bubble.appendChild(progress);
+  }
+
+  const repeatButton = document.createElement("button");
+  const label = document.createElement("div");
+  const speedButton = createSpeechSpeedButton();
+  const backButton = document.createElement("button");
+
+  progress.className = "message-audio-progress is-finished";
+  progress.dataset.messageId = message?.id || "";
+  progress.setAttribute("role", "group");
+  progress.setAttribute("aria-label", "Audio da mensagem finalizado");
+  progress.innerHTML = "";
+
+  repeatButton.className = "message-audio-control repeat-audio-control";
+  repeatButton.type = "button";
+  repeatButton.title = "Repetir audio";
+  repeatButton.setAttribute("aria-label", "Repetir audio da mensagem");
+  repeatButton.innerHTML = `<i class="fa-solid fa-rotate-right" aria-hidden="true"></i>`;
+  repeatButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    speakMessage(message);
+  });
+
+  label.className = "message-audio-finished-label";
+  label.innerHTML = `<i class="fa-solid fa-circle-check" aria-hidden="true"></i><span>Audio concluido</span>`;
+
+  backButton.className = "message-audio-control back-to-text-audio-control";
+  backButton.type = "button";
+  backButton.title = "Voltar para o texto";
+  backButton.setAttribute("aria-label", "Voltar para o texto da mensagem");
+  backButton.innerHTML = `<i class="fa-solid fa-align-left" aria-hidden="true"></i>`;
+  backButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    clearSpeechProgress();
+  });
+
+  progress.append(repeatButton, label, speedButton, backButton);
+  bubble.closest(".message-row")?.classList.add("is-speaking-message");
 }
 
 function clearSpeechProgress() {
@@ -5507,7 +6265,8 @@ function speakMessage(message) {
   startSpeechProgress(message);
   utterance.onend = () => {
     if (activeSpeechUtterance === utterance) {
-      finishSpeechProgress();
+      const finishedMessage = activeSpeechMessage;
+      finishSpeechProgress(finishedMessage);
       activeSpeechUtterance = null;
       activeSpeechMessage = null;
       activeSpeechMessageKey = "";
@@ -6013,14 +6772,20 @@ function getMessageSignature(message) {
     text: message.text || "",
     originalText: message.originalText || "",
     translatedText: message.translatedText || "",
+    translationSourceText: isPendingTranslationMessage(message) ? message.translationSourceText || "" : "",
     targetLanguageCode: message.targetLanguageCode || "",
     learningTest: Boolean(message.learningTest),
+    learningFeedbackStatus: message.learningFeedbackStatus || "",
+    processingType: message.processingType || "",
     translationDisabled: Boolean(message.translationDisabled),
     learningFeedback: message.learningFeedback || {},
     translationError: Boolean(message.translationError),
     translationStatus: message.translationStatus || "",
     deliveryStatus: message.deliveryStatus || "",
+    deliveryError: message.deliveryError || "",
     pendingOffline: Boolean(message.pendingOffline),
+    localPending: Boolean(message.localPending),
+    localOnly: Boolean(message.localOnly),
     deliveredBy: message.deliveredBy || {},
     readBy: message.readBy || {},
     mentionedUids: message.mentionedUids || {},
@@ -8946,7 +9711,7 @@ function mapMessageSnapshot(messageSnapshot) {
 
 function mapMessageData(messageId, data = {}) {
   const clientTime = Number(data.createdAtMillis || data.time || 0);
-  const serverTime = getRealtimeMillis(data.createdAt, 0);
+  const serverTime = getRealtimeMillis(data.createdAt, Number(data.serverTime || 0));
   const displayTime = serverTime || clientTime || Date.now();
 
   return {
@@ -8954,15 +9719,21 @@ function mapMessageData(messageId, data = {}) {
     text: data.text || "",
     originalText: data.originalText || "",
     translatedText: data.translatedText || "",
+    translationSourceText: data.translationSourceText || "",
     targetLanguageCode: data.targetLanguageCode || "",
     targetLanguageName: data.targetLanguageName || "",
     learningTest: Boolean(data.learningTest),
+    learningFeedbackStatus: data.learningFeedbackStatus || "",
+    processingType: getSafeMessageProcessingType(data.processingType),
     translationDisabled: Boolean(data.translationDisabled),
     learningFeedback: normalizeLearningFeedback(data.learningFeedback),
     translationError: Boolean(data.translationError),
     translationStatus: data.translationStatus || "",
     deliveryStatus: data.deliveryStatus || "",
+    deliveryError: data.deliveryError || "",
     pendingOffline: Boolean(data.pendingOffline),
+    localPending: Boolean(data.localPending),
+    localOnly: Boolean(data.localOnly),
     deliveredBy: normalizeMessageReceipts(data.deliveredBy),
     readBy: normalizeMessageReceipts(data.readBy),
     mentionedUids: normalizeMentionUidMap(data.mentionedUids),
@@ -8994,14 +9765,16 @@ function compareMessagesBySendOrder(a, b) {
 function getMessageSortTime(message) {
   if (!message) return 0;
 
+  const clientOrderTime = Number(message.createdAtMillis || message.clientTime || message.time || 0);
+  if (Number.isFinite(clientOrderTime) && clientOrderTime > 0) return clientOrderTime;
+
   const serverTime = Number(message.serverTime || 0);
   if (Number.isFinite(serverTime) && serverTime > 0) return serverTime;
 
   const createdAt = getRealtimeMillis(message.createdAt, 0);
   if (createdAt) return createdAt;
 
-  const fallbackTime = Number(message.time || message.createdAtMillis || message.clientTime || 0);
-  return Number.isFinite(fallbackTime) ? fallbackTime : 0;
+  return 0;
 }
 
 

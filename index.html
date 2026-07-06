@@ -553,7 +553,7 @@
         <div class="profile-panel-title">
           <small>Configurações</small>
           <strong>Seu perfil no AstroChat</strong>
-          <span>Troque nick, ícone espacial e idioma nativo usado nas traduções temporárias.</span>
+          <span>Troque nick, ícone espacial, idioma nativo e a paleta visual do chat.</span>
         </div>
         <button class="icon-button profile-close-button" id="closeProfileSettingsButton" type="button" aria-label="Fechar configurações">
           <i class="fa-solid fa-xmark" aria-hidden="true"></i>
@@ -595,6 +595,22 @@
             <option value="ja">Japonês</option>
             <option value="ko">Coreano</option>
             <option value="zh">Chinês</option>
+          </select>
+        </div>
+
+        <div class="profile-field-block profile-theme-field">
+          <label for="profileThemeSelect">
+            <i class="fa-solid fa-palette" aria-hidden="true"></i>
+            <span>Tema do chat</span>
+          </label>
+          <select id="profileThemeSelect" class="chat-theme-select" aria-label="Selecionar tema do chat">
+            <option value="padrao">Padrão</option>
+            <option value="galatico">Galatico</option>
+            <option value="nebulosa">Nebulosa</option>
+            <option value="aurora">Aurora</option>
+            <option value="solar">Solar</option>
+            <option value="oceano">Oceano</option>
+            <option value="rubi">Rubi</option>
           </select>
         </div>
       </section>
@@ -682,11 +698,12 @@
           <i class="fa-solid fa-check" aria-hidden="true"></i>
         </button>
       </footer>
-
-      <button class="danger-action full-width-action reset-local-button profile-danger-button" id="resetLocalProfileButton" type="button">
-        <i class="fa-solid fa-trash-can" aria-hidden="true"></i>
-        <span>Apagar usuario e sair</span>
-      </button>
+      <footer class="profile-version-delete">
+        <button class="danger-action full-width-action reset-local-button profile-danger-button" id="resetLocalProfileButton" type="button">
+          <i class="fa-solid fa-trash-can" aria-hidden="true"></i>
+          <span>Apagar usuario e sair</span>
+        </button>
+      </footer>
 
       <footer class="profile-version-footer">
         <span id="profileVersionLabel">AstroChat</span>

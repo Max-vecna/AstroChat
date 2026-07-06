@@ -1,4 +1,4 @@
-const CACHE_NAME = "astrochat-cache-v92";
+const CACHE_NAME = "astrochat-cache-v99";
 const PUSH_SETTINGS_CACHE = "astrochat-push-settings-v1";
 const PUSH_SETTINGS_REQUEST = "./__astrochat-system-push-settings";
 const FIREBASE_MESSAGING_SDK_VERSION = "10.12.2";
