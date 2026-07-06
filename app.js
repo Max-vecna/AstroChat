@@ -50,7 +50,7 @@ const DATABASE_URL = "https://astro-chat-7d044-default-rtdb.firebaseio.com";
 const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
-const CHAT_VERSION = "v111";
+const CHAT_VERSION = "v112";
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
 const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
@@ -2549,19 +2549,20 @@ function setSpeechPlaybackForActiveRoom(enabled) {
     speechPlaybackByRoom[activeRoom.id] = true;
   } else {
     delete speechPlaybackByRoom[activeRoom.id];
-    if (activeSpeechMessageKey?.startsWith(`${activeRoom.id}:`)) stopSpeaking();
+  }
+
+  if (activeSpeechMessageKey?.startsWith(`${activeRoom.id}:`)) {
+    stopSpeaking();
   }
 
   saveSpeechPlaybackSettings();
   updateSpeechPlaybackToggleState(activeRoom);
-  forceMessageRerender(activeRoom.id);
-  renderRoomMessages(activeRoom);
 
   showToast(
-    enabled ? "Simulador de voz ativado" : "Simulador de voz desativado",
+    enabled ? "Barras abaixo do texto" : "Barras no lugar do texto",
     enabled
-      ? "As mensagens deste chat mostram um botão de áudio abaixo do texto."
-      : "O botão de áudio saiu dos balões desta conversa."
+      ? "Ao clicar em Ouvir, as barras aparecem embaixo da mensagem sem esconder o texto."
+      : "Ao clicar em Ouvir, as barras aparecem no lugar do texto da mensagem."
   );
 }
 
@@ -2582,10 +2583,10 @@ function updateSpeechPlaybackToggleState(activeRoom = getActiveRoom()) {
     roomSettingsSpeechPlaybackButton.classList.toggle("is-active", enabled);
     roomSettingsSpeechPlaybackButton.setAttribute("aria-pressed", String(enabled));
     const status = roomSettingsSpeechPlaybackButton.querySelector(".room-menu-toggle-status") || roomSettingsSpeechPlaybackButton.querySelector("small");
-    if (status) status.textContent = enabled ? "Áudio abaixo do texto ativado" : "Áudio abaixo do texto desativado";
+    if (status) status.textContent = enabled ? "Aparece abaixo do texto" : "Aparece no lugar do texto";
     roomSettingsSpeechPlaybackButton.title = enabled
-      ? "Remover botões de áudio dos balões deste chat"
-      : "Mostrar botões de áudio abaixo das mensagens deste chat";
+      ? "As barras de voz aparecem abaixo do texto quando você clicar em Ouvir"
+      : "As barras de voz substituem o texto quando você clicar em Ouvir";
   }
 
   if (roomSettingsSpeechPlaybackCheckbox) {
@@ -5766,10 +5767,6 @@ function createMessageElement(message, animated = false, options = {}) {
     bubble.appendChild(createLearningFeedbackElement(learningFeedback));
   }
 
-  if (shouldShowInlineSpeechPlaybackButton(message, messageRoomId)) {
-    bubble.appendChild(createInlineSpeechPlaybackElement(message));
-  }
-
   if (isLearningAnalysisPending(message) && !learningFeedback) {
     const warning = document.createElement("span");
     warning.className = "translation-warning is-pending learning-analysis-warning";
@@ -6568,14 +6565,12 @@ function updateSpeechProgressElement(message) {
 
   if (!progress) {
     progress = createSpeechProgressElement(message);
-    const footer = bubble.querySelector(".message-footer");
-    if (footer) bubble.insertBefore(progress, footer);
-    else bubble.appendChild(progress);
   }
+
+  applySpeechProgressPlacement(bubble, progress, message);
 
   const speed = progress.querySelector(".message-audio-speed-value");
 
-  bubble.closest(".message-row")?.classList.add("is-speaking-message");
   updateSpeechWaveBars(progress);
   if (speed) speed.textContent = formatSpeechPlaybackRate(speechPlaybackRate);
 }
@@ -6623,6 +6618,34 @@ function createSpeechProgressElement(message) {
 
   progress.append(stopButton, waveWrap, speedButton);
   return progress;
+}
+
+function shouldShowSpeechProgressBelowText(message = activeSpeechMessage) {
+  const roomId = getActiveRoom()?.id || activeRoomId || "";
+  return Boolean(roomId && isSpeechPlaybackEnabledForRoom(roomId));
+}
+
+function applySpeechProgressPlacement(bubble, progress, message) {
+  if (!bubble || !progress) return;
+
+  const belowText = shouldShowSpeechProgressBelowText(message);
+  const footer = bubble.querySelector(".message-footer");
+  const row = bubble.closest(".message-row");
+
+  progress.classList.toggle("is-below-text", belowText);
+  progress.classList.toggle("is-in-place-of-text", !belowText);
+
+  if (footer) {
+    bubble.insertBefore(progress, footer);
+  } else if (progress.parentElement !== bubble) {
+    bubble.appendChild(progress);
+  }
+
+  if (row) {
+    row.classList.add("is-speaking-message");
+    row.classList.toggle("is-audio-below-text", belowText);
+    row.classList.toggle("is-audio-in-place", !belowText);
+  }
 }
 
 function updateSpeechWaveBars(progress) {
@@ -6675,10 +6698,9 @@ function showSpeechFinishedControls(message) {
   let progress = bubble.querySelector(".message-audio-progress");
   if (!progress) {
     progress = createSpeechProgressElement(message);
-    const footer = bubble.querySelector(".message-footer");
-    if (footer) bubble.insertBefore(progress, footer);
-    else bubble.appendChild(progress);
   }
+
+  applySpeechProgressPlacement(bubble, progress, message);
 
   const repeatButton = document.createElement("button");
   const label = document.createElement("div");
@@ -6715,7 +6737,7 @@ function showSpeechFinishedControls(message) {
   });
 
   progress.append(repeatButton, label, speedButton, backButton);
-  bubble.closest(".message-row")?.classList.add("is-speaking-message");
+  applySpeechProgressPlacement(bubble, progress, message);
 }
 
 function clearSpeechProgress() {
@@ -6727,7 +6749,8 @@ function clearSpeechProgress() {
   activeSpeechProgressClearTimer = 0;
 
   document.querySelectorAll(".message-audio-progress").forEach((progress) => {
-    progress.closest(".message-row")?.classList.remove("is-speaking-message");
+    const row = progress.closest(".message-row");
+    row?.classList.remove("is-speaking-message", "is-audio-below-text", "is-audio-in-place");
     progress.remove();
   });
 }

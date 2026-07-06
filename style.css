@@ -6476,12 +6476,20 @@ input::placeholder,
   box-shadow: 0 0 0 1px rgba(157, 255, 224, 0.18), 0 16px 32px rgba(0, 0, 0, 0.2);
 }
 
-.message-row.is-speaking-message .bubble > .message-text,
-.message-row.is-speaking-message .bubble > .translated-block,
-.message-row.is-speaking-message .bubble > .learning-feedback-card,
-.message-row.is-speaking-message .bubble > .translation-warning,
-.message-row.is-speaking-message .bubble > .hydrated-water-effect {
+.message-row.is-speaking-message.is-audio-in-place .bubble > .message-text,
+.message-row.is-speaking-message.is-audio-in-place .bubble > .translated-block,
+.message-row.is-speaking-message.is-audio-in-place .bubble > .learning-feedback-card,
+.message-row.is-speaking-message.is-audio-in-place .bubble > .translation-warning,
+.message-row.is-speaking-message.is-audio-in-place .bubble > .hydrated-water-effect {
   display: none !important;
+}
+
+.message-audio-progress.is-below-text {
+  margin-top: 8px;
+}
+
+.message-audio-progress.is-in-place-of-text {
+  margin-top: 4px;
 }
 
 .message-audio-control {
