@@ -1,4 +1,4 @@
-const CACHE_NAME = "astrochat-cache-v91";
+const CACHE_NAME = "astrochat-cache-v92";
 const PUSH_SETTINGS_CACHE = "astrochat-push-settings-v1";
 const PUSH_SETTINGS_REQUEST = "./__astrochat-system-push-settings";
 const FIREBASE_MESSAGING_SDK_VERSION = "10.12.2";
@@ -26,7 +26,6 @@ const APP_FILES = [
 
 self.addEventListener("install", (event) => {
   event.waitUntil(installAppShell());
-  self.skipWaiting();
 });
 
 async function installAppShell() {
@@ -55,16 +54,6 @@ async function activateLatestWorker() {
   const oldKeys = keys.filter((key) => key.startsWith("astrochat-cache-") && key !== CACHE_NAME);
 
   await Promise.all(oldKeys.map((key) => caches.delete(key)));
-  await self.clients.claim();
-
-  if (!oldKeys.length) return;
-
-  const clientList = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
-  await Promise.all(
-    clientList
-      .filter((client) => client.url && new URL(client.url).origin === self.location.origin)
-      .map((client) => client.navigate(client.url))
-  );
 }
 
 self.addEventListener("fetch", (event) => {
@@ -99,7 +88,6 @@ self.addEventListener("fetch", (event) => {
 
 self.addEventListener("message", (event) => {
   if (event.data?.type === "SKIP_WAITING") {
-    self.skipWaiting();
     return;
   }
 
@@ -255,17 +243,18 @@ async function showAstroChatNotification(payload = {}, source = "push") {
   }
 
   markNotificationRecentlyShown(notificationKey);
-  await notifyOpenClientsAboutPush(payloadData);
+  let systemNotificationShown = false;
 
-  if (!(await areSystemPushNotificationsAllowed())) {
-    return;
+  if (await areSystemPushNotificationsAllowed()) {
+    try {
+      await self.registration.showNotification(title, options);
+      systemNotificationShown = true;
+    } catch (error) {
+      console.warn("Nao foi possivel mostrar notificacao push.", source, error);
+    }
   }
 
-  try {
-    await self.registration.showNotification(title, options);
-  } catch (error) {
-    console.warn("Nao foi possivel mostrar notificacao push.", source, error);
-  }
+  await notifyOpenClientsAboutPush({ ...payloadData, systemNotificationShown });
 }
 
 async function notifyOpenClientsAboutPush(payloadData = {}) {

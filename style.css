@@ -276,8 +276,8 @@ body.is-authenticated .login-screen {
 
 .sidebar-header,
 .chat-header {
-  min-height: 74px;
-  padding: 14px 16px;
+  /* min-height: 74px; */
+  padding: 9px 16px;
   display: flex;
   align-items: center;
   gap: 12px;

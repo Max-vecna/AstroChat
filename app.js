@@ -50,7 +50,7 @@ const DATABASE_URL = "https://astro-chat-7d044-default-rtdb.firebaseio.com";
 const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
-const CHAT_VERSION = "v91";
+const CHAT_VERSION = "v92";
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
 const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
@@ -77,6 +77,7 @@ const NICK_TAKEN_ERROR_CODE = "nick-taken";
 const MISSING_FIREBASE_USER_DATA_ERROR_CODE = "missing-firebase-user-data";
 const BACKGROUND_REFRESH_INTERVAL_MS = 45000;
 const FCM_TOKEN_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+const NOTIFICATION_SOUND_AFTER_SYSTEM_DELAY_MS = 180;
 const ROOM_LAST_MESSAGE_LISTEN_LIMIT = 1;
 const AI_TEACHER_NAME = "Professor IA";
 const POLLINATIONS_CHAT_ENDPOINT = "https://text.pollinations.ai/openai";
@@ -205,6 +206,8 @@ let activeToastElement = null;
 let activeToastTimer = null;
 let backgroundRefreshTimer = null;
 let backgroundRefreshInProgress = false;
+let connectivityBackgroundSyncTimer = null;
+let connectivityBackgroundSyncInProgress = false;
 let roomLastMessageRefreshTimer = null;
 let roomLastMessageRefreshInProgress = false;
 let offlineQueueFlushInProgress = false;
@@ -1246,14 +1249,7 @@ function setupConnectivityDetection() {
     document.body.classList.remove("is-offline");
     if (currentUser?.nick) updateUserHeader(firebaseReady ? "Online" : "Reconectando...");
     showToast("Internet conectada", offlineMessageQueue.length ? "Enviando mensagens pendentes..." : "Acoes online foram liberadas novamente.");
-    if (currentUser?.nick && !firebaseReady) {
-      initFirebaseSession()
-        .then(() => flushOfflineMessageQueue())
-        .catch((error) => console.warn("Nao foi possivel reconectar ao Firebase.", error));
-    } else {
-      flushOfflineMessageQueue();
-    }
-    renderActiveRoom(false);
+    scheduleConnectivityBackgroundSync();
   });
 
   window.addEventListener("offline", () => {
@@ -1263,8 +1259,38 @@ function setupConnectivityDetection() {
     firebaseInitPromise = null;
     updateUserHeader("Offline");
     showToast("Sem internet", "Voce pode ler mensagens carregadas e escrever. Novas mensagens ficam aguardando conexao.");
-    renderActiveRoom(false);
   });
+}
+
+function scheduleConnectivityBackgroundSync() {
+  if (connectivityBackgroundSyncTimer) {
+    window.clearTimeout(connectivityBackgroundSyncTimer);
+  }
+
+  connectivityBackgroundSyncTimer = window.setTimeout(() => {
+    connectivityBackgroundSyncTimer = null;
+    runConnectivityBackgroundSync();
+  }, 0);
+}
+
+async function runConnectivityBackgroundSync() {
+  if (connectivityBackgroundSyncInProgress || !currentUser?.nick || logoutInProgress || !isInternetAvailable()) return;
+
+  connectivityBackgroundSyncInProgress = true;
+
+  try {
+    if (!firebaseReady || !currentFirebaseUid) {
+      await initFirebaseSession();
+    }
+
+    await flushOfflineMessageQueue();
+    await runBackgroundRefresh();
+  } catch (error) {
+    firebaseInitPromise = null;
+    console.warn("Nao foi possivel sincronizar a reconexao em segundo plano.", error);
+  } finally {
+    connectivityBackgroundSyncInProgress = false;
+  }
 }
 
 function setupBackgroundRuntime() {
@@ -9226,9 +9252,9 @@ function handleInviteNotifications() {
           openNotificationsModal();
         }
       );
-      playNotificationSound();
     }
-    showBrowserNotification(title, body, { tag: `invite:${invite.id}` });
+    const systemNotificationPromise = showBrowserNotification(title, body, { tag: `invite:${invite.id}` });
+    playNotificationSoundAfterSystemNotification(systemNotificationPromise);
     seen.add(invite.id);
   });
 
@@ -9283,13 +9309,13 @@ function handleRoomMessageNotification(room, options = {}) {
         "Abrir",
         () => openRoomFromNotification(room.id)
       );
-      playNotificationSound(wasMentioned ? "mention" : "default");
     }
-    showBrowserNotification(title, body, {
+    const systemNotificationPromise = showBrowserNotification(title, body, {
       tag: key,
       roomId: room.id,
       mentioned: wasMentioned
     });
+    playNotificationSoundAfterSystemNotification(systemNotificationPromise, wasMentioned ? "mention" : "default");
     markMessageNotificationShown(key);
   }
 
@@ -9379,15 +9405,15 @@ function handleForegroundFcmChatMessage(payload = {}, options = {}) {
       : data.body || `${data.roomName || getRoomDisplayName(room) || "AstroChat"}: Nova mensagem`;
     if (areInternalPushNotificationsEnabled()) {
       showToast(title, body, "Abrir", () => openRoomFromNotification(roomId));
-      playNotificationSound(wasMentioned ? "mention" : "default");
     }
-    showBrowserNotification(title, body, {
+    const systemNotificationPromise = showBrowserNotification(title, body, {
       tag: key,
       roomId,
       messageId: data.messageId || "",
       timestamp,
       mentioned: wasMentioned
     });
+    playNotificationSoundAfterSystemNotification(systemNotificationPromise, wasMentioned ? "mention" : "default");
     markMessageNotificationShown(key);
     refreshNotificationUi();
     return;
@@ -9626,6 +9652,30 @@ function playNotificationSound(kind = "default") {
   }
 }
 
+function canShowSystemBrowserNotification() {
+  return areSystemPushNotificationsEnabled() &&
+    "Notification" in window &&
+    Notification.permission === "granted";
+}
+
+function playNotificationSoundAfterSystemNotification(systemNotificationPromise, kind = "default") {
+  if (!areInternalPushNotificationsEnabled()) return;
+
+  if (!canShowSystemBrowserNotification()) {
+    playNotificationSound(kind);
+    return;
+  }
+
+  Promise.resolve(systemNotificationPromise)
+    .then((shown) => {
+      if (!shown) return;
+      window.setTimeout(() => playNotificationSound(kind), NOTIFICATION_SOUND_AFTER_SYSTEM_DELAY_MS);
+    })
+    .catch((error) => {
+      console.warn("Nao foi possivel aguardar a notificacao do sistema antes do som.", error);
+    });
+}
+
 async function requestBrowserNotificationPermission() {
   if (!("Notification" in window)) return "unsupported";
   if (!window.isSecureContext && location.hostname !== "localhost" && location.hostname !== "127.0.0.1") return "insecure";
@@ -9639,10 +9689,10 @@ async function requestBrowserNotificationPermission() {
   return Notification.permission;
 }
 
-function showBrowserNotification(title, body, data = {}) {
-  if (!areSystemPushNotificationsEnabled()) return;
-  if (!("Notification" in window)) return;
-  if (Notification.permission !== "granted") return;
+async function showBrowserNotification(title, body, data = {}) {
+  if (!areSystemPushNotificationsEnabled()) return false;
+  if (!("Notification" in window)) return false;
+  if (Notification.permission !== "granted") return false;
 
   const options = {
     body,
@@ -9665,29 +9715,29 @@ function showBrowserNotification(title, body, data = {}) {
         window.focus();
         notification.close();
       };
+      return true;
     } catch (error) {
       console.warn("Nao foi possivel mostrar notificacao do navegador.", error);
+      return false;
     }
   };
 
   if ("serviceWorker" in navigator) {
-    navigator.serviceWorker.ready
-      .then((registration) => {
-        if (registration?.showNotification) {
-          return registration.showNotification(title, options);
-        }
+    try {
+      const registration = await navigator.serviceWorker.ready;
+      if (registration?.showNotification) {
+        await registration.showNotification(title, options);
+        return true;
+      }
 
-        showWindowNotification();
-        return null;
-      })
-      .catch((error) => {
-        console.warn("Service worker indisponivel para notificacao.", error);
-        showWindowNotification();
-      });
-    return;
+      return showWindowNotification();
+    } catch (error) {
+      console.warn("Service worker indisponivel para notificacao.", error);
+      return showWindowNotification();
+    }
   }
 
-  showWindowNotification();
+  return showWindowNotification();
 }
 
 function isFcmVapidKeyConfigured() {
@@ -10106,17 +10156,11 @@ async function registerServiceWorker() {
   if (!("serviceWorker" in navigator)) return;
 
   try {
-    const hadController = Boolean(navigator.serviceWorker.controller);
-    let refreshingForUpdate = false;
     navigator.serviceWorker.addEventListener("controllerchange", () => {
-      if (!hadController) return;
-      if (refreshingForUpdate) return;
-      refreshingForUpdate = true;
-      window.location.reload();
+      syncSystemPushPreferenceToServiceWorker();
     });
 
     const registration = await navigator.serviceWorker.register("service-worker.js", { updateViaCache: "none" });
-    registration.waiting?.postMessage({ type: "SKIP_WAITING" });
     syncSystemPushPreferenceToServiceWorker();
     await registration.update();
   } catch (error) {
