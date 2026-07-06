@@ -3988,6 +3988,18 @@ async function sendFirebaseMessage(room, text, options = {}) {
     createdAtMillis
   };
 
+  if (options.forwarded) {
+    message.forwarded = true;
+    message.forwardedAt = serverTimestamp();
+    message.forwardedAtMillis = createdAtMillis;
+    message.forwardedByUid = currentFirebaseUid;
+    message.forwardedByNick = currentUser?.nick || "VocÃª";
+    message.forwardedFromRoomId = sanitizeNotificationRoomId(options.forwardedFromRoomId || "");
+    message.forwardedFromRoomName = sanitizeText(options.forwardedFromRoomName || "", 80);
+    message.forwardedOriginalMessageId = sanitizeMessageLocalId(options.forwardedOriginalMessageId || "");
+    message.forwardedOriginalAuthorNick = sanitizeText(options.forwardedOriginalAuthorNick || "", 48);
+  }
+
   if (learningFeedback) {
     message.learningFeedback = learningFeedback;
   }
@@ -5230,6 +5242,14 @@ function stripMessageForCache(message) {
     pendingOffline: Boolean(message.pendingOffline),
     localPending: Boolean(message.localPending),
     localOnly: Boolean(message.localOnly),
+    forwarded: Boolean(message.forwarded),
+    forwardedFromRoomId: message.forwardedFromRoomId || "",
+    forwardedFromRoomName: message.forwardedFromRoomName || "",
+    forwardedOriginalMessageId: message.forwardedOriginalMessageId || "",
+    forwardedOriginalAuthorNick: message.forwardedOriginalAuthorNick || "",
+    edited: Boolean(message.edited),
+    editedAtMillis: Number(message.editedAtMillis || 0),
+    editedByNick: message.editedByNick || "",
     deliveredBy: message.deliveredBy || {},
     readBy: message.readBy || {},
     mentionedUids: message.mentionedUids || {},
@@ -6044,13 +6064,18 @@ function createMessageElement(message, animated = false, options = {}) {
       : null;
 
   const deliveryStatus = createMessageDeliveryStatusElement(message);
+  const metaBadges = createMessageMetaBadgesElement(message);
 
   if (messageTools) {
     footer.classList.add("has-message-tools");
-    footer.append(messageTools, time);
-  } else {
-    footer.appendChild(time);
+    footer.append(messageTools);
   }
+
+  if (metaBadges.childElementCount) {
+    footer.appendChild(metaBadges);
+  }
+
+  footer.appendChild(time);
 
   if (deliveryStatus) {
     footer.appendChild(deliveryStatus);
@@ -6076,7 +6101,7 @@ function createMessageElement(message, animated = false, options = {}) {
   }
 
   if (messageSelectionMode) {
-    row.appendChild(createMessageSelectionButton(message));
+   // row.appendChild(createMessageSelectionButton(message));
   }
   row.appendChild(stack);
   setupSwipeReply(row, bubble, message);
@@ -6325,6 +6350,35 @@ function createMessageTopBar(message, isMine, showAuthor = true) {
   left.appendChild(author);
   topBar.appendChild(left);
   return topBar;
+}
+
+function createMessageMetaBadgesElement(message) {
+  const wrap = document.createElement("span");
+  wrap.className = "message-meta-badges";
+
+  if (message?.forwarded) {
+    const badge = document.createElement("span");
+    badge.className = "message-meta-badge forwarded";
+    badge.title = message.forwardedFromRoomName
+      ? `Encaminhada de ${message.forwardedFromRoomName}`
+      : "Mensagem encaminhada";
+    badge.innerHTML = `<i class="fa-solid fa-share" aria-hidden="true"></i>`;
+    badge.appendChild(document.createTextNode("Encaminhada"));
+    wrap.appendChild(badge);
+  }
+
+  if (message?.edited) {
+    const badge = document.createElement("span");
+    badge.className = "message-meta-badge edited";
+    badge.title = message.editedAtMillis
+      ? `Editada em ${formatDateTime(message.editedAtMillis)}`
+      : "Mensagem editada";
+    badge.innerHTML = `<i class="fa-solid fa-pen" aria-hidden="true"></i>`;
+    badge.appendChild(document.createTextNode("Editada"));
+    wrap.appendChild(badge);
+  }
+
+  return wrap;
 }
 
 function createMessageFooterTools(message, blockInfo) {
@@ -7128,6 +7182,7 @@ async function forwardSelectedMessagesToRooms() {
 
 async function forwardMessagesToRooms(selectedMessages, targetRooms) {
   const orderedMessages = selectedMessages.slice().sort(compareMessagesBySendOrder);
+  const sourceRoom = getActiveRoom();
   let offset = 0;
 
   for (const room of targetRooms) {
@@ -7137,7 +7192,12 @@ async function forwardMessagesToRooms(selectedMessages, targetRooms) {
       await sendFirebaseMessage(room, text, {
         ...getForwardSendOptions(room, text),
         createdAtMillis: Date.now() + offset,
-        replyPayload: null
+        replyPayload: null,
+        forwarded: true,
+        forwardedFromRoomId: sourceRoom?.id || "",
+        forwardedFromRoomName: sourceRoom ? getRoomDisplayName(sourceRoom) : "",
+        forwardedOriginalMessageId: message.id || "",
+        forwardedOriginalAuthorNick: message.authorNick || message.author || ""
       });
       offset += 1;
     }
@@ -11242,6 +11302,20 @@ function mapMessageData(messageId, data = {}) {
     pendingOffline: Boolean(data.pendingOffline),
     localPending: Boolean(data.localPending),
     localOnly: Boolean(data.localOnly),
+    forwarded: Boolean(data.forwarded),
+    forwardedAt: getRealtimeMillis(data.forwardedAt, data.forwardedAtMillis || 0),
+    forwardedAtMillis: Number(data.forwardedAtMillis || 0),
+    forwardedByUid: data.forwardedByUid || "",
+    forwardedByNick: data.forwardedByNick || "",
+    forwardedFromRoomId: data.forwardedFromRoomId || "",
+    forwardedFromRoomName: data.forwardedFromRoomName || "",
+    forwardedOriginalMessageId: data.forwardedOriginalMessageId || "",
+    forwardedOriginalAuthorNick: data.forwardedOriginalAuthorNick || "",
+    edited: Boolean(data.edited),
+    editedAt: getRealtimeMillis(data.editedAt, data.editedAtMillis || 0),
+    editedAtMillis: Number(data.editedAtMillis || 0),
+    editedByUid: data.editedByUid || "",
+    editedByNick: data.editedByNick || "",
     deliveredBy: normalizeMessageReceipts(data.deliveredBy),
     readBy: normalizeMessageReceipts(data.readBy),
     mentionedUids: normalizeMentionUidMap(data.mentionedUids),

@@ -2950,6 +2950,48 @@ button:disabled,
   color: rgba(255, 255, 255, 0.48);
 }
 
+.message-meta-badges {
+  min-width: 0;
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+
+.message-meta-badges + time {
+  margin-left: 0;
+}
+
+.message-meta-badge {
+  min-height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: rgba(222, 255, 246, 0.76);
+  background: rgba(255, 255, 255, 0.075);
+  font-size: 0.64rem;
+  font-weight: 850;
+  line-height: 1;
+  white-space: nowrap;
+}
+
+.message-meta-badge i {
+  font-size: 0.58rem;
+  color: rgba(157, 255, 224, 0.86);
+}
+
+.message-meta-badge.edited {
+  color: rgba(255, 235, 205, 0.78);
+}
+
+.message-meta-badge.edited i {
+  color: rgba(255, 217, 161, 0.9);
+}
+
 .message-footer-tools {
   display: inline-flex;
   align-items: center;
@@ -7852,7 +7894,7 @@ body[data-chat-theme]:not([data-chat-theme="padrao"]) .message-inline-audio-butt
 }
 
 .message-row.message-selected {
-  background: rgba(157, 255, 224, 0.055);
+  /* background: rgba(157, 255, 224, 0.055); */
 }
 
 .message-row.message-selected .bubble {
