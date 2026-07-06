@@ -94,6 +94,7 @@ const FRIEND_REQUEST_TYPE = "friend-request";
 const NICK_TAKEN_ERROR_CODE = "nick-taken";
 const MISSING_FIREBASE_USER_DATA_ERROR_CODE = "missing-firebase-user-data";
 const BACKGROUND_REFRESH_INTERVAL_MS = 45000;
+const CONNECTIVITY_BACKGROUND_SYNC_DELAY_MS = 800;
 const FCM_TOKEN_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const NOTIFICATION_SOUND_AFTER_SYSTEM_DELAY_MS = 180;
 const ROOM_LAST_MESSAGE_LISTEN_LIMIT = 1;
@@ -261,6 +262,10 @@ const remoteRoomMap = new Map();
 const roomMetadataUnsubscribers = new Map();
 const roomLastMessageUnsubscribers = new Map();
 const inviteUnsubscribers = {
+  received: new Map(),
+  sent: new Map()
+};
+const inviteSnapshotSignatures = {
   received: new Map(),
   sent: new Map()
 };
@@ -1379,8 +1384,10 @@ function setupConnectivityDetection() {
   window.addEventListener("offline", () => {
     internetOnline = false;
     document.body.classList.add("is-offline");
-    firebaseReady = false;
-    firebaseInitPromise = null;
+    if (!currentFirebaseUid) {
+      firebaseReady = false;
+      firebaseInitPromise = null;
+    }
     updateUserHeader("Offline");
     showToast("Sem internet", "Voce pode ler mensagens carregadas e escrever. Novas mensagens ficam aguardando conexao.");
   });
@@ -1394,7 +1401,7 @@ function scheduleConnectivityBackgroundSync() {
   connectivityBackgroundSyncTimer = window.setTimeout(() => {
     connectivityBackgroundSyncTimer = null;
     runConnectivityBackgroundSync();
-  }, 0);
+  }, CONNECTIVITY_BACKGROUND_SYNC_DELAY_MS);
 }
 
 async function runConnectivityBackgroundSync() {
@@ -1404,11 +1411,11 @@ async function runConnectivityBackgroundSync() {
 
   try {
     if (!firebaseReady || !currentFirebaseUid) {
-      await initFirebaseSession();
+      await initFirebaseSession({ preserveUi: true });
     }
 
     await flushOfflineMessageQueue();
-    await runBackgroundRefresh();
+    await runBackgroundRefresh({ preserveUi: true });
   } catch (error) {
     firebaseInitPromise = null;
     console.warn("Nao foi possivel sincronizar a reconexao em segundo plano.", error);
@@ -1476,7 +1483,9 @@ async function runBackgroundRefresh(options = {}) {
 
   try {
     if (!firebaseReady || !currentFirebaseUid) {
-      await initFirebaseSession();
+      await initFirebaseSession({
+        preserveUi: options.preserveUi === true || options.foreground === true || !document.hidden
+      });
     }
 
     if (!currentFirebaseUid) return;
@@ -1496,9 +1505,11 @@ async function runBackgroundRefresh(options = {}) {
     syncInviteSubscriptions("sent", Object.keys(sentIndexSnapshot.val() || {}));
     refreshFcmTokenRegistrationIfNeeded();
 
-    if (options.foreground || !document.hidden) {
+    if (options.foreground && options.preserveUi !== true) {
       updateUserHeader("Online");
       renderAll();
+    } else if (!document.hidden) {
+      updateUserHeader("Online");
     } else if (document.hidden) {
       updateUserHeader("Em segundo plano");
     }
@@ -1694,7 +1705,7 @@ async function enterApp() {
   }
 }
 
-async function initFirebaseSession() {
+async function initFirebaseSession(options = {}) {
   if (!currentUser?.nick) return;
   if (!isInternetAvailable()) {
     updateUserHeader("Offline");
@@ -1716,7 +1727,10 @@ async function initFirebaseSession() {
 
     await ensureCurrentFirebaseUserHasStoredData();
     await saveFirebaseUserProfile();
-    await preloadFirebaseInitialData();
+    await preloadFirebaseInitialData({
+      render: options.preserveUi !== true,
+      showSplash: options.preserveUi !== true
+    });
     attachFirebaseListeners({ preserveCachedData: true });
     setupFirebaseMessagingForegroundListener().catch((error) => {
       console.warn("Nao foi possivel preparar mensagens FCM em primeiro plano.", error);
@@ -1729,10 +1743,12 @@ async function initFirebaseSession() {
   return firebaseInitPromise;
 }
 
-async function preloadFirebaseInitialData() {
+async function preloadFirebaseInitialData(options = {}) {
   if (!currentFirebaseUid) return;
 
-  showSplash("Carregando salas e convites...");
+  if (options.showSplash !== false) {
+    showSplash("Carregando salas e convites...");
+  }
 
   const [roomIndexSnapshot, receivedIndexSnapshot, sentIndexSnapshot] = await Promise.all([
     get(ref(db, `userRooms/${currentFirebaseUid}`)),
@@ -1760,10 +1776,12 @@ async function preloadFirebaseInitialData() {
   ]);
 
   remoteRoomMap.clear();
+  roomMetadataSignatures.clear();
   roomSnapshots
     .filter((snapshot) => snapshot?.exists())
     .forEach((snapshot) => {
       remoteRoomMap.set(snapshot.key, mapRoomSnapshot(snapshot));
+      roomMetadataSignatures.set(snapshot.key, getRoomMetadataSignature(snapshot.key, snapshot.val() || {}));
     });
 
   remoteRooms = Array.from(remoteRoomMap.values());
@@ -1774,11 +1792,24 @@ async function preloadFirebaseInitialData() {
   inviteSnapshotBuckets.sent = sentInviteSnapshots
     .filter((snapshot) => snapshot?.exists())
     .map(mapInviteSnapshot);
+  rememberInviteSnapshotSignatures("received");
+  rememberInviteSnapshotSignatures("sent");
 
   mergeInviteBuckets();
   validateActiveRoom();
-  renderAll(true);
+  if (options.render !== false) {
+    renderAll(true);
+  }
   tryOpenPendingNotificationRoom();
+}
+
+function rememberInviteSnapshotSignatures(bucket) {
+  inviteSnapshotSignatures[bucket].clear();
+  inviteSnapshotBuckets[bucket].forEach((invite) => {
+    if (invite?.id) {
+      inviteSnapshotSignatures[bucket].set(invite.id, JSON.stringify(invite));
+    }
+  });
 }
 
 function waitForAuthState() {
@@ -2087,21 +2118,25 @@ function detachFirebaseListeners(options = {}) {
   activeTypingUsers = [];
   roomMetadataUnsubscribers.clear();
   roomLastMessageUnsubscribers.clear();
-  roomMetadataSignatures.clear();
   inviteUnsubscribers.received.clear();
   inviteUnsubscribers.sent.clear();
   if (!options.preserveCachedData) {
     remoteRoomMap.clear();
     inviteSnapshotBuckets.received = [];
     inviteSnapshotBuckets.sent = [];
+    roomMetadataSignatures.clear();
+    inviteSnapshotSignatures.received.clear();
+    inviteSnapshotSignatures.sent.clear();
   }
 }
 
 function syncRoomSubscriptions(roomIds) {
   const nextIds = new Set(roomIds);
+  let didChangeSubscriptions = false;
 
   Array.from(remoteRoomMap.keys()).forEach((roomId) => {
     if (!nextIds.has(roomId)) {
+      didChangeSubscriptions = true;
       remoteRoomMap.delete(roomId);
       roomMetadataSignatures.delete(roomId);
       roomMessagesById.delete(roomId);
@@ -2114,6 +2149,7 @@ function syncRoomSubscriptions(roomIds) {
 
   roomMetadataUnsubscribers.forEach((unsubscribe, roomId) => {
     if (!nextIds.has(roomId)) {
+      didChangeSubscriptions = true;
       unsubscribe();
       roomMetadataUnsubscribers.delete(roomId);
       const unsubscribeLastMessage = roomLastMessageUnsubscribers.get(roomId);
@@ -2130,6 +2166,7 @@ function syncRoomSubscriptions(roomIds) {
     ensureRoomLastMessageSubscription(roomId);
 
     if (roomMetadataUnsubscribers.has(roomId)) return;
+    didChangeSubscriptions = true;
 
     const unsubscribe = onValue(
       ref(db, `rooms/${roomId}`),
@@ -2168,10 +2205,12 @@ function syncRoomSubscriptions(roomIds) {
     roomMetadataUnsubscribers.set(roomId, unsubscribe);
   });
 
-  remoteRooms = Array.from(remoteRoomMap.values());
-  saveRemoteConversationCache();
-  validateActiveRoom();
-  renderAll();
+  if (didChangeSubscriptions) {
+    remoteRooms = Array.from(remoteRoomMap.values());
+    saveRemoteConversationCache();
+    validateActiveRoom();
+    renderAll();
+  }
   scheduleRoomLastMessagesRefresh(roomIds, 500);
   tryOpenPendingNotificationRoom();
 }
@@ -2179,27 +2218,50 @@ function syncRoomSubscriptions(roomIds) {
 function syncInviteSubscriptions(bucket, inviteIds) {
   const nextIds = new Set(inviteIds);
   const bucketMap = inviteUnsubscribers[bucket];
+  let didChangeSubscriptions = false;
 
+  const previousBucketLength = inviteSnapshotBuckets[bucket].length;
   inviteSnapshotBuckets[bucket] = inviteSnapshotBuckets[bucket].filter((invite) => nextIds.has(invite.id));
+  if (inviteSnapshotBuckets[bucket].length !== previousBucketLength) {
+    didChangeSubscriptions = true;
+  }
 
   bucketMap.forEach((unsubscribe, inviteId) => {
     if (!nextIds.has(inviteId)) {
+      didChangeSubscriptions = true;
       unsubscribe();
       bucketMap.delete(inviteId);
+      inviteSnapshotSignatures[bucket].delete(inviteId);
       inviteSnapshotBuckets[bucket] = inviteSnapshotBuckets[bucket].filter((invite) => invite.id !== inviteId);
     }
   });
 
   inviteIds.forEach((inviteId) => {
     if (bucketMap.has(inviteId)) return;
+    didChangeSubscriptions = true;
 
     const unsubscribe = onValue(
       ref(db, `invites/${inviteId}`),
       (snapshot) => {
-        inviteSnapshotBuckets[bucket] = inviteSnapshotBuckets[bucket].filter((invite) => invite.id !== inviteId);
+        const previousSignature = inviteSnapshotSignatures[bucket].get(inviteId) || "";
 
+        let mappedInvite = null;
         if (snapshot.exists()) {
-          inviteSnapshotBuckets[bucket].push(mapInviteSnapshot(snapshot));
+          mappedInvite = mapInviteSnapshot(snapshot);
+        }
+
+        const nextSignature = mappedInvite ? JSON.stringify(mappedInvite) : "";
+        if (previousSignature === nextSignature) return;
+
+        if (nextSignature) {
+          inviteSnapshotSignatures[bucket].set(inviteId, nextSignature);
+        } else {
+          inviteSnapshotSignatures[bucket].delete(inviteId);
+        }
+
+        inviteSnapshotBuckets[bucket] = inviteSnapshotBuckets[bucket].filter((invite) => invite.id !== inviteId);
+        if (mappedInvite) {
+          inviteSnapshotBuckets[bucket].push(mappedInvite);
         }
 
         mergeInviteBuckets();
@@ -2213,8 +2275,10 @@ function syncInviteSubscriptions(bucket, inviteIds) {
     bucketMap.set(inviteId, unsubscribe);
   });
 
-  mergeInviteBuckets();
-  renderAll();
+  if (didChangeSubscriptions) {
+    mergeInviteBuckets();
+    renderAll();
+  }
 }
 
 function mergeInviteBuckets() {
