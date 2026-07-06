@@ -4210,7 +4210,7 @@ button:disabled,
 }
 
 .profile-danger-button {
-  width: calc(100% - 40px);
+  width: calc(100% - 5px);
   /* margin: 0 20px 20px; */
 }
 
@@ -4303,9 +4303,7 @@ button:disabled,
   }
 
   .profile-danger-button {
-    width: calc(100% - 32px);
-    margin-left: 16px;
-    margin-right: 16px;
+    width: calc(100%);
   }
 }
 
@@ -7111,7 +7109,7 @@ body[data-chat-theme]:not([data-chat-theme="padrao"]) .profile-panel-card {
 
 body[data-chat-theme]:not([data-chat-theme="padrao"]) .profile-panel-actions {
   border-color: var(--line);
-  background: color-mix(in srgb, var(--theme-header-bg) 72%, transparent);
+  /* background: color-mix(in srgb, var(--theme-header-bg) 72%, transparent); */
 }
 
 body[data-chat-theme]:not([data-chat-theme="padrao"]) .profile-panel-orbit,
