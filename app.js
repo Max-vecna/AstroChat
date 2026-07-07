@@ -88,6 +88,8 @@ const CHAT_THEME_OPTION_MAP = CHAT_THEME_OPTIONS.reduce((map, option) => {
 }, {});
 
 const AI_ROOM_TYPE = "language-ai";
+const AI_TEACHER_MODE = "teacher";
+const AI_FRIEND_MODE = "friend";
 const USER_ROOM_TYPE = "user-room";
 const PRIVATE_ROOM_TYPE = "private-room";
 const FRIEND_REQUEST_TYPE = "friend-request";
@@ -99,6 +101,9 @@ const FCM_TOKEN_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
 const NOTIFICATION_SOUND_AFTER_SYSTEM_DELAY_MS = 180;
 const ROOM_LAST_MESSAGE_LISTEN_LIMIT = 1;
 const AI_TEACHER_NAME = "Professor IA";
+const AI_DIFFICULTY_ACTIVE = "active";
+const AI_DIFFICULTY_DONE = "done";
+const DEFAULT_AI_FRIEND_PERSONA = "amigo virtual leve, curioso, acolhedor e natural, sem agir como professor a menos que o usuario peca ajuda para estudar";
 const MESSAGE_PROCESSING_TRANSLATION = "translation";
 const MESSAGE_PROCESSING_LEARNING_TEST = "learning-test";
 const PUBLIC_TRANSLATION_PENDING_TEXT = "O texto está sendo traduzido...";
@@ -177,7 +182,7 @@ Quando o usuário escrever em outro idioma, corrija de forma gentil, explique os
 Quando fizer sentido, proponha exercícios rápidos, traduções, diálogos, vocabulário, pronúncia aproximada e revisão.
 Evite respostas longas demais. Seja claro, didático e amigável.`;
 
-let rooms = loadFromStorage(ROOMS_STORAGE_KEY, []).filter((room) => room?.type === AI_ROOM_TYPE);
+let rooms = loadFromStorage(ROOMS_STORAGE_KEY, []).filter((room) => room?.type === AI_ROOM_TYPE).map(normalizeLocalAiRoom);
 let remoteRooms = [];
 let friends = loadFromStorage(FRIENDS_STORAGE_KEY, []);
 let pendingRoomInviteFriendIds = new Set();
@@ -352,6 +357,7 @@ const profileVersionLabel = document.querySelector("#profileVersionLabel");
 const roomItemTemplate = document.querySelector("#roomItemTemplate");
 
 const createRoomButton = document.querySelector("#createRoomButton");
+const createAiFriendButton = document.querySelector("#createAiFriendButton");
 const emptyCreateRoomButton = document.querySelector("#emptyCreateRoomButton");
 const roomModal = document.querySelector("#roomModal");
 const roomForm = document.querySelector("#roomForm");
@@ -363,6 +369,15 @@ const roomFriendFilterInput = document.querySelector("#roomFriendFilterInput");
 const roomFriendsCounter = document.querySelector("#roomFriendsCounter");
 const closeRoomModalButton = document.querySelector("#closeRoomModalButton");
 const cancelRoomButton = document.querySelector("#cancelRoomButton");
+const aiFriendModal = document.querySelector("#aiFriendModal");
+const aiFriendForm = document.querySelector("#aiFriendForm");
+const aiFriendNameInput = document.querySelector("#aiFriendNameInput");
+const aiFriendPersonaInput = document.querySelector("#aiFriendPersonaInput");
+const aiFriendLanguageSelect = document.querySelector("#aiFriendLanguageSelect");
+const aiFriendAvatarSelect = document.querySelector("#aiFriendAvatarSelect");
+const aiFriendAvatarPreview = document.querySelector("#aiFriendAvatarPreview");
+const closeAiFriendModalButton = document.querySelector("#closeAiFriendModalButton");
+const cancelAiFriendButton = document.querySelector("#cancelAiFriendButton");
 
 const inviteButton = document.querySelector("#inviteButton");
 const inviteModal = document.querySelector("#inviteModal");
@@ -411,6 +426,15 @@ const roomSettingsSpeechPlaybackButton = document.querySelector("#roomSettingsSp
 const roomSettingsSpeechPlaybackCheckbox = document.querySelector("#roomSettingsSpeechPlaybackCheckbox");
 const roomSettingsClearChatButton = document.querySelector("#roomSettingsClearChatButton");
 const roomSettingsPinButton = document.querySelector("#roomSettingsPinButton");
+const roomSettingsSelectMessagesButton = document.querySelector("#roomSettingsSelectMessagesButton");
+const roomLanguageSettingsSection = document.querySelector("#roomLanguageSettingsSection");
+const roomMembersSettingsSection = document.querySelector("#roomMembersSettingsSection");
+const roomDangerSettingsSection = document.querySelector("#roomDangerSettingsSection");
+const teacherDifficultySettingsSection = document.querySelector("#teacherDifficultySettingsSection");
+const teacherDifficultyForm = document.querySelector("#teacherDifficultyForm");
+const teacherDifficultyInput = document.querySelector("#teacherDifficultyInput");
+const teacherDifficultyList = document.querySelector("#teacherDifficultyList");
+const teacherDifficultyCounter = document.querySelector("#teacherDifficultyCounter");
 const toastRegion = document.querySelector("#toastRegion");
 const suggestTextButton = document.querySelector("#suggestTextButton");
 const spellcheckButton = document.querySelector("#spellcheckButton");
@@ -566,13 +590,22 @@ spaceAvatarSelect?.addEventListener("change", updateLoginAvatarPreview);
 logoutButton.addEventListener("click", handleSessionLogout);
 
 createRoomButton.addEventListener("click", openRoomModal);
+createAiFriendButton?.addEventListener("click", openAiFriendModal);
 emptyCreateRoomButton.addEventListener("click", openRoomModal);
 closeRoomModalButton.addEventListener("click", closeRoomModal);
 cancelRoomButton.addEventListener("click", closeRoomModal);
 roomFriendFilterInput?.addEventListener("input", renderRoomFriendPicker);
+closeAiFriendModalButton?.addEventListener("click", closeAiFriendModal);
+cancelAiFriendButton?.addEventListener("click", closeAiFriendModal);
+aiFriendAvatarSelect?.addEventListener("change", updateAiFriendAvatarPreview);
+aiFriendForm?.addEventListener("submit", handleAiFriendFormSubmit);
 
 roomModal.addEventListener("click", (event) => {
   if (event.target === roomModal) closeRoomModal();
+});
+
+aiFriendModal?.addEventListener("click", (event) => {
+  if (event.target === aiFriendModal) closeAiFriendModal();
 });
 
 roomForm.addEventListener("submit", async (event) => {
@@ -625,7 +658,7 @@ messageForm.addEventListener("submit", async (event) => {
 
   if (isAiRoom(activeRoom)) {
     if (aiReplyInProgress) return;
-    if (!requireInternet("conversar com o Professor IA")) return;
+    if (!requireInternet(getAiInternetActionLabel(activeRoom))) return;
     await clearCurrentTypingStatus();
     messageInput.value = "";
     await handleAiRoomMessage(text);
@@ -765,6 +798,11 @@ roomSettingsLiveTypingCheckbox?.addEventListener("change", () => toggleLiveTypin
 roomSettingsSpeechPlaybackCheckbox?.addEventListener("change", () => setSpeechPlaybackForActiveRoom(Boolean(roomSettingsSpeechPlaybackCheckbox.checked)));
 roomSettingsClearChatButton?.addEventListener("click", handleClearActiveChat);
 roomSettingsPinButton?.addEventListener("click", toggleActiveRoomPin);
+roomSettingsSelectMessagesButton?.addEventListener("click", () => {
+  closeRoomSettingsModal();
+  setMessageSelectionMode(true);
+});
+teacherDifficultyForm?.addEventListener("submit", handleTeacherDifficultySubmit);
 messageSearchInput?.addEventListener("input", updateMessageSearchFromControls);
 messageSearchUserInput?.addEventListener("input", updateMessageSearchFromControls);
 messageSearchDateInput?.addEventListener("input", updateMessageSearchFromControls);
@@ -785,10 +823,10 @@ async function handleClearActiveChat() {
   if (!activeRoom) return;
 
   if (isAiRoom(activeRoom)) {
-    const confirmClear = window.confirm("Reiniciar a conversa com o Professor IA?");
+    const confirmClear = window.confirm(`Reiniciar a conversa com ${getRoomDisplayName(activeRoom)}?`);
     if (!confirmClear) return;
 
-    activeRoom.messages = [createAiWelcomeMessage()];
+    activeRoom.messages = [createAiWelcomeMessage(activeRoom)];
     activeRoom.updatedAt = Date.now();
     saveRooms();
     forceMessageRerender(activeRoom.id);
@@ -1112,6 +1150,7 @@ function closeUserSessionModals() {
   closeNotificationsModal();
   closeProfileSettingsModal();
   closeRoomSettingsModal();
+  closeAiFriendModal();
   closePrivateModal();
   closeRoomModal();
   closeInviteModal();
@@ -1142,7 +1181,7 @@ function clearStoredAstroChatData() {
 }
 
 function loadLocalSessionData() {
-  rooms = loadFromStorage(ROOMS_STORAGE_KEY, []).filter((room) => room?.type === AI_ROOM_TYPE);
+  rooms = loadFromStorage(ROOMS_STORAGE_KEY, []).filter((room) => room?.type === AI_ROOM_TYPE).map(normalizeLocalAiRoom);
   friends = loadFromStorage(FRIENDS_STORAGE_KEY, []);
   notificationState = normalizeNotificationState(loadFromStorage(NOTIFICATIONS_STORAGE_KEY, {}));
   internalPushNotificationsEnabled = loadFromStorage(INTERNAL_PUSH_STORAGE_KEY, true) !== false;
@@ -2657,6 +2696,7 @@ function updateLiveTypingButtonState() {
     const icon = roomSettingsClearChatButton.querySelector("i");
     if (span) span.textContent = activeRoom && isAiRoom(activeRoom) ? "Reiniciar IA" : "Limpar conversa";
     if (small) small.textContent = activeRoom && isAiRoom(activeRoom) ? "Recomeça o professor" : "Remove mensagens";
+    if (small && activeRoom && isAiRoom(activeRoom)) small.textContent = "Recomeca este chat";
     if (icon) icon.className = activeRoom && isAiRoom(activeRoom) ? "fa-solid fa-rotate-right" : "fa-solid fa-broom";
   }
 
@@ -2789,6 +2829,19 @@ function updateMessageInputPlaceholder(room = getActiveRoom()) {
   }
 
   const language = getRoomLanguage(room);
+  if (isAiTeacherRoom(room)) {
+    const focus = getActiveAiDifficulties(room)[0]?.text || "";
+    messageInput.placeholder = focus
+      ? `Treine comigo: ${focus}`
+      : "Pergunte sobre ingles, espanhol, vocabulario, pronuncia...";
+    return;
+  }
+
+  if (isAiFriendRoom(room)) {
+    messageInput.placeholder = `Mensagem para ${getRoomDisplayName(room)}`;
+    return;
+  }
+
   if (isAiRoom(room)) {
     messageInput.placeholder = "Pergunte sobre ingles, espanhol, vocabulario, pronuncia...";
     return;
@@ -3357,6 +3410,7 @@ function ensureUserAiRoom() {
     aiRoom = {
       id: aiRoomId,
       type: AI_ROOM_TYPE,
+      aiMode: AI_TEACHER_MODE,
       name: AI_TEACHER_NAME,
       avatar: "IA",
       description: "Treine inglês, espanhol e outros idiomas com uma IA professora.",
@@ -3364,16 +3418,26 @@ function ensureUserAiRoom() {
       color: "linear-gradient(135deg, #6d5dfc, #10b486)",
       ownerNick: currentUser.nick,
       members: [currentUser.nick, AI_TEACHER_NAME],
-      messages: [createAiWelcomeMessage()],
+      aiDifficulties: [],
+      messages: [],
       createdAt: Date.now(),
       updatedAt: Date.now()
     };
+    aiRoom.messages = [createAiWelcomeMessage(aiRoom)];
     rooms.push(aiRoom);
     changed = true;
   }
 
+  const previousAiMode = aiRoom.aiMode;
+  const previousDifficultiesSignature = JSON.stringify(aiRoom.aiDifficulties || []);
+  aiRoom.aiMode = AI_TEACHER_MODE;
+  aiRoom.aiDifficulties = normalizeAiDifficulties(aiRoom.aiDifficulties);
+  if (previousAiMode !== AI_TEACHER_MODE || previousDifficultiesSignature !== JSON.stringify(aiRoom.aiDifficulties || [])) {
+    changed = true;
+  }
+
   if (!aiRoom.messages?.length) {
-    aiRoom.messages = [createAiWelcomeMessage()];
+    aiRoom.messages = [createAiWelcomeMessage(aiRoom)];
     changed = true;
   }
 
@@ -3564,7 +3628,13 @@ function getRoomListGroups(roomList) {
       key: "assistant",
       title: "Professor IA",
       icon: "fa-solid fa-language",
-      rooms: unpinnedRooms.filter((room) => isAiRoom(room))
+      rooms: unpinnedRooms.filter((room) => isAiTeacherRoom(room))
+    },
+    {
+      key: "ai-friends",
+      title: "Amigos IA",
+      icon: "fa-solid fa-robot",
+      rooms: unpinnedRooms.filter((room) => isAiFriendRoom(room))
     },
     {
       key: "private",
@@ -3620,6 +3690,7 @@ function createRoomListItem(room) {
   item.dataset.roomId = room.id;
   item.classList.toggle("active", room.id === activeRoomId);
   item.classList.toggle("ai-room", isAiRoom(room));
+  item.classList.toggle("ai-friend-room", isAiFriendRoom(room));
   item.classList.toggle("private-room", isPrivateRoom(room));
   item.classList.toggle("group-room", !isAiRoom(room) && !isPrivateRoom(room));
   item.classList.toggle("is-pinned", isConversationPinned(room.id));
@@ -3684,7 +3755,7 @@ function setupRoomListLongPress(item, room) {
 }
 
 function openRoomListContextMenu(room, item) {
-  if (!room?.id || isAiRoom(room)) return;
+  if (!room?.id) return;
 
   closeRoomListContextMenu();
   roomListContextMenuRoomId = room.id;
@@ -3696,10 +3767,16 @@ function openRoomListContextMenu(room, item) {
   menu.dataset.roomId = room.id;
 
   const pinLabel = isConversationPinned(room.id) ? "Desafixar" : "Fixar";
-  menu.append(
-    createRoomListContextButton(isConversationPinned(room.id) ? "fa-solid fa-thumbtack-slash" : "fa-solid fa-thumbtack", pinLabel, () => toggleRoomPin(room)),
-    createRoomListContextButton("fa-solid fa-trash-can", isRoomOwner(room) ? "Excluir sala" : "Remover da lista", () => deleteOrLeaveRoomFromList(room), "danger")
-  );
+  const buttons = [
+    createRoomListContextButton(isConversationPinned(room.id) ? "fa-solid fa-thumbtack-slash" : "fa-solid fa-thumbtack", pinLabel, () => toggleRoomPin(room))
+  ];
+
+  if (!isAiTeacherRoom(room)) {
+    const deleteLabel = isAiFriendRoom(room) ? "Excluir amigo IA" : isRoomOwner(room) ? "Excluir sala" : "Remover da lista";
+    buttons.push(createRoomListContextButton("fa-solid fa-trash-can", deleteLabel, () => deleteOrLeaveRoomFromList(room), "danger"));
+  }
+
+  menu.append(...buttons);
 
   document.body.appendChild(menu);
   positionFloatingMenu(menu, item);
@@ -3742,7 +3819,14 @@ function toggleRoomPin(room) {
 }
 
 async function deleteOrLeaveRoomFromList(room) {
-  if (!room || isAiRoom(room)) return;
+  if (!room) return;
+
+  if (isAiFriendRoom(room)) {
+    deleteAiFriendRoom(room);
+    return;
+  }
+
+  if (isAiRoom(room)) return;
 
   if (isRoomOwner(room)) {
     await deleteActiveRoomForEveryone(room);
@@ -3785,7 +3869,7 @@ function renderActiveRoom(forceMessages = false) {
   }
   renderReplyPreview();
   inviteButton.hidden = isAi;
-  roomMenuButton.hidden = isAi;
+  roomMenuButton.hidden = false;
   updateLiveTypingButtonState();
   subscribeToActiveRoomTyping();
   if (clearChatButton) {
@@ -3922,6 +4006,104 @@ function addMessage(roomId, message) {
   }
 
   renderRoomList(searchInput.value);
+}
+
+function addLocalAiMessage(room, options = {}) {
+  if (!room?.id) return null;
+
+  const sourceText = cleanMessageText(options.text || "");
+  if (!sourceText) return null;
+
+  const language = getRoomLanguage(room);
+  const shouldTranslate = Boolean(isAiFriendRoom(room) && language?.code && !options.skipTranslation);
+  const now = Number(options.time || 0) || Date.now();
+  const message = {
+    id: options.id || createId("msg"),
+    from: options.from || "ai",
+    author: options.author || getAiAuthorName(room),
+    text: shouldTranslate ? PUBLIC_TRANSLATION_PENDING_TEXT : sourceText,
+    originalText: "",
+    translatedText: "",
+    translationSourceText: shouldTranslate ? sourceText : "",
+    targetLanguageCode: shouldTranslate ? language.code || "" : "",
+    targetLanguageName: shouldTranslate ? language.name || "" : "",
+    translationDisabled: false,
+    translationStatus: shouldTranslate ? "pending" : "none",
+    translationError: false,
+    deliveryStatus: shouldTranslate ? "processing" : "sent",
+    pendingOffline: false,
+    localPending: false,
+    localOnly: true,
+    processingType: shouldTranslate ? MESSAGE_PROCESSING_TRANSLATION : "",
+    replyTo: options.replyTo || null,
+    time: now,
+    createdAtMillis: now
+  };
+
+  addMessage(room.id, message);
+
+  if (shouldTranslate) {
+    translateLocalAiMessage(room.id, message.id, sourceText, language);
+  }
+
+  return message;
+}
+
+async function translateLocalAiMessage(roomId, messageId, sourceText, language) {
+  const cleanSourceText = cleanMessageText(sourceText, 2000);
+  if (!roomId || !messageId || !cleanSourceText || !language?.code) return;
+
+  try {
+    const translated = cleanMessageText(await translateMessageText(cleanSourceText, language), 1000);
+    if (!translated) throw new Error("Traducao vazia.");
+
+    const hasTranslation = translated !== cleanSourceText;
+    updateLocalAiMessage(roomId, messageId, {
+      text: hasTranslation ? translated : cleanSourceText,
+      originalText: hasTranslation ? cleanSourceText : "",
+      translatedText: hasTranslation ? translated : "",
+      translationSourceText: "",
+      translationStatus: "done",
+      translationError: false,
+      deliveryStatus: "sent",
+      processingType: ""
+    });
+  } catch (error) {
+    console.warn("Nao foi possivel traduzir mensagem local de IA.", error);
+    updateLocalAiMessage(roomId, messageId, {
+      text: PUBLIC_TRANSLATION_ERROR_TEXT,
+      originalText: "",
+      translatedText: "",
+      translationSourceText: cleanSourceText,
+      translationStatus: "error",
+      translationError: true,
+      deliveryStatus: "sent",
+      processingType: ""
+    });
+  }
+}
+
+function updateLocalAiMessage(roomId, messageId, patch = {}) {
+  const room = rooms.find((item) => item.id === roomId);
+  if (!room?.messages?.length || !messageId) return;
+
+  let changed = false;
+  room.messages = room.messages.map((message) => {
+    if (message.id !== messageId) return message;
+    changed = true;
+    return { ...message, ...patch };
+  });
+
+  if (!changed) return;
+
+  room.updatedAt = Date.now();
+  saveRooms();
+  if (room.id === activeRoomId) {
+    renderRoomMessages(room);
+    updateRoomItemAfterNewMessage(room);
+  } else {
+    renderRoomList(searchInput.value);
+  }
 }
 
 async function sendFirebaseMessage(room, text, options = {}) {
@@ -8430,12 +8612,18 @@ function appendMessage(message) {
 
 function renderEmptyConversation() {
   const activeRoom = getActiveRoom();
-  const empty = isAiRoom(activeRoom)
+  const empty = isAiTeacherRoom(activeRoom)
     ? createEmptyState(
       "fa-solid fa-language",
       "Professor IA pronto",
       "Pergunte algo como: Quero treinar inglês básico, corrija minha frase ou crie um diálogo em espanhol."
     )
+    : isAiFriendRoom(activeRoom)
+      ? createEmptyState(
+        "fa-solid fa-robot",
+        `${getRoomDisplayName(activeRoom)} pronto`,
+        "Envie uma mensagem como em uma conversa privada normal."
+      )
     : createEmptyState(
       "fa-regular fa-comments",
       "Sala vazia",
@@ -8889,6 +9077,8 @@ async function inviteFriendToActiveRoom(friend) {
   }
 
   if (isAiRoom(activeRoom)) {
+    window.alert("Salas IA sao exclusivas do usuario e nao aceitam convites.");
+    return;
     window.alert("A sala do Professor IA é exclusiva do usuário e não aceita convites.");
     return;
   }
@@ -9073,7 +9263,7 @@ async function findFirebaseUsersByNick(nick) {
 
 function openRoomSettingsModal() {
   const activeRoom = getActiveRoom();
-  if (!activeRoom || isAiRoom(activeRoom)) return;
+  if (!activeRoom) return;
 
   renderRoomSettings(activeRoom);
   roomSettingsModal.hidden = false;
@@ -9087,10 +9277,39 @@ function closeRoomSettingsModal() {
 }
 
 function renderRoomSettings(room = getActiveRoom()) {
-  if (!room || isAiRoom(room)) return;
+  if (!room) return;
+
+  if (isAiRoom(room)) {
+    const isTeacher = isAiTeacherRoom(room);
+    const isFriend = isAiFriendRoom(room);
+    const language = getRoomLanguage(room);
+    roomSettingsSubtitle.textContent = isTeacher
+      ? `${getRoomDisplayName(room)} · foco de estudo e conversa local`
+      : `${getRoomDisplayName(room)} · amigo IA local`;
+    if (roomLanguageSettingsSection) roomLanguageSettingsSection.hidden = !isFriend;
+    if (roomSettingsLanguageSelect) roomSettingsLanguageSelect.value = language?.code || "";
+    if (saveRoomLanguageButton) saveRoomLanguageButton.disabled = false;
+    if (roomMembersSettingsSection) roomMembersSettingsSection.hidden = true;
+    if (teacherDifficultySettingsSection) teacherDifficultySettingsSection.hidden = !isTeacher;
+    if (roomSettingsSelectMessagesButton) roomSettingsSelectMessagesButton.hidden = true;
+    if (deleteRoomButton) {
+      deleteRoomButton.hidden = isTeacher;
+      deleteRoomButton.querySelector("span").textContent = "Excluir amigo IA";
+      deleteRoomButton.querySelector("i").className = "fa-solid fa-trash-can";
+    }
+    updateLiveTypingButtonState();
+    updateRoomPinButtonState(room);
+    renderTeacherDifficultySettings(room);
+    return;
+  }
 
   const isOwner = isRoomOwner(room);
   const language = getRoomLanguage(room);
+  if (roomLanguageSettingsSection) roomLanguageSettingsSection.hidden = false;
+  if (roomMembersSettingsSection) roomMembersSettingsSection.hidden = false;
+  if (teacherDifficultySettingsSection) teacherDifficultySettingsSection.hidden = true;
+  if (roomSettingsSelectMessagesButton) roomSettingsSelectMessagesButton.hidden = false;
+  if (deleteRoomButton) deleteRoomButton.hidden = false;
   roomSettingsSubtitle.textContent = `${getRoomDisplayName(room)} · ${isOwner ? "você criou esta sala" : "participante"}`;
   roomSettingsLanguageSelect.value = language?.code || "";
   saveRoomLanguageButton.disabled = !firebaseReady;
@@ -9103,6 +9322,118 @@ function renderRoomSettings(room = getActiveRoom()) {
   deleteRoomButton.querySelector("i").className = isOwner ? "fa-solid fa-trash-can" : "fa-solid fa-right-from-bracket";
 
   renderRoomMembers(room);
+}
+
+function renderTeacherDifficultySettings(room = getActiveRoom()) {
+  if (!teacherDifficultyList || !teacherDifficultyCounter) return;
+
+  teacherDifficultyList.innerHTML = "";
+  if (!isAiTeacherRoom(room)) {
+    teacherDifficultyCounter.textContent = "Nenhuma ativa";
+    return;
+  }
+
+  room.aiDifficulties = normalizeAiDifficulties(room.aiDifficulties);
+  const activeDifficulties = getActiveAiDifficulties(room);
+  const doneDifficulties = getDoneAiDifficulties(room);
+  teacherDifficultyCounter.textContent = activeDifficulties.length
+    ? `${activeDifficulties.length} ativa${activeDifficulties.length === 1 ? "" : "s"}`
+    : "Nenhuma ativa";
+
+  if (!activeDifficulties.length && !doneDifficulties.length) {
+    teacherDifficultyList.appendChild(createEmptyState(
+      "fa-solid fa-graduation-cap",
+      "Sem dificuldades cadastradas",
+      "Adicione um ponto para o Professor IA focar nas proximas respostas."
+    ));
+    return;
+  }
+
+  [...activeDifficulties, ...doneDifficulties].forEach((difficulty) => {
+    const isDone = difficulty.status === AI_DIFFICULTY_DONE;
+    const item = document.createElement("article");
+    item.className = `teacher-difficulty-item${isDone ? " is-done" : ""}`;
+    item.innerHTML = `
+      <div class="teacher-difficulty-main">
+        <strong>${escapeHtml(difficulty.text)}</strong>
+        <span>${isDone ? "Concluida" : "Foco ativo"}</span>
+      </div>
+      <div class="teacher-difficulty-actions"></div>
+    `;
+
+    const actions = item.querySelector(".teacher-difficulty-actions");
+    if (!isDone) {
+      const doneButton = createActionButton("small-action icon-only-action", "fa-solid fa-check", "Marcar como concluida");
+      doneButton.addEventListener("click", () => setTeacherDifficultyStatus(difficulty.id, AI_DIFFICULTY_DONE));
+      actions.appendChild(doneButton);
+    }
+
+    const removeButton = createActionButton("danger-action icon-only-action", "fa-solid fa-trash-can", "Remover dificuldade");
+    removeButton.addEventListener("click", () => removeTeacherDifficulty(difficulty.id));
+    actions.appendChild(removeButton);
+    teacherDifficultyList.appendChild(item);
+  });
+}
+
+function handleTeacherDifficultySubmit(event) {
+  event.preventDefault();
+
+  const room = getActiveRoom();
+  if (!isAiTeacherRoom(room)) return;
+
+  const text = sanitizeText(teacherDifficultyInput?.value || "", 120);
+  if (!text) return;
+
+  room.aiDifficulties = normalizeAiDifficulties(room.aiDifficulties);
+  const alreadyActive = getActiveAiDifficulties(room).some((difficulty) => normalize(difficulty.text) === normalize(text));
+  if (alreadyActive) {
+    showToast("Dificuldade repetida", "Esse foco ja esta ativo no Professor IA.");
+    return;
+  }
+
+  room.aiDifficulties.unshift({
+    id: createId("diff"),
+    text,
+    status: AI_DIFFICULTY_ACTIVE,
+    createdAt: Date.now(),
+    completedAt: 0
+  });
+  if (teacherDifficultyInput) teacherDifficultyInput.value = "";
+  persistTeacherDifficultyChange(room, "Dificuldade adicionada", "O Professor IA vai focar nesse ponto nas proximas respostas.");
+}
+
+function setTeacherDifficultyStatus(difficultyId, status) {
+  const room = getActiveRoom();
+  if (!isAiTeacherRoom(room) || !difficultyId) return;
+
+  room.aiDifficulties = normalizeAiDifficulties(room.aiDifficulties).map((difficulty) => (
+    difficulty.id === difficultyId
+      ? {
+        ...difficulty,
+        status: status === AI_DIFFICULTY_DONE ? AI_DIFFICULTY_DONE : AI_DIFFICULTY_ACTIVE,
+        completedAt: status === AI_DIFFICULTY_DONE ? Date.now() : 0
+      }
+      : difficulty
+  ));
+
+  persistTeacherDifficultyChange(room, "Dificuldade concluida", "O Professor IA nao vai mais priorizar esse ponto.");
+}
+
+function removeTeacherDifficulty(difficultyId) {
+  const room = getActiveRoom();
+  if (!isAiTeacherRoom(room) || !difficultyId) return;
+
+  room.aiDifficulties = normalizeAiDifficulties(room.aiDifficulties).filter((difficulty) => difficulty.id !== difficultyId);
+  persistTeacherDifficultyChange(room, "Dificuldade removida", "Esse foco saiu da sala do Professor IA.");
+}
+
+function persistTeacherDifficultyChange(room, title, message) {
+  room.updatedAt = Date.now();
+  saveRooms();
+  renderTeacherDifficultySettings(room);
+  renderActiveRoom(false);
+  renderRoomList(searchInput.value);
+  showToast(title, message);
 }
 
 function renderRoomMembers(room = getActiveRoom()) {
@@ -9253,7 +9584,23 @@ async function removeMemberFromActiveRoom(member) {
 
 async function saveActiveRoomLanguageFromSettings() {
   const room = getActiveRoom();
-  if (!room || isAiRoom(room)) return;
+  if (!room) return;
+
+  if (isAiFriendRoom(room)) {
+    const language = getLanguageOption(roomSettingsLanguageSelect?.value || "");
+    room.languageCode = language?.code || "";
+    room.languageName = language?.name || "";
+    room.translationEnabled = Boolean(language?.code);
+    room.updatedAt = Date.now();
+    saveRooms();
+    showToast("Idioma atualizado", language?.code ? `Novas mensagens serao traduzidas para ${language.label}.` : "A traducao automatica foi desativada neste amigo IA.");
+    renderRoomSettings(room);
+    renderActiveRoom(false);
+    renderRoomList(searchInput.value);
+    return;
+  }
+
+  if (isAiRoom(room)) return;
   if (!requireFirebaseConnection("salvar idioma da sala")) return;
 
   const language = getLanguageOption(roomSettingsLanguageSelect?.value || "");
@@ -9277,13 +9624,37 @@ async function saveActiveRoomLanguageFromSettings() {
 
 async function handleDeleteOrLeaveRoomFromSettings() {
   const room = getActiveRoom();
-  if (!room || isAiRoom(room)) return;
+  if (!room) return;
+
+  if (isAiFriendRoom(room)) {
+    deleteAiFriendRoom(room);
+    return;
+  }
+
+  if (isAiRoom(room)) return;
 
   if (isRoomOwner(room)) {
     await deleteActiveRoomForEveryone(room);
   } else {
     await leaveActiveRoom(room);
   }
+}
+
+function deleteAiFriendRoom(room) {
+  if (!isAiFriendRoom(room)) return;
+
+  const ok = window.confirm(`Excluir o amigo IA ${getRoomDisplayName(room)} e apagar esta conversa?`);
+  if (!ok) return;
+
+  rooms = rooms.filter((item) => item.id !== room.id);
+  renderedMessageIdsByRoom.delete(room.id);
+  if (activeRoomId === room.id) {
+    activeRoomId = ensureUserAiRoom()?.id || null;
+  }
+  saveRooms();
+  closeRoomSettingsModal();
+  renderAll(true);
+  showToast("Amigo IA excluido", `${getRoomDisplayName(room)} foi removido deste navegador.`);
 }
 
 async function deleteActiveRoomForEveryone(room) {
@@ -10149,6 +10520,102 @@ function closeRoomModal() {
   roomModal.setAttribute("aria-hidden", "true");
 }
 
+function openAiFriendModal() {
+  if (!currentUser?.nick) return;
+
+  aiFriendForm?.reset();
+  if (aiFriendLanguageSelect) aiFriendLanguageSelect.value = "en";
+  if (aiFriendAvatarSelect) aiFriendAvatarSelect.value = "fa-solid fa-robot";
+  updateAiFriendAvatarPreview();
+  if (!aiFriendModal) return;
+  aiFriendModal.hidden = false;
+  aiFriendModal.setAttribute("aria-hidden", "false");
+  window.setTimeout(() => aiFriendNameInput?.focus(), 0);
+}
+
+function closeAiFriendModal() {
+  if (!aiFriendModal) return;
+  aiFriendModal.hidden = true;
+  aiFriendModal.setAttribute("aria-hidden", "true");
+}
+
+function updateAiFriendAvatarPreview() {
+  if (!aiFriendAvatarPreview) return;
+  const icon = getSafeSpaceAvatarIcon(aiFriendAvatarSelect?.value || "fa-solid fa-robot");
+  aiFriendAvatarPreview.innerHTML = `<i class="${escapeHtml(icon)}" aria-hidden="true"></i>`;
+}
+
+function handleAiFriendFormSubmit(event) {
+  event.preventDefault();
+
+  const name = sanitizeText(aiFriendNameInput?.value || "", 32);
+  const persona = sanitizeText(aiFriendPersonaInput?.value || "", 220) || DEFAULT_AI_FRIEND_PERSONA;
+  const avatarIcon = getSafeSpaceAvatarIcon(aiFriendAvatarSelect?.value || "fa-solid fa-robot");
+  const language = getLanguageOption(aiFriendLanguageSelect?.value || "");
+
+  if (!name) return;
+
+  const newRoom = createAiFriendRoom(name, persona, avatarIcon, language);
+  activeRoomId = newRoom.id;
+  suppressAutoRoomSelection = false;
+  closeAiFriendModal();
+  setActiveView("rooms");
+  forceMessageRerender(newRoom.id);
+  renderAll(true);
+  appShell.classList.add("chat-open");
+  showToast("Amigo IA criado", `${name} ja esta pronto para conversar.`);
+}
+
+function createAiFriendRoom(name, persona, avatarIcon, language = getLanguageOption("")) {
+  const now = Date.now();
+  const room = {
+    id: getAiFriendRoomId(currentUser?.nick || "usuario", name),
+    type: AI_ROOM_TYPE,
+    aiMode: AI_FRIEND_MODE,
+    name,
+    avatar: getInitials(name),
+    avatarIcon,
+    description: persona,
+    persona,
+    languageCode: language?.code || "",
+    languageName: language?.name || "",
+    translationEnabled: Boolean(language?.code),
+    status: "Amigo IA · conversa privada local",
+    color: getGradientByText(`${name}-${persona}`),
+    ownerNick: currentUser?.nick || "",
+    members: [currentUser?.nick || "Voce", name],
+    messages: [],
+    createdAt: now,
+    updatedAt: now
+  };
+
+  const welcomeMessage = createAiWelcomeMessage(room);
+  if (language?.code) {
+    const sourceText = welcomeMessage.text;
+    Object.assign(welcomeMessage, {
+      text: PUBLIC_TRANSLATION_PENDING_TEXT,
+      originalText: "",
+      translatedText: "",
+      translationSourceText: sourceText,
+      targetLanguageCode: language.code || "",
+      targetLanguageName: language.name || "",
+      translationDisabled: false,
+      translationStatus: "pending",
+      translationError: false,
+      deliveryStatus: "processing",
+      localOnly: true,
+      processingType: MESSAGE_PROCESSING_TRANSLATION
+    });
+  }
+  room.messages = [welcomeMessage];
+  rooms.unshift(room);
+  saveRooms();
+  if (language?.code) {
+    translateLocalAiMessage(room.id, welcomeMessage.id, welcomeMessage.translationSourceText, language);
+  }
+  return room;
+}
+
 function openInviteModal() {
   const activeRoom = getActiveRoom();
   if (!activeRoom || isAiRoom(activeRoom)) return;
@@ -10326,6 +10793,8 @@ function getRoomDisplayName(room) {
 
 function getRoomDescription(room) {
   if (!room) return "";
+  if (isAiFriendRoom(room)) return room.description || room.persona || "Amigo IA";
+  if (isAiTeacherRoom(room)) return room.description || "Professor de idiomas";
   if (isPrivateRoom(room)) return "Conversa privada";
   return room.description || "";
 }
@@ -10408,6 +10877,21 @@ function getRoomStatus(room) {
     return "Offline · mensagens carregadas continuam disponíveis";
   }
 
+  if (isAiTeacherRoom(room)) {
+    const activeCount = getActiveAiDifficulties(room).length;
+    return activeCount
+      ? `Professor de idiomas · ${activeCount} dificuldade${activeCount === 1 ? "" : "s"} ativa${activeCount === 1 ? "" : "s"}`
+      : "Professor de idiomas · Pollinations.ai";
+  }
+
+  if (isAiFriendRoom(room)) {
+    const language = getRoomLanguage(room);
+    return language?.code
+      ? `Amigo IA · traducao para ${language.label}`
+      : "Amigo IA · sem traducao automatica";
+    return "Amigo IA · conversa privada local";
+  }
+
   if (isAiRoom(room)) {
     return "Professor de idiomas · Pollinations.ai";
   }
@@ -10480,6 +10964,7 @@ function getComposerTextForAiTool() {
 function getComposerLanguageHint(room = getActiveRoom()) {
   const language = getRoomLanguage(room);
   if (language?.code) return `idioma-alvo da conversa: ${language.name}`;
+  if (isAiFriendRoom(room)) return `contexto: conversa privada com ${getRoomDisplayName(room)}`;
   if (isAiRoom(room)) return "contexto: conversa com professor de idiomas";
   return "sem idioma-alvo definido; preserve o idioma original do texto";
 }
@@ -10957,7 +11442,43 @@ async function translateMessageText(text, language) {
   return translated;
 }
 
-function createAiWelcomeMessage() {
+function getAiSystemPrompt(room) {
+  if (isAiFriendRoom(room)) {
+    const name = getAiAuthorName(room);
+    const persona = sanitizeText(room.persona || room.description || DEFAULT_AI_FRIEND_PERSONA, 220);
+    const nativeLanguage = getCurrentNativeLanguage();
+    const roomLanguage = getRoomLanguage(room);
+    return `Voce interpreta ${name}, a outra pessoa desta conversa privada.
+Converse de forma natural, leve e presente, como uma conversa privada normal entre pessoas.
+Personalidade definida pelo usuario: ${persona}.
+Nao aja como professor, assistente generico ou bot de suporte, a menos que o usuario peca ajuda para estudar.
+Responda sempre em ${nativeLanguage.name}, o idioma nativo do usuario.
+Nao responda diretamente em ${roomLanguage?.name || "outro idioma"} so porque a sala usa traducao; o app vai traduzir sua mensagem depois.
+Acompanhe o tom do usuario e evite respostas longas demais.`;
+  }
+
+  const activeDifficulties = getActiveAiDifficulties(room);
+  const difficultyPrompt = activeDifficulties.length
+    ? `\nDificuldades ativas do aluno:\n${activeDifficulties.map((difficulty, index) => `${index + 1}. ${difficulty.text}`).join("\n")}\nFoque nessas dificuldades ate o usuario marcar como concluida ou remover. Sempre que fizer sentido, conecte explicacoes, exemplos e correcoes a esses pontos.`
+    : "";
+
+  return `${AI_SYSTEM_PROMPT}${difficultyPrompt}`;
+}
+
+function createAiWelcomeMessage(room = null) {
+  if (room) {
+    const author = getAiAuthorName(room);
+    return {
+      id: createId("ai-welcome"),
+      from: "ai",
+      author,
+      text: isAiFriendRoom(room)
+        ? `Oi! Eu sou ${author}. Pode falar comigo como em uma conversa privada normal.`
+        : "Ola! Eu sou seu professor de idiomas. Posso focar nas suas dificuldades e te ajudar com conversacao, correcao, vocabulario e pronuncia. Por onde comecamos?",
+      time: Date.now()
+    };
+  }
+
   return {
     id: createId("ai-welcome"),
     from: "ai",
@@ -10970,9 +11491,15 @@ function createAiWelcomeMessage() {
 async function handleAiRoomMessage(text) {
   const room = getActiveRoom();
   if (!room || !isAiRoom(room)) return;
-  if (!requireInternet("conversar com o Professor IA")) return;
+  if (!requireInternet(getAiInternetActionLabel(room))) return;
+
+  if (isAiFriendRoom(room)) {
+    await handleAiFriendRoomMessage(room, text);
+    return;
+  }
 
   const replyPayload = getReplyPayloadForMessage();
+  const aiAuthor = getAiAuthorName(room);
   addMessage(room.id, {
     from: "me",
     author: currentUser?.nick || "Você",
@@ -10990,16 +11517,26 @@ async function handleAiRoomMessage(text) {
     removeAiTypingIndicator(room.id);
     addMessage(room.id, {
       from: "ai",
-      author: AI_TEACHER_NAME,
+      author: aiAuthor,
       text: reply,
       time: Date.now()
     });
   } catch (error) {
     console.warn("Erro ao consultar Pollinations.ai", error);
     removeAiTypingIndicator(room.id);
+    const fallbackText = isAiTeacherRoom(room)
+      ? "Nao consegui acessar a Pollinations.ai agora. Verifique sua conexao e tente novamente. Enquanto isso, uma boa pratica e escrever uma frase simples no idioma que voce quer estudar e depois pedir correcao quando a conexao voltar."
+      : "Nao consegui acessar a Pollinations.ai agora. Verifique sua conexao e tente novamente em instantes.";
     addMessage(room.id, {
       from: "ai",
-      author: AI_TEACHER_NAME,
+      author: aiAuthor,
+      text: fallbackText,
+      time: Date.now()
+    });
+    return;
+    addMessage(room.id, {
+      from: "ai",
+      author: aiAuthor,
       text: "Não consegui acessar a Pollinations.ai agora. Verifique sua conexão e tente novamente. Enquanto isso, uma boa prática é escrever uma frase simples no idioma que você quer estudar e depois pedir correção quando a conexão voltar.",
       time: Date.now()
     });
@@ -11008,8 +11545,44 @@ async function handleAiRoomMessage(text) {
   }
 }
 
+async function handleAiFriendRoomMessage(room, text) {
+  const replyPayload = getReplyPayloadForMessage();
+  const aiAuthor = getAiAuthorName(room);
+
+  addLocalAiMessage(room, {
+    from: "me",
+    author: currentUser?.nick || "Voce",
+    text,
+    replyTo: replyPayload
+  });
+  clearReplyTarget();
+
+  setAiLoading(true);
+  appendAiTypingIndicator(room.id);
+
+  try {
+    const reply = await requestLanguageAiReply(room);
+    removeAiTypingIndicator(room.id);
+    addLocalAiMessage(room, {
+      from: "ai",
+      author: aiAuthor,
+      text: reply
+    });
+  } catch (error) {
+    console.warn("Erro ao consultar amigo IA.", error);
+    removeAiTypingIndicator(room.id);
+    addLocalAiMessage(room, {
+      from: "ai",
+      author: aiAuthor,
+      text: "Nao consegui responder agora. Verifique sua conexao e tente novamente em instantes."
+    });
+  } finally {
+    setAiLoading(false);
+  }
+}
+
 async function requestLanguageAiReply(room) {
-  if (!requireInternet("conversar com o Professor IA")) {
+  if (!requireInternet(getAiInternetActionLabel(room))) {
     throw new Error("Sem internet para usar a IA.");
   }
 
@@ -11046,14 +11619,14 @@ async function requestLanguageAiReply(room) {
 }
 
 async function requestLanguageAiReplyFallback(room) {
-  if (!requireInternet("conversar com o Professor IA")) {
+  if (!requireInternet(getAiInternetActionLabel(room))) {
     throw new Error("Sem internet para usar a IA.");
   }
 
   const params = new URLSearchParams({
     model: "openai",
     temperature: "0.7",
-    system: AI_SYSTEM_PROMPT
+    system: getAiSystemPrompt(room)
   });
   const prompt = buildPlainAiPrompt(room);
   const response = await fetch(`${POLLINATIONS_TEXT_ENDPOINT}${encodeURIComponent(prompt)}?${params.toString()}`);
@@ -11075,25 +11648,40 @@ function buildAiMessages(room) {
     .slice(-12)
     .map((message) => ({
       role: message.from === "me" ? "user" : "assistant",
-      content: message.text
+      content: getAiPromptMessageText(message, room)
     }));
 
   return [
     {
       role: "system",
-      content: `${AI_SYSTEM_PROMPT}\nNome do aluno: ${studentName}.`
+      content: `${getAiSystemPrompt(room)}\nNome do usuario: ${studentName}.`
     },
     ...recentMessages
   ];
 }
 
+function getAiPromptMessageText(message, room) {
+  if (!isAiFriendRoom(room)) return message?.text || "";
+
+  return cleanMessageText(
+    message?.translationSourceText ||
+    message?.originalText ||
+    message?.text ||
+    message?.translatedText ||
+    ""
+  );
+}
+
 function buildPlainAiPrompt(room) {
   const studentName = currentUser?.nick || "aluno";
+  const aiName = getAiAuthorName(room);
   const history = room.messages
     .filter((message) => message.from === "me" || message.from === "ai")
     .slice(-10)
-    .map((message) => `${message.from === "me" ? studentName : AI_TEACHER_NAME}: ${message.text}`)
+    .map((message) => `${message.from === "me" ? studentName : aiName}: ${getAiPromptMessageText(message, room)}`)
     .join("\n");
+
+  return `${getAiSystemPrompt(room)}\nNome do usuario: ${studentName}\nHistorico recente:\n${history}\n\nResponda a ultima mensagem do usuario mantendo as instrucoes do sistema.`;
 
   return `Nome do aluno: ${studentName}\nHistórico recente:\n${history}\n\nResponda como professor de idiomas à última mensagem do aluno.`;
 }
@@ -11137,7 +11725,7 @@ function appendAiTypingIndicator(roomId = activeRoomId) {
   row.dataset.roomId = roomId || "";
   bubble.className = "bubble typing-bubble";
   author.className = "author-label";
-  author.textContent = AI_TEACHER_NAME;
+  author.textContent = getAiAuthorName(getRoomById(roomId) || getActiveRoom());
   dots.className = "typing-dots";
   dots.innerHTML = "<span></span><span></span><span></span>";
 
@@ -11520,6 +12108,83 @@ function isAiRoom(room) {
   return room?.type === AI_ROOM_TYPE;
 }
 
+function getAiMode(room) {
+  if (!isAiRoom(room)) return "";
+  return room.aiMode === AI_FRIEND_MODE ? AI_FRIEND_MODE : AI_TEACHER_MODE;
+}
+
+function isAiTeacherRoom(room) {
+  return isAiRoom(room) && getAiMode(room) === AI_TEACHER_MODE;
+}
+
+function isAiFriendRoom(room) {
+  return isAiRoom(room) && getAiMode(room) === AI_FRIEND_MODE;
+}
+
+function getAiAuthorName(room) {
+  return isAiFriendRoom(room) ? getRoomDisplayName(room) : AI_TEACHER_NAME;
+}
+
+function getAiInternetActionLabel(room) {
+  return `conversar com ${getRoomDisplayName(room) || "a IA"}`;
+}
+
+function normalizeLocalAiRoom(room) {
+  if (!room || room.type !== AI_ROOM_TYPE) return room;
+
+  const mode = room.aiMode === AI_FRIEND_MODE ? AI_FRIEND_MODE : AI_TEACHER_MODE;
+  const name = sanitizeText(room.name || (mode === AI_FRIEND_MODE ? "Amigo IA" : AI_TEACHER_NAME), 32);
+  const normalizedRoom = {
+    ...room,
+    type: AI_ROOM_TYPE,
+    aiMode: mode,
+    name,
+    ownerNick: room.ownerNick || "",
+    messages: Array.isArray(room.messages) ? room.messages : []
+  };
+
+  if (mode === AI_TEACHER_MODE) {
+    normalizedRoom.name = AI_TEACHER_NAME;
+    normalizedRoom.avatar = "IA";
+    normalizedRoom.aiDifficulties = normalizeAiDifficulties(room.aiDifficulties);
+  } else {
+    normalizedRoom.avatar = room.avatar || getInitials(name);
+    normalizedRoom.avatarIcon = getSafeSpaceAvatarIcon(room.avatarIcon || "fa-solid fa-robot");
+    normalizedRoom.persona = sanitizeText(room.persona || room.description || DEFAULT_AI_FRIEND_PERSONA, 220) || DEFAULT_AI_FRIEND_PERSONA;
+    normalizedRoom.description = normalizedRoom.persona;
+    normalizedRoom.translationEnabled = Boolean(normalizedRoom.languageCode);
+  }
+
+  return normalizedRoom;
+}
+
+function normalizeAiDifficulties(items = []) {
+  if (!Array.isArray(items)) return [];
+  return items
+    .map((item) => {
+      const text = sanitizeText(typeof item === "string" ? item : item?.text, 120);
+      if (!text) return null;
+      const status = item?.status === AI_DIFFICULTY_DONE ? AI_DIFFICULTY_DONE : AI_DIFFICULTY_ACTIVE;
+      return {
+        id: sanitizeText(item?.id || createId("diff"), 80),
+        text,
+        status,
+        createdAt: Number(item?.createdAt || Date.now()),
+        completedAt: status === AI_DIFFICULTY_DONE ? Number(item?.completedAt || Date.now()) : 0
+      };
+    })
+    .filter(Boolean)
+    .slice(0, 20);
+}
+
+function getActiveAiDifficulties(room) {
+  return normalizeAiDifficulties(room?.aiDifficulties || []).filter((difficulty) => difficulty.status !== AI_DIFFICULTY_DONE);
+}
+
+function getDoneAiDifficulties(room) {
+  return normalizeAiDifficulties(room?.aiDifficulties || []).filter((difficulty) => difficulty.status === AI_DIFFICULTY_DONE);
+}
+
 function isLearningTestMessage(message) {
   return Boolean(message?.learningTest || message?.translationDisabled);
 }
@@ -11527,6 +12192,12 @@ function isLearningTestMessage(message) {
 function getAiRoomId(nick) {
   const slug = normalize(nick).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "usuario";
   return `ai-room-${slug}`;
+}
+
+function getAiFriendRoomId(ownerNick, friendName) {
+  const ownerSlug = normalize(ownerNick).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "usuario";
+  const friendSlug = normalize(friendName).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "amigo";
+  return `ai-friend-${ownerSlug}-${friendSlug}-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
 }
 
 function cleanMessageText(value) {

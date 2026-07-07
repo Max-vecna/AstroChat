@@ -7974,3 +7974,123 @@ body[data-chat-theme]:not([data-chat-theme="padrao"]) .message-inline-audio-butt
     padding-inline: 8px;
   }
 }
+
+/* v114 - amigos IA e dificuldades do Professor */
+.search-box {
+  grid-template-columns: minmax(0, 1fr) 46px 46px;
+}
+
+@media (max-width: 820px) {
+  .search-box {
+    grid-template-columns: minmax(0, 1fr) var(--tap-target) var(--tap-target);
+  }
+}
+
+.modal-card textarea {
+  width: 100%;
+  min-height: 104px;
+  resize: vertical;
+  border: 1px solid transparent;
+  outline: none;
+  border-radius: 18px;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+  padding: 14px 16px;
+  line-height: 1.4;
+  transition: 0.2s ease;
+}
+
+.modal-card textarea:focus {
+  border-color: rgba(16, 180, 134, 0.5);
+  box-shadow: 0 0 0 4px rgba(16, 180, 134, 0.12);
+}
+
+.teacher-difficulty-form {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 42px;
+  gap: 8px;
+  align-items: center;
+}
+
+.teacher-difficulty-form input {
+  min-height: 42px;
+  padding: 0 13px;
+}
+
+.teacher-difficulty-form .small-action {
+  width: 42px;
+  min-width: 42px;
+  height: 42px;
+  padding: 0;
+}
+
+.teacher-difficulty-form .small-action span {
+  position: absolute !important;
+  width: 1px !important;
+  height: 1px !important;
+  padding: 0 !important;
+  margin: -1px !important;
+  overflow: hidden !important;
+  clip: rect(0, 0, 0, 0) !important;
+  white-space: nowrap !important;
+  border: 0 !important;
+}
+
+.teacher-difficulty-list {
+  display: grid;
+  gap: 8px;
+}
+
+.teacher-difficulty-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 10px;
+  border: 1px solid rgba(157, 255, 224, 0.12);
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.teacher-difficulty-item.is-done {
+  opacity: 0.68;
+}
+
+.teacher-difficulty-main {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.teacher-difficulty-main strong,
+.teacher-difficulty-main span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.teacher-difficulty-main span {
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+}
+
+.teacher-difficulty-actions {
+  display: inline-flex;
+  gap: 6px;
+  flex: 0 0 auto;
+}
+
+.chat-item.ai-friend-room .chat-name::after {
+  content: "IA";
+  display: inline-grid;
+  place-items: center;
+  margin-left: 6px;
+  padding: 2px 6px;
+  border-radius: 999px;
+  color: #101b20;
+  background: linear-gradient(135deg, #9dffe0, #72c5ff);
+  font-size: 0.56rem;
+  font-weight: 900;
+  vertical-align: middle;
+}

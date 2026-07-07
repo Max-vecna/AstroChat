@@ -166,6 +166,9 @@
 
       <section class="search-box" id="searchBox">
         <input id="searchInput" type="search" placeholder="Pesquisar conversas e salas" autocomplete="off" />
+        <button class="primary-action compact-icon-action ai-friend-action" id="createAiFriendButton" type="button" title="Criar amigo IA" aria-label="Criar amigo IA">
+          <i class="fa-solid fa-robot" aria-hidden="true"></i>
+        </button>
         <button class="primary-action compact-icon-action" id="createRoomButton" type="button" title="Criar sala" aria-label="Criar sala">
           <i class="fa-solid fa-plus" aria-hidden="true"></i>
         </button>
@@ -336,6 +339,66 @@
         <button class="ghost-button" id="cancelRoomButton" type="button">Cancelar</button>
         <button class="login-button compact" type="submit">
           <span>Criar sala</span>
+          <i class="fa-solid fa-check" aria-hidden="true"></i>
+        </button>
+      </footer>
+    </form>
+  </section>
+
+  <section class="modal-backdrop" id="aiFriendModal" hidden aria-hidden="true">
+    <form class="modal-card ai-friend-card" id="aiFriendForm">
+      <header class="modal-header">
+        <div>
+          <strong>Criar amigo IA</strong>
+          <span>Crie uma conversa privada local com uma IA do jeito que voce quiser.</span>
+        </div>
+        <button class="icon-button" id="closeAiFriendModalButton" type="button" aria-label="Fechar">
+          <i class="fa-solid fa-xmark" aria-hidden="true"></i>
+        </button>
+      </header>
+
+      <label for="aiFriendNameInput">Nome do amigo IA</label>
+      <input id="aiFriendNameInput" type="text" maxlength="32" placeholder="Ex: Luna" required />
+
+      <label for="aiFriendPersonaInput">Como ele deve conversar</label>
+      <textarea id="aiFriendPersonaInput" maxlength="220" rows="4" placeholder="Ex: amigo calmo, curioso, fala de jogos e ajuda a pensar sem parecer professor"></textarea>
+      <small class="field-hint">Esse texto vira a personalidade da IA nesta conversa.</small>
+
+      <label for="aiFriendLanguageSelect">Idioma da sala</label>
+      <select id="aiFriendLanguageSelect">
+        <option value="">Sem traducao automatica</option>
+        <option value="en" selected>Ingles</option>
+        <option value="es">Espanhol</option>
+        <option value="fr">Frances</option>
+        <option value="it">Italiano</option>
+        <option value="de">Alemao</option>
+        <option value="ja">Japones</option>
+        <option value="ko">Coreano</option>
+        <option value="zh">Chines</option>
+      </select>
+      <small class="field-hint">A IA responde no seu idioma nativo e o chat traduz para este idioma.</small>
+
+      <label for="aiFriendAvatarSelect">Icone</label>
+      <div class="avatar-select-row">
+        <div class="space-avatar-preview" id="aiFriendAvatarPreview" aria-hidden="true">
+          <i class="fa-solid fa-robot"></i>
+        </div>
+        <select id="aiFriendAvatarSelect">
+          <option value="fa-solid fa-robot">Robo</option>
+          <option value="fa-solid fa-user-astronaut">Astronauta</option>
+          <option value="fa-solid fa-star">Estrela</option>
+          <option value="fa-solid fa-wand-magic-sparkles">Magia</option>
+          <option value="fa-solid fa-music">Musica</option>
+          <option value="fa-solid fa-gamepad">Game</option>
+          <option value="fa-solid fa-book-open">Livro</option>
+          <option value="fa-solid fa-headphones">Fone</option>
+        </select>
+      </div>
+
+      <footer class="modal-actions">
+        <button class="ghost-button" id="cancelAiFriendButton" type="button">Cancelar</button>
+        <button class="login-button compact" type="submit">
+          <span>Criar amigo</span>
           <i class="fa-solid fa-check" aria-hidden="true"></i>
         </button>
       </footer>
@@ -540,6 +603,21 @@
             <span class="sr-only">Salvar</span>
           </button>
         </div>
+      </div>
+
+      <div class="room-settings-section teacher-difficulty-section" id="teacherDifficultySettingsSection" hidden>
+        <div class="modal-section-title compact-title">
+          <span>Dificuldades do aluno</span>
+          <small id="teacherDifficultyCounter">Nenhuma ativa</small>
+        </div>
+        <form class="teacher-difficulty-form" id="teacherDifficultyForm">
+          <input id="teacherDifficultyInput" type="text" maxlength="120" placeholder="Ex: usar o passado em ingles" autocomplete="off" />
+          <button class="small-action" type="submit" title="Adicionar dificuldade" aria-label="Adicionar dificuldade">
+            <i class="fa-solid fa-plus" aria-hidden="true"></i>
+            <span>Adicionar</span>
+          </button>
+        </form>
+        <div class="teacher-difficulty-list" id="teacherDifficultyList"></div>
       </div>
 
       <div class="room-settings-section" id="roomMembersSettingsSection">
