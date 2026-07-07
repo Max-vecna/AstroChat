@@ -4015,20 +4015,28 @@ function addLocalAiMessage(room, options = {}) {
   if (!sourceText) return null;
 
   const language = getRoomLanguage(room);
-  const shouldTranslate = Boolean(isAiFriendRoom(room) && language?.code && !options.skipTranslation);
+  const presetOriginalText = cleanMessageText(options.originalText || sourceText, 2000);
+  const presetTranslatedText = cleanMessageText(options.translatedText || "", 1000);
+  const hasPresetTranslation = Boolean(
+    isAiFriendRoom(room) &&
+    language?.code &&
+    presetOriginalText &&
+    presetTranslatedText
+  );
+  const shouldTranslate = Boolean(isAiFriendRoom(room) && language?.code && !options.skipTranslation && !hasPresetTranslation);
   const now = Number(options.time || 0) || Date.now();
   const message = {
     id: options.id || createId("msg"),
     from: options.from || "ai",
     author: options.author || getAiAuthorName(room),
-    text: shouldTranslate ? PUBLIC_TRANSLATION_PENDING_TEXT : sourceText,
-    originalText: "",
-    translatedText: "",
+    text: hasPresetTranslation ? presetTranslatedText : shouldTranslate ? PUBLIC_TRANSLATION_PENDING_TEXT : sourceText,
+    originalText: hasPresetTranslation ? presetOriginalText : "",
+    translatedText: hasPresetTranslation ? presetTranslatedText : "",
     translationSourceText: shouldTranslate ? sourceText : "",
-    targetLanguageCode: shouldTranslate ? language.code || "" : "",
-    targetLanguageName: shouldTranslate ? language.name || "" : "",
+    targetLanguageCode: shouldTranslate || hasPresetTranslation ? language.code || "" : "",
+    targetLanguageName: shouldTranslate || hasPresetTranslation ? language.name || "" : "",
     translationDisabled: false,
-    translationStatus: shouldTranslate ? "pending" : "none",
+    translationStatus: hasPresetTranslation ? "done" : shouldTranslate ? "pending" : "none",
     translationError: false,
     deliveryStatus: shouldTranslate ? "processing" : "sent",
     pendingOffline: false,
@@ -4104,6 +4112,46 @@ function updateLocalAiMessage(roomId, messageId, patch = {}) {
   } else {
     renderRoomList(searchInput.value);
   }
+}
+
+function applyBundledLocalAiTranslation(room, messageId, originalText, translatedText, language = getRoomLanguage(room)) {
+  const cleanOriginal = cleanMessageText(originalText, 2000);
+  const cleanTranslated = cleanMessageText(translatedText, 1000);
+  if (!room?.id || !messageId || !language?.code || !cleanOriginal || !cleanTranslated || cleanOriginal === cleanTranslated) return false;
+
+  updateLocalAiMessage(room.id, messageId, {
+    text: cleanTranslated,
+    originalText: cleanOriginal,
+    translatedText: cleanTranslated,
+    translationSourceText: "",
+    targetLanguageCode: language.code || "",
+    targetLanguageName: language.name || "",
+    translationDisabled: false,
+    translationStatus: "done",
+    translationError: false,
+    deliveryStatus: "sent",
+    pendingOffline: false,
+    processingType: ""
+  });
+  return true;
+}
+
+function markLocalAiTranslationUnavailable(room, messageId, sourceText, language = getRoomLanguage(room)) {
+  const cleanSourceText = cleanMessageText(sourceText, 2000);
+  if (!room?.id || !messageId || !language?.code || !cleanSourceText) return false;
+
+  updateLocalAiMessage(room.id, messageId, {
+    translationSourceText: cleanSourceText,
+    targetLanguageCode: language.code || "",
+    targetLanguageName: language.name || "",
+    translationDisabled: false,
+    translationStatus: "error",
+    translationError: true,
+    deliveryStatus: "sent",
+    pendingOffline: false,
+    processingType: ""
+  });
+  return true;
 }
 
 async function sendFirebaseMessage(room, text, options = {}) {
@@ -5023,7 +5071,10 @@ function isPendingTranslationMessage(message) {
 }
 
 function getStoredTranslationSourceText(roomId, message) {
-  if (!roomId || !message?.id || !isMessageMine(message)) return "";
+  if (!roomId || !message?.id) return "";
+
+  const room = getRoomById(roomId);
+  if (!isAiFriendRoom(room) && !isMessageMine(message)) return "";
 
   const job = getPendingTranslationJob(roomId, message.id);
   const fallbackOriginal = isPendingTranslationMessage(message) ? message.originalText : "";
@@ -6029,7 +6080,8 @@ function getRoomById(roomId) {
 }
 
 function createTranslationRetryButton(message, roomId = activeRoomId) {
-  if (!message?.translationError || !isMessageMine(message)) return null;
+  const room = getRoomById(roomId);
+  if (!message?.translationError || (!isAiFriendRoom(room) && !isMessageMine(message))) return null;
 
   const sourceText = getStoredTranslationSourceText(roomId, message);
   if (!sourceText || sourceText === PUBLIC_TRANSLATION_PENDING_TEXT || sourceText === PUBLIC_TRANSLATION_ERROR_TEXT) return null;
@@ -6050,6 +6102,11 @@ async function retryTranslationMessage(roomId, messageId, button = null) {
   const room = getRoomById(roomId);
   if (!room?.id || !messageId) return;
 
+  if (isAiFriendRoom(room)) {
+    await retryLocalAiTranslationMessage(room, messageId, button);
+    return;
+  }
+
   if (!firebaseReady || !currentFirebaseUid || !isInternetAvailable()) {
     showToast("Sem internet", "Conecte-se para tentar traduzir novamente.");
     return;
@@ -6066,7 +6123,8 @@ async function retryTranslationMessage(roomId, messageId, button = null) {
   }
 
   const savedJob = getPendingTranslationJob(room.id, message.id);
-  const language = getLanguageOption(message.targetLanguageCode || savedJob?.targetLanguageCode || "") || getRoomLanguage(room);
+  const messageLanguage = getLanguageOption(message.targetLanguageCode || savedJob?.targetLanguageCode || "");
+  const language = messageLanguage?.code ? messageLanguage : getRoomLanguage(room);
   if (!language?.code) {
     showToast("Idioma não definido", "Escolha um idioma para esta conversa antes de tentar novamente.");
     return;
@@ -6122,6 +6180,49 @@ async function retryTranslationMessage(roomId, messageId, button = null) {
       button.classList.remove("is-loading");
     }
   }
+}
+
+async function retryLocalAiTranslationMessage(room, messageId, button = null) {
+  if (!room?.id || !messageId) return;
+
+  if (!requireInternet("traduzir novamente")) return;
+
+  const message = (room.messages || []).find((item) => item.id === messageId);
+  if (!message?.translationError) return;
+
+  const sourceText = getStoredTranslationSourceText(room.id, message);
+  if (!sourceText || sourceText === PUBLIC_TRANSLATION_PENDING_TEXT || sourceText === PUBLIC_TRANSLATION_ERROR_TEXT) {
+    showToast("Texto original nÃ£o encontrado", "NÃ£o foi possÃ­vel recuperar o texto salvo para repetir a traduÃ§Ã£o.");
+    return;
+  }
+
+  const messageLanguage = getLanguageOption(message.targetLanguageCode || "");
+  const language = messageLanguage?.code ? messageLanguage : getRoomLanguage(room);
+  if (!language?.code) {
+    showToast("Idioma nÃ£o definido", "Escolha um idioma para esta conversa antes de tentar novamente.");
+    return;
+  }
+
+  if (button) {
+    button.disabled = true;
+    button.classList.add("is-loading");
+  }
+
+  updateLocalAiMessage(room.id, message.id, {
+    text: PUBLIC_TRANSLATION_PENDING_TEXT,
+    originalText: "",
+    translatedText: "",
+    translationSourceText: sourceText,
+    translationStatus: "pending",
+    translationError: false,
+    deliveryStatus: "processing",
+    pendingOffline: false,
+    processingType: MESSAGE_PROCESSING_TRANSLATION,
+    targetLanguageCode: language.code || "",
+    targetLanguageName: language.name || ""
+  });
+
+  await translateLocalAiMessage(room.id, message.id, sourceText, language);
 }
 
 function createMessageElement(message, animated = false, options = {}) {
@@ -11548,12 +11649,15 @@ async function handleAiRoomMessage(text) {
 async function handleAiFriendRoomMessage(room, text) {
   const replyPayload = getReplyPayloadForMessage();
   const aiAuthor = getAiAuthorName(room);
+  const language = getRoomLanguage(room);
+  const shouldBundleTranslation = Boolean(language?.code);
 
-  addLocalAiMessage(room, {
+  const userMessage = addLocalAiMessage(room, {
     from: "me",
     author: currentUser?.nick || "Voce",
     text,
-    replyTo: replyPayload
+    replyTo: replyPayload,
+    skipTranslation: shouldBundleTranslation
   });
   clearReplyTarget();
 
@@ -11561,24 +11665,137 @@ async function handleAiFriendRoomMessage(room, text) {
   appendAiTypingIndicator(room.id);
 
   try {
-    const reply = await requestLanguageAiReply(room);
+    const replyBundle = shouldBundleTranslation
+      ? await requestAiFriendReplyBundle(room, text, language)
+      : { replyText: await requestLanguageAiReply(room) };
+    const reply = cleanMessageText(replyBundle.replyText || "");
     removeAiTypingIndicator(room.id);
-    addLocalAiMessage(room, {
+
+    if (shouldBundleTranslation && userMessage?.id) {
+      const translatedUserText = cleanMessageText(replyBundle.userTranslatedText || "");
+      if (translatedUserText) {
+        applyBundledLocalAiTranslation(room, userMessage.id, text, translatedUserText, language);
+      } else {
+        markLocalAiTranslationUnavailable(room, userMessage.id, text, language);
+      }
+    }
+
+    const aiMessage = addLocalAiMessage(room, {
       from: "ai",
       author: aiAuthor,
-      text: reply
+      text: reply || "Nao consegui montar uma resposta agora.",
+      originalText: reply,
+      translatedText: shouldBundleTranslation ? replyBundle.replyTranslatedText || "" : "",
+      skipTranslation: shouldBundleTranslation && !replyBundle.replyTranslatedText
     });
+
+    if (shouldBundleTranslation && aiMessage?.id && !replyBundle.replyTranslatedText) {
+      markLocalAiTranslationUnavailable(room, aiMessage.id, reply || aiMessage.text, language);
+    }
   } catch (error) {
     console.warn("Erro ao consultar amigo IA.", error);
     removeAiTypingIndicator(room.id);
     addLocalAiMessage(room, {
       from: "ai",
       author: aiAuthor,
-      text: "Nao consegui responder agora. Verifique sua conexao e tente novamente em instantes."
+      text: "Nao consegui responder agora. Verifique sua conexao e tente novamente em instantes.",
+      skipTranslation: shouldBundleTranslation
     });
   } finally {
     setAiLoading(false);
   }
+}
+
+async function requestAiFriendReplyBundle(room, latestUserText, language) {
+  if (!language?.code) {
+    return { replyText: await requestLanguageAiReply(room) };
+  }
+
+  const nativeLanguage = getCurrentNativeLanguage();
+  const messages = buildAiMessages(room);
+  const bundleInstruction = `Retorne somente JSON valido, sem markdown, neste formato:
+{"replyText":"resposta natural em ${nativeLanguage.name}","replyTranslatedText":"traducao da resposta para ${language.name}","userTranslatedText":"traducao desta ultima mensagem do usuario para ${language.name}"}
+Ultima mensagem do usuario: ${cleanMessageText(latestUserText, 1000)}`;
+
+  if (messages[0]?.role === "system") {
+    messages[0] = {
+      ...messages[0],
+      content: `${messages[0].content}\n\n${bundleInstruction}`
+    };
+  } else {
+    messages.unshift({ role: "system", content: bundleInstruction });
+  }
+
+  try {
+    const response = await fetch(POLLINATIONS_CHAT_ENDPOINT, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        model: "openai",
+        messages,
+        temperature: 0.7,
+        max_tokens: 850,
+        stream: false
+      })
+    });
+
+    if (!response.ok) {
+      throw new Error(`Resposta HTTP ${response.status}`);
+    }
+
+    const data = await response.json();
+    const content = data?.choices?.[0]?.message?.content || data?.response || "";
+    const parsed = parseJsonFromAi(content);
+    const bundle = normalizeAiFriendReplyBundle(parsed);
+    if (bundle.replyText) return bundle;
+  } catch (error) {
+    console.warn("Resposta traduzida do amigo IA indisponivel, tentando resposta simples.", error);
+  }
+
+  return {
+    replyText: await requestLanguageAiReply(room),
+    replyTranslatedText: "",
+    userTranslatedText: ""
+  };
+}
+
+function normalizeAiFriendReplyBundle(value = {}) {
+  const replyText = cleanMessageText(
+    value?.replyText ||
+    value?.reply ||
+    value?.message ||
+    value?.resposta ||
+    "",
+    1000
+  );
+  const replyTranslatedText = cleanMessageText(
+    value?.replyTranslatedText ||
+    value?.translatedReply ||
+    value?.replyTranslation ||
+    value?.translatedText ||
+    value?.traducaoResposta ||
+    value?.respostaTraduzida ||
+    "",
+    1000
+  );
+  const userTranslatedText = cleanMessageText(
+    value?.userTranslatedText ||
+    value?.latestUserTranslation ||
+    value?.userTranslation ||
+    value?.translatedUserText ||
+    value?.traducaoUsuario ||
+    value?.mensagemUsuarioTraduzida ||
+    "",
+    1000
+  );
+
+  return {
+    replyText,
+    replyTranslatedText,
+    userTranslatedText
+  };
 }
 
 async function requestLanguageAiReply(room) {
