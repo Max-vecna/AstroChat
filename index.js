@@ -133,9 +133,130 @@ exports.sendChatMessageNotification = onValueCreated(
   }
 );
 
+exports.sendInviteNotification = onValueCreated(
+  {
+    ref: "/invites/{inviteId}",
+    instance: DATABASE_INSTANCE,
+    region: FUNCTION_REGION
+  },
+  async (event) => {
+    const invite = event.data.val() || {};
+    const inviteId = event.params.inviteId;
+    const toUid = String(invite.toUid || "");
+    const fromUid = String(invite.fromUid || "");
+
+    if (!inviteId || !toUid || !fromUid || invite.status !== "pendente") return;
+    if (toUid === fromUid) return;
+
+    const rootRef = event.data.ref.root;
+    const tokenRecords = await collectRecipientTokenRecords(rootRef, [toUid]);
+    if (!tokenRecords.length) {
+      logger.info("No FCM tokens for invite notification recipient.", { inviteId, toUid });
+      return;
+    }
+
+    const isFriendRequest = invite.type === "friend-request" || invite.kind === "friend-request";
+    const fromNick = truncateForPush(invite.fromNick || "Alguem", 48);
+    const roomName = truncateForPush(invite.roomName || "AstroChat", 64);
+    const title = isFriendRequest ? "Novo pedido de amizade" : "Novo convite recebido";
+    const body = isFriendRequest
+      ? `${fromNick} quer adicionar voce como amigo.`
+      : `${fromNick} convidou voce para ${roomName}.`;
+    const now = Date.now();
+    const type = isFriendRequest ? "friend-request" : "invite";
+    const data = stringifyData({
+      type,
+      fcmSource: "astrochat",
+      inviteId,
+      roomId: invite.roomId || "",
+      fromUid,
+      fromNick,
+      roomName,
+      title,
+      body,
+      icon: "icons/icon-192.png",
+      badge: "icons/icon-192.png",
+      tag: `${type}:${inviteId}`,
+      timestamp: now,
+      url: "./index.html#notifications"
+    });
+    const webpush = {
+      headers: {
+        Urgency: "high",
+        TTL: "86400"
+      },
+      notification: {
+        title,
+        body,
+        icon: "icons/icon-192.png",
+        badge: "icons/icon-192.png",
+        tag: `${type}:${inviteId}`,
+        renotify: true,
+        timestamp: now,
+        data
+      }
+    };
+    const link = getWebpushLink(invite.roomId || "");
+
+    if (link) {
+      webpush.fcmOptions = { link };
+    }
+
+    const staleTokenUpdates = {};
+    let successCount = 0;
+    let failureCount = 0;
+
+    for (const chunk of chunkArray(tokenRecords, MAX_MULTICAST_TOKENS)) {
+      const response = await admin.messaging().sendEachForMulticast({
+        tokens: chunk.map((record) => record.token),
+        notification: {
+          title,
+          body
+        },
+        data,
+        webpush
+      });
+
+      successCount += response.successCount;
+      failureCount += response.failureCount;
+
+      response.responses.forEach((result, index) => {
+        if (result.success) return;
+
+        const record = chunk[index];
+        logger.warn("FCM invite notification failed.", {
+          inviteId,
+          uid: record.uid,
+          deviceId: record.deviceId,
+          code: result.error?.code,
+          message: result.error?.message
+        });
+
+        if (isInvalidFcmTokenError(result.error)) {
+          staleTokenUpdates[`fcmTokens/${record.uid}/${record.deviceId}`] = null;
+        }
+      });
+    }
+
+    if (Object.keys(staleTokenUpdates).length) {
+      await rootRef.update(staleTokenUpdates);
+    }
+
+    logger.info("Invite notification sent.", {
+      inviteId,
+      toUid,
+      tokens: tokenRecords.length,
+      successCount,
+      failureCount,
+      staleTokensRemoved: Object.keys(staleTokenUpdates).length
+    });
+  }
+);
+
 function getWebpushLink(roomId) {
   const baseUrl = String(process.env.APP_PUBLIC_URL || "").trim().replace(/\/+$/, "");
   if (!baseUrl || !/^https:\/\//i.test(baseUrl)) return "";
+  if (!roomId) return `${baseUrl}/index.html`;
   return `${baseUrl}/index.html#room=${encodeURIComponent(roomId)}`;
 }
 

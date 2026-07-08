@@ -1,6 +1,7 @@
-const CACHE_NAME = "astrochat-cache-v113";
+const CACHE_NAME = "astrochat-cache-v114";
 const PUSH_SETTINGS_CACHE = "astrochat-push-settings-v1";
 const PUSH_SETTINGS_REQUEST = "./__astrochat-system-push-settings";
+const FCM_TOKEN_REFRESH_REQUEST = "./__astrochat-fcm-token-refresh-request";
 const FIREBASE_MESSAGING_SDK_VERSION = "10.12.2";
 const FIREBASE_CONFIG = {
   apiKey: "AIzaSyC0eXt2QukMgcAJRzgflenD46JvRBfmczg",
@@ -25,6 +26,7 @@ const APP_FILES = [
 ];
 
 self.addEventListener("install", (event) => {
+  self.skipWaiting();
   event.waitUntil(installAppShell());
 });
 
@@ -54,6 +56,7 @@ async function activateLatestWorker() {
   const oldKeys = keys.filter((key) => key.startsWith("astrochat-cache-") && key !== CACHE_NAME);
 
   await Promise.all(oldKeys.map((key) => caches.delete(key)));
+  await self.clients.claim();
 }
 
 self.addEventListener("fetch", (event) => {
@@ -88,6 +91,7 @@ self.addEventListener("fetch", (event) => {
 
 self.addEventListener("message", (event) => {
   if (event.data?.type === "SKIP_WAITING") {
+    self.skipWaiting();
     return;
   }
 
@@ -163,6 +167,8 @@ self.addEventListener("notificationclick", (event) => {
       if (sameOriginClient) {
         if (roomId) {
           sameOriginClient.postMessage({ type: "OPEN_ROOM_FROM_NOTIFICATION", roomId });
+        } else if (String(targetUrl).includes("#notifications")) {
+          sameOriginClient.postMessage({ type: "OPEN_NOTIFICATIONS_FROM_NOTIFICATION" });
         }
         sameOriginClient.focus();
         return;
@@ -175,14 +181,45 @@ self.addEventListener("notificationclick", (event) => {
   );
 });
 
+self.addEventListener("pushsubscriptionchange", (event) => {
+  event.waitUntil(requestFcmTokenRefreshFromClients("pushsubscriptionchange"));
+});
+
+async function requestFcmTokenRefreshFromClients(reason = "push") {
+  try {
+    const cache = await caches.open(PUSH_SETTINGS_CACHE);
+    const response = new Response(
+      JSON.stringify({ reason, requestedAt: Date.now() }),
+      { headers: { "Content-Type": "application/json" } }
+    );
+    await cache.put(FCM_TOKEN_REFRESH_REQUEST, response);
+  } catch (error) {
+    console.warn("Nao foi possivel salvar pedido de refresh do token FCM.", error);
+  }
+
+  try {
+    const clientList = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    await Promise.all(
+      clientList
+        .filter((client) => client.url && new URL(client.url).origin === self.location.origin)
+        .map((client) => client.postMessage({ type: "REFRESH_FCM_TOKEN", reason }))
+    );
+  } catch (error) {
+    console.warn("Nao foi possivel avisar clientes para renovar o token FCM.", error);
+  }
+}
+
 function isAstroChatFcmPayload(payload = {}) {
-  const data = payload.data || {};
-  return data.fcmSource === "astrochat" || data.type === "chat-message";
+  const data = payload.data || payload.notification?.data || {};
+  return data.fcmSource === "astrochat" || Boolean(data.type && data.roomId) || data.type === "chat-message";
 }
 
 function createNotificationFromPushPayload(payload = {}) {
-  const data = payload.data || {};
   const notification = payload.notification || {};
+  const data = {
+    ...(notification.data || {}),
+    ...(payload.data || {})
+  };
   const roomId = data.roomId || payload.roomId || "";
   const messageId = data.messageId || data.message_id || payload.messageId || "";
   const timestamp = getPayloadTimestamp(data);
@@ -251,6 +288,7 @@ async function showAstroChatNotification(payload = {}, source = "push") {
       systemNotificationShown = true;
     } catch (error) {
       console.warn("Nao foi possivel mostrar notificacao push.", source, error);
+      await requestFcmTokenRefreshFromClients("show-notification-failed");
     }
   }
 
@@ -336,18 +374,33 @@ function getPayloadFromPushEvent(event) {
 
   try {
     const rawPayload = event.data.json();
-    if (rawPayload?.data || rawPayload?.notification) return rawPayload;
+    if (rawPayload?.data || rawPayload?.notification) return normalizePushPayload(rawPayload);
     return { data: rawPayload };
   } catch (error) {
     try {
       const text = event.data.text();
       const rawPayload = JSON.parse(text);
-      if (rawPayload?.data || rawPayload?.notification) return rawPayload;
+      if (rawPayload?.data || rawPayload?.notification) return normalizePushPayload(rawPayload);
       return { data: rawPayload };
     } catch (innerError) {
       return null;
     }
   }
+}
+
+function normalizePushPayload(payload = {}) {
+  const notification = payload.notification || {};
+  const notificationData = notification.data && typeof notification.data === "object" ? notification.data : {};
+  const data = payload.data && typeof payload.data === "object" ? payload.data : {};
+
+  return {
+    ...payload,
+    notification,
+    data: {
+      ...notificationData,
+      ...data
+    }
+  };
 }
 
 areSystemPushNotificationsAllowed();

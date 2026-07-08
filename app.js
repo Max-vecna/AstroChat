@@ -50,7 +50,7 @@ const DATABASE_URL = "https://astro-chat-7d044-default-rtdb.firebaseio.com";
 const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
-const CHAT_VERSION = "v113";
+const CHAT_VERSION = "v114";
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
 const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
@@ -61,6 +61,8 @@ const SYSTEM_PUSH_STORAGE_KEY = "astrochat-system-push-enabled-v1";
 const FCM_DEVICE_ID_STORAGE_KEY = "astrochat-fcm-device-id-v1";
 const FCM_TOKEN_STORAGE_KEY = "astrochat-fcm-token-v1";
 const FCM_TOKEN_REFRESHED_AT_STORAGE_KEY = "astrochat-fcm-token-refreshed-at-v1";
+const PUSH_SETTINGS_CACHE = "astrochat-push-settings-v1";
+const FCM_TOKEN_REFRESH_REQUEST = "./__astrochat-fcm-token-refresh-request";
 const SPEECH_RATE_STORAGE_KEY = "astrochat-speech-rate-v1";
 const SPEECH_PLAYBACK_STORAGE_KEY = "astrochat-speech-playback-v1";
 const LIVE_TYPING_STORAGE_KEY = "astrochat-live-typing-v1";
@@ -98,6 +100,7 @@ const MISSING_FIREBASE_USER_DATA_ERROR_CODE = "missing-firebase-user-data";
 const BACKGROUND_REFRESH_INTERVAL_MS = 45000;
 const CONNECTIVITY_BACKGROUND_SYNC_DELAY_MS = 800;
 const FCM_TOKEN_REFRESH_INTERVAL_MS = 30 * 60 * 1000;
+const FCM_RESUME_REFRESH_MIN_INTERVAL_MS = 5 * 60 * 1000;
 const NOTIFICATION_SOUND_AFTER_SYSTEM_DELAY_MS = 180;
 const ROOM_LAST_MESSAGE_LISTEN_LIMIT = 1;
 const AI_TEACHER_NAME = "Professor IA";
@@ -205,6 +208,7 @@ let currentFirebaseUser = null;
 let currentFirebaseUid = null;
 let activeRoomId = null;
 let pendingNotificationRoomId = getInitialNotificationRoomId();
+let pendingNotificationsModalOpen = getInitialNotificationsModalRequested();
 let suppressAutoRoomSelection = false;
 let activeView = "rooms";
 let deferredInstallPrompt = null;
@@ -448,6 +452,22 @@ const aiAssistContent = document.querySelector("#aiAssistContent");
 
 if (profileVersionLabel) {
   profileVersionLabel.textContent = `AstroChat ${CHAT_VERSION}`;
+}
+
+async function consumePendingFcmTokenRefreshRequest() {
+  if (!("caches" in window)) return;
+  if (!currentUser?.nick) return;
+
+  try {
+    const cache = await caches.open(PUSH_SETTINGS_CACHE);
+    const response = await cache.match(FCM_TOKEN_REFRESH_REQUEST);
+    if (!response) return;
+
+    await cache.delete(FCM_TOKEN_REFRESH_REQUEST);
+    refreshFcmTokenRegistrationIfNeeded({ force: true });
+  } catch (error) {
+    console.warn("Nao foi possivel ler pedido de refresh do token FCM.", error);
+  }
 }
 
 applyChatTheme(chatTheme);
@@ -1126,6 +1146,7 @@ function resetRuntimeSessionState() {
   firebaseInitPromise = null;
   aiReplyInProgress = false;
   pendingNotificationRoomId = "";
+  pendingNotificationsModalOpen = false;
   fcmTokenRegistrationPromise = null;
   if (firebaseMessagingForegroundUnsubscribe) {
     firebaseMessagingForegroundUnsubscribe();
@@ -1417,6 +1438,7 @@ function setupConnectivityDetection() {
     document.body.classList.remove("is-offline");
     if (currentUser?.nick) updateUserHeader(firebaseReady ? "Online" : "Reconectando...");
     showToast("Internet conectada", offlineMessageQueue.length ? "Enviando mensagens pendentes..." : "Acoes online foram liberadas novamente.");
+    refreshFcmTokenRegistrationIfNeeded({ force: true, minIntervalMs: FCM_RESUME_REFRESH_MIN_INTERVAL_MS });
     scheduleConnectivityBackgroundSync();
   });
 
@@ -1472,6 +1494,7 @@ function setupBackgroundRuntime() {
 
 function handleBackgroundVisibilityChange() {
   if (document.hidden) {
+    refreshFcmTokenRegistrationIfNeeded({ force: true, minIntervalMs: FCM_RESUME_REFRESH_MIN_INTERVAL_MS });
     startBackgroundRefresh();
     if (currentUser?.nick && firebaseReady) updateUserHeader("Em segundo plano");
     return;
@@ -1499,7 +1522,7 @@ function handleForegroundResume() {
   if (!currentUser?.nick || logoutInProgress) return;
 
   updateForegroundUserHeader();
-  refreshFcmTokenRegistrationIfNeeded();
+  refreshFcmTokenRegistrationIfNeeded({ force: true, minIntervalMs: FCM_RESUME_REFRESH_MIN_INTERVAL_MS });
   runBackgroundRefresh({ foreground: true });
   markVisibleActiveRoomAsRead();
 }
@@ -1738,6 +1761,7 @@ async function enterApp() {
   if (activeRoomId) {
     subscribeToActiveRoomMessages();
   }
+  tryOpenPendingNotificationsModal();
 
   if (startupNotice) {
     showToast(startupNotice.title, startupNotice.message);
@@ -1840,6 +1864,7 @@ async function preloadFirebaseInitialData(options = {}) {
     renderAll(true);
   }
   tryOpenPendingNotificationRoom();
+  tryOpenPendingNotificationsModal();
 }
 
 function rememberInviteSnapshotSignatures(bucket) {
@@ -12707,12 +12732,22 @@ function setupServiceWorkerMessageHandling() {
       return;
     }
 
+    if (data.type === "OPEN_NOTIFICATIONS_FROM_NOTIFICATION") {
+      queueOpenNotificationsFromNotification();
+      return;
+    }
+
     if (data.type === "ASTROCHAT_PUSH_RECEIVED") {
       const payloadData = data.payloadData || {};
       handleForegroundFcmChatMessage(
         { data: payloadData },
         { silentSystemNotification: payloadData.systemNotificationShown === true }
       );
+      return;
+    }
+
+    if (data.type === "REFRESH_FCM_TOKEN") {
+      refreshFcmTokenRegistrationIfNeeded({ force: true, minIntervalMs: FCM_RESUME_REFRESH_MIN_INTERVAL_MS });
     }
   });
 }
@@ -12723,6 +12758,13 @@ function getInitialNotificationRoomId() {
   const hash = location.hash.startsWith("#") ? location.hash.slice(1) : location.hash;
   const params = new URLSearchParams(hash);
   return sanitizeNotificationRoomId(params.get("room") || "");
+}
+
+function getInitialNotificationsModalRequested() {
+  if (!location.hash) return false;
+
+  const hash = location.hash.startsWith("#") ? location.hash.slice(1) : location.hash;
+  return hash === "notifications" || new URLSearchParams(hash).get("view") === "notifications";
 }
 
 function sanitizeNotificationRoomId(roomId) {
@@ -12737,6 +12779,11 @@ function queueOpenRoomFromNotification(roomId) {
   tryOpenPendingNotificationRoom();
 }
 
+function queueOpenNotificationsFromNotification() {
+  pendingNotificationsModalOpen = true;
+  tryOpenPendingNotificationsModal();
+}
+
 function tryOpenPendingNotificationRoom() {
   if (!pendingNotificationRoomId || !currentUser?.nick) return;
 
@@ -12747,6 +12794,17 @@ function tryOpenPendingNotificationRoom() {
   openRoomFromNotification(roomId);
 
   if (location.hash.includes(`room=${encodeURIComponent(roomId)}`)) {
+    history.replaceState(null, "", `${location.pathname}${location.search}`);
+  }
+}
+
+function tryOpenPendingNotificationsModal() {
+  if (!pendingNotificationsModalOpen || !currentUser?.nick) return;
+
+  pendingNotificationsModalOpen = false;
+  openNotificationsModal();
+
+  if (location.hash === "#notifications" || location.hash.includes("view=notifications")) {
     history.replaceState(null, "", `${location.pathname}${location.search}`);
   }
 }
@@ -13096,12 +13154,18 @@ function refreshFcmTokenRegistrationIfNeeded(options = {}) {
 }
 
 function shouldRefreshFcmTokenRegistration(options = {}) {
-  if (options.force) return true;
+  const lastRefresh = Number(localStorage.getItem(FCM_TOKEN_REFRESHED_AT_STORAGE_KEY) || 0);
+
+  if (options.force) {
+    const minIntervalMs = Math.max(0, Number(options.minIntervalMs || 0));
+    if (minIntervalMs && lastRefresh && Date.now() - lastRefresh < minIntervalMs) return false;
+    return true;
+  }
+
   if (!currentFirebaseUid || !currentUser?.nick || !firebaseReady) return false;
   if (!areSystemPushNotificationsEnabled()) return false;
   if (!("Notification" in window) || Notification.permission !== "granted") return false;
 
-  const lastRefresh = Number(localStorage.getItem(FCM_TOKEN_REFRESHED_AT_STORAGE_KEY) || 0);
   return !localStorage.getItem(FCM_TOKEN_STORAGE_KEY) || !lastRefresh || Date.now() - lastRefresh > FCM_TOKEN_REFRESH_INTERVAL_MS;
 }
 
@@ -13431,6 +13495,7 @@ async function registerServiceWorker() {
     const registration = await navigator.serviceWorker.register("service-worker.js", { updateViaCache: "none" });
     syncSystemPushPreferenceToServiceWorker();
     await registration.update();
+    await consumePendingFcmTokenRefreshRequest();
   } catch (error) {
     console.warn("Service worker não registrado.", error);
   }
