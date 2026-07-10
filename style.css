@@ -2001,6 +2001,32 @@ button:disabled,
   line-height: 1.43;
 }
 
+.translation-provider-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  margin-right: auto;
+  font-size: 0.72rem;
+  line-height: 1;
+  opacity: 0.82;
+}
+
+.translation-provider-icon + time {
+  margin-left: auto !important;
+}
+
+.message-footer .translation-provider-icon {
+  order: -1;
+}
+
+.message-footer time {
+  order: 3;
+}
+
+.message-footer .message-delivery-status {
+  order: 4;
+}
+
 .show-original-button {
   width: 30px;
   height: 30px;

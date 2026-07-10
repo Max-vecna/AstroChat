@@ -125,6 +125,7 @@ const PUBLIC_TRANSLATION_ERROR_TEXT = "Não foi possível traduzir este texto.";
 const PUBLIC_LEARNING_TEST_PENDING_TEXT = "Verificando aprendizado em segundo plano...";
 const POLLINATIONS_CHAT_ENDPOINT = "https://text.pollinations.ai/openai";
 const POLLINATIONS_TEXT_ENDPOINT = "https://text.pollinations.ai/";
+const MYMEMORY_TRANSLATE_ENDPOINT = "https://api.mymemory.translated.net/get";
 const LANGUAGE_OPTIONS = [
   { code: "", name: "Sem tradução automática", label: "Sem tradução automática" },
   { code: "en", name: "inglês", label: "Inglês" },
@@ -4072,6 +4073,7 @@ function addLocalAiMessage(room, options = {}) {
     text: hasPresetTranslation ? presetTranslatedText : shouldTranslate ? PUBLIC_TRANSLATION_PENDING_TEXT : sourceText,
     originalText: hasPresetTranslation ? presetOriginalText : "",
     translatedText: hasPresetTranslation ? presetTranslatedText : "",
+    translationProvider: hasPresetTranslation ? "Pollinations.AI" : "",
     translationSourceText: shouldTranslate ? sourceText : "",
     targetLanguageCode: shouldTranslate || hasPresetTranslation ? language.code || "" : "",
     targetLanguageName: shouldTranslate || hasPresetTranslation ? language.name || "" : "",
@@ -4102,7 +4104,8 @@ async function translateLocalAiMessage(roomId, messageId, sourceText, language) 
   if (!roomId || !messageId || !cleanSourceText || !language?.code) return;
 
   try {
-    const translated = cleanMessageText(await translateMessageText(cleanSourceText, language), 1000);
+    const translationResult = await translateMessageTextResult(cleanSourceText, language);
+    const translated = cleanMessageText(translationResult.text, 1000);
     if (!translated) throw new Error("Traducao vazia.");
 
     const hasTranslation = translated !== cleanSourceText;
@@ -4110,6 +4113,7 @@ async function translateLocalAiMessage(roomId, messageId, sourceText, language) 
       text: hasTranslation ? translated : cleanSourceText,
       originalText: hasTranslation ? cleanSourceText : "",
       translatedText: hasTranslation ? translated : "",
+      translationProvider: hasTranslation ? translationResult.provider : "",
       translationSourceText: "",
       translationStatus: "done",
       translationError: false,
@@ -4163,6 +4167,7 @@ function applyBundledLocalAiTranslation(room, messageId, originalText, translate
     text: cleanTranslated,
     originalText: cleanOriginal,
     translatedText: cleanTranslated,
+    translationProvider: "Pollinations.AI",
     translationSourceText: "",
     targetLanguageCode: language.code || "",
     targetLanguageName: language.name || "",
@@ -4234,6 +4239,7 @@ async function sendFirebaseMessage(room, text, options = {}) {
     text: displayText,
     originalText: presetOriginalText,
     translatedText: presetTranslatedText,
+    translationProvider: sanitizeText(options.translationProvider || (hasPresetTranslation ? "Pollinations.AI" : ""), 32),
     targetLanguageCode: options.targetLanguageCode || language?.code || "",
     targetLanguageName: options.targetLanguageName || language?.name || "",
     learningTest,
@@ -5424,7 +5430,8 @@ async function translateFirebaseMessageInBackground(room, message, language) {
       throw new Error("Texto original da tradução não encontrado.");
     }
 
-    const translated = cleanMessageText(await translateMessageText(originalText, language), 1000);
+    const translationResult = await translateMessageTextResult(originalText, language);
+    const translated = cleanMessageText(translationResult.text, 1000);
     if (!translated) throw new Error("Tradução vazia.");
 
     const hasDeliveredTranslation = translated && translated !== originalText;
@@ -5433,6 +5440,7 @@ async function translateFirebaseMessageInBackground(room, message, language) {
       text: hasDeliveredTranslation ? translated : originalText,
       originalText: hasDeliveredTranslation ? originalText : "",
       translatedText: hasDeliveredTranslation ? translated : "",
+      translationProvider: hasDeliveredTranslation ? translationResult.provider : "",
       translationSourceText: "",
       translationStatus: "done",
       translationError: false,
@@ -5445,6 +5453,7 @@ async function translateFirebaseMessageInBackground(room, message, language) {
       [`rooms/${room.id}/messages/${message.id}/text`]: translatedMessage.text,
       [`rooms/${room.id}/messages/${message.id}/originalText`]: translatedMessage.originalText,
       [`rooms/${room.id}/messages/${message.id}/translatedText`]: translatedMessage.translatedText,
+      [`rooms/${room.id}/messages/${message.id}/translationProvider`]: translatedMessage.translationProvider,
       [`rooms/${room.id}/messages/${message.id}/translationStatus`]: "done",
       [`rooms/${room.id}/messages/${message.id}/translationError`]: false,
       [`rooms/${room.id}/messages/${message.id}/deliveryStatus`]: "sent",
@@ -6588,6 +6597,7 @@ function createMessageElement(message, animated = false, options = {}) {
 
   const deliveryStatus = createMessageDeliveryStatusElement(message);
   const metaBadges = createMessageMetaBadgesElement(message);
+  const translationProviderIcon = createTranslationProviderIcon(message.translationProvider);
 
   if (messageTools) {
     footer.classList.add("has-message-tools");
@@ -6598,6 +6608,7 @@ function createMessageElement(message, animated = false, options = {}) {
     footer.appendChild(metaBadges);
   }
 
+  if (translationProviderIcon) footer.appendChild(translationProviderIcon);
   footer.appendChild(time);
 
   if (deliveryStatus) {
@@ -7026,6 +7037,26 @@ function createTranslatedMessageBlock(message, isMine) {
 
   wrapper.append(translated, originalWrap);
   return { wrapper, originalWrap };
+}
+
+function createTranslationProviderIcon(provider) {
+  const safeProvider = sanitizeText(provider || "", 32);
+  if (!safeProvider) return null;
+
+  const icon = document.createElement("span");
+  icon.className = "translation-provider-icon";
+  icon.title = `Traduzido com ${safeProvider}`;
+  icon.setAttribute("aria-label", icon.title);
+
+  if (safeProvider === "MyMemory") {
+    icon.innerHTML = '<i class="fa-solid fa-brain" aria-hidden="true"></i>';
+  } else if (safeProvider === "Pollinations.AI") {
+    icon.textContent = "🌸";
+  } else {
+    return null;
+  }
+
+  return icon;
 }
 
 function createHydratedMessageBlock(message, hydration) {
@@ -11731,10 +11762,24 @@ function renderAiAssistError(message) {
 }
 
 async function translateMessageText(text, language) {
+  const result = await translateMessageTextResult(text, language);
+  return result.text;
+}
+
+async function translateMessageTextResult(text, language) {
   const clean = cleanMessageText(text);
-  if (!clean || !language?.code) return clean;
+  if (!clean || !language?.code) return { text: clean, provider: "" };
   if (!requireInternet("traduzir mensagens")) {
     throw new Error("Sem internet para traduzir.");
+  }
+
+  try {
+    return {
+      text: await translateMessageTextWithMyMemory(clean, language),
+      provider: "MyMemory"
+    };
+  } catch (error) {
+    console.warn("MyMemory indisponível para tradução, tentando Pollinations.AI.", error);
   }
 
   const payload = {
@@ -11766,7 +11811,7 @@ async function translateMessageText(text, language) {
     const data = await response.json();
     const content = data?.choices?.[0]?.message?.content || data?.response || "";
     const translated = cleanAiText(content).replace(/^['"]|['"]$/g, "");
-    if (translated) return translated;
+    if (translated) return { text: translated, provider: "Pollinations.AI" };
   } catch (error) {
     console.warn("Endpoint de tradução por chat indisponível, tentando endpoint simples.", error);
   }
@@ -11777,13 +11822,56 @@ async function translateMessageText(text, language) {
     system: `Traduza para ${language.name}. Responda somente com a tradução.`
   });
   const prompt = `Traduza a mensagem abaixo para ${language.name}. Responda somente com a tradução:\n\n${clean}`;
-  const response = await fetch(`${POLLINATIONS_TEXT_ENDPOINT}${encodeURIComponent(prompt)}?${params.toString()}`);
+  try {
+    const response = await fetch(`${POLLINATIONS_TEXT_ENDPOINT}${encodeURIComponent(prompt)}?${params.toString()}`);
 
-  if (!response.ok) throw new Error(`Resposta HTTP ${response.status}`);
+    if (!response.ok) throw new Error(`Resposta HTTP ${response.status}`);
 
-  const translated = cleanAiText(await response.text()).replace(/^['"]|['"]$/g, "");
-  if (!translated) throw new Error("Tradução vazia.");
+    const translated = cleanAiText(await response.text()).replace(/^['"]|['"]$/g, "");
+    if (translated) return { text: translated, provider: "Pollinations.AI" };
+    throw new Error("Tradução vazia.");
+  } catch (error) {
+    console.warn("Pollinations.AI indisponível para tradução.", error);
+  }
+
+  throw new Error("Nenhum serviço de tradução está disponível no momento.");
+}
+
+async function translateMessageTextWithMyMemory(text, language) {
+  const targetLanguageCode = sanitizeText(language?.code || "", 12).toLowerCase();
+  const nativeLanguageCode = sanitizeText(getCurrentNativeLanguage()?.code || "pt", 12).toLowerCase();
+  const sourceLanguageCode = nativeLanguageCode === targetLanguageCode ? "en" : nativeLanguageCode;
+  const queryText = truncateUtf8Text(text, 500);
+
+  if (!queryText || !targetLanguageCode) throw new Error("Texto ou idioma inválido para tradução.");
+
+  const params = new URLSearchParams({
+    q: queryText,
+    langpair: `${sourceLanguageCode}|${targetLanguageCode}`,
+    mt: "1"
+  });
+  const response = await fetch(`${MYMEMORY_TRANSLATE_ENDPOINT}?${params.toString()}`);
+  if (!response.ok) throw new Error(`MyMemory respondeu HTTP ${response.status}`);
+
+  const data = await response.json();
+  const responseStatus = Number(data?.responseStatus || response.status);
+  const translated = cleanAiText(data?.responseData?.translatedText || "").replace(/^['"]|['"]$/g, "");
+  if (responseStatus !== 200 || !translated) {
+    throw new Error(data?.responseDetails || "MyMemory retornou uma tradução vazia.");
+  }
   return translated;
+}
+
+function truncateUtf8Text(text, maxBytes) {
+  const value = String(text || "");
+  if (new TextEncoder().encode(value).length <= maxBytes) return value;
+
+  let result = "";
+  for (const character of value) {
+    if (new TextEncoder().encode(result + character).length > maxBytes) break;
+    result += character;
+  }
+  return result.trim();
 }
 
 function getAiSystemPrompt(room) {
@@ -12335,6 +12423,7 @@ function mapMessageData(messageId, data = {}) {
     text: normalizeStoredMessageText(data.text || ""),
     originalText: normalizeStoredMessageText(data.originalText || ""),
     translatedText: normalizeStoredMessageText(data.translatedText || ""),
+    translationProvider: sanitizeText(data.translationProvider || "", 32),
     translationSourceText: data.translationSourceText || "",
     targetLanguageCode: data.targetLanguageCode || "",
     targetLanguageName: data.targetLanguageName || "",
