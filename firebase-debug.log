@@ -171,3 +171,102 @@ https://console.firebase.google.com/project/astro-chat-7d044/usage/details
 [error] Error: Your project astro-chat-7d044 must be on the Blaze (pay-as-you-go) plan to complete this command. Required API artifactregistry.googleapis.com can't be enabled until the upgrade is complete. To upgrade, visit the following URL:
 
 https://console.firebase.google.com/project/astro-chat-7d044/usage/details
+[debug] [2026-07-08T10:47:27.441Z] ----------------------------------------------------------------------
+[debug] [2026-07-08T10:47:27.454Z] Command:       C:\Program Files\nodejs\node.exe C:\Users\maxsu\AppData\Roaming\npm\node_modules\firebase-tools\lib\bin\firebase.js deploy --only functions
+[debug] [2026-07-08T10:47:27.457Z] CLI Version:   14.11.1
+[debug] [2026-07-08T10:47:27.457Z] Platform:      win32
+[debug] [2026-07-08T10:47:27.458Z] Node Version:  v22.14.0
+[debug] [2026-07-08T10:47:27.459Z] Time:          Wed Jul 08 2026 07:47:27 GMT-0300 (Horário Padrão de Brasília)
+[debug] [2026-07-08T10:47:27.460Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-07-08T10:47:27.485Z] >>> [apiv2][query] GET https://firebase-public.firebaseio.com/cli.json [none]
+[debug] [2026-07-08T10:47:29.178Z] Checked if tokens are valid: false, expires at: 1783186025731
+[debug] [2026-07-08T10:47:29.190Z] Checked if tokens are valid: false, expires at: 1783186025731
+[debug] [2026-07-08T10:47:29.191Z] > refreshing access token with scopes: []
+[debug] [2026-07-08T10:47:29.206Z] >>> [apiv2][query] POST https://www.googleapis.com/oauth2/v3/token [none]
+[debug] [2026-07-08T10:47:29.206Z] >>> [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2026-07-08T10:47:29.519Z] <<< [apiv2][status] POST https://www.googleapis.com/oauth2/v3/token 200
+[debug] [2026-07-08T10:47:29.520Z] <<< [apiv2][body] POST https://www.googleapis.com/oauth2/v3/token [omitted]
+[debug] [2026-07-08T10:47:29.551Z] >>> [apiv2][query] POST https://iam.googleapis.com/v1/projects/undefined/serviceAccounts/undefined@appspot.gserviceaccount.com:testIamPermissions [none]
+[debug] [2026-07-08T10:47:29.551Z] >>> [apiv2][body] POST https://iam.googleapis.com/v1/projects/undefined/serviceAccounts/undefined@appspot.gserviceaccount.com:testIamPermissions {"permissions":["iam.serviceAccounts.actAs"]}
+[debug] [2026-07-08T10:47:29.627Z] <<< [apiv2][status] GET https://firebase-public.firebaseio.com/cli.json 200
+[debug] [2026-07-08T10:47:29.628Z] <<< [apiv2][body] GET https://firebase-public.firebaseio.com/cli.json {"cloudBuildErrorAfter":1594252800000,"cloudBuildWarnAfter":1590019200000,"defaultNode10After":1594252800000,"minVersion":"3.0.5","node8DeploysDisabledAfter":1613390400000,"node8RuntimeDisabledAfter":1615809600000,"node8WarnAfter":1600128000000}
+[debug] [2026-07-08T10:47:30.569Z] <<< [apiv2][status] POST https://iam.googleapis.com/v1/projects/undefined/serviceAccounts/undefined@appspot.gserviceaccount.com:testIamPermissions 404
+[debug] [2026-07-08T10:47:30.569Z] <<< [apiv2][body] POST https://iam.googleapis.com/v1/projects/undefined/serviceAccounts/undefined@appspot.gserviceaccount.com:testIamPermissions {"error":{"code":404,"message":"Unknown service account","status":"NOT_FOUND"}}
+[debug] [2026-07-08T10:47:30.570Z] [functions] service account IAM check errored, deploy may fail: Request to https://iam.googleapis.com/v1/projects/undefined/serviceAccounts/undefined@appspot.gserviceaccount.com:testIamPermissions had HTTP Error: 404, Unknown service account {"name":"FirebaseError","children":[],"context":{"body":{"error":{"code":404,"message":"Unknown service account","status":"NOT_FOUND"}},"response":{"statusCode":404}},"exit":1,"message":"Request to https://iam.googleapis.com/v1/projects/undefined/serviceAccounts/undefined@appspot.gserviceaccount.com:testIamPermissions had HTTP Error: 404, Unknown service account","status":404}
+[error] 
+[error] Error: No currently active project.
+To run this command, you need to specify a project. You have two options:
+- Run this command with --project <alias_or_project_id>.
+- Set an active project by running firebase use --add, then rerun this command.
+To list all the Firebase projects to which you have access, run firebase projects:list.
+To learn about active projects for the CLI, visit https://firebase.google.com/docs/cli#project_aliases
+
+
+[debug] [2026-07-08T10:47:51.906Z] ----------------------------------------------------------------------
+[debug] [2026-07-08T10:47:51.924Z] Command:       C:\Program Files\nodejs\node.exe C:\Users\maxsu\AppData\Roaming\npm\node_modules\firebase-tools\lib\bin\firebase.js deploy --only functions --project astro-chat-7d044 --non-interactive
+[debug] [2026-07-08T10:47:51.925Z] CLI Version:   14.11.1
+[debug] [2026-07-08T10:47:51.926Z] Platform:      win32
+[debug] [2026-07-08T10:47:51.927Z] Node Version:  v22.14.0
+[debug] [2026-07-08T10:47:51.928Z] Time:          Wed Jul 08 2026 07:47:51 GMT-0300 (Horário Padrão de Brasília)
+[debug] [2026-07-08T10:47:51.930Z] ----------------------------------------------------------------------
+[debug] 
+[debug] [2026-07-08T10:47:53.022Z] > command requires scopes: ["email","openid","https://www.googleapis.com/auth/cloudplatformprojects.readonly","https://www.googleapis.com/auth/firebase","https://www.googleapis.com/auth/cloud-platform"]
+[debug] [2026-07-08T10:47:53.025Z] > authorizing via signed-in user (maxsuelsoarescustodio@gmail.com)
+[debug] [2026-07-08T10:47:53.027Z] [iam] checking project astro-chat-7d044 for permissions ["cloudfunctions.functions.create","cloudfunctions.functions.delete","cloudfunctions.functions.get","cloudfunctions.functions.list","cloudfunctions.functions.update","cloudfunctions.operations.get","firebase.projects.get"]
+[debug] [2026-07-08T10:47:53.037Z] Checked if tokens are valid: true, expires at: 1783511248521
+[debug] [2026-07-08T10:47:53.037Z] Checked if tokens are valid: true, expires at: 1783511248521
+[debug] [2026-07-08T10:47:53.042Z] >>> [apiv2][query] POST https://cloudresourcemanager.googleapis.com/v1/projects/astro-chat-7d044:testIamPermissions [none]
+[debug] [2026-07-08T10:47:53.049Z] >>> [apiv2][(partial)header] POST https://cloudresourcemanager.googleapis.com/v1/projects/astro-chat-7d044:testIamPermissions x-goog-quota-user=projects/astro-chat-7d044
+[debug] [2026-07-08T10:47:53.050Z] >>> [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/astro-chat-7d044:testIamPermissions {"permissions":["cloudfunctions.functions.create","cloudfunctions.functions.delete","cloudfunctions.functions.get","cloudfunctions.functions.list","cloudfunctions.functions.update","cloudfunctions.operations.get","firebase.projects.get"]}
+[debug] [2026-07-08T10:47:54.141Z] <<< [apiv2][status] POST https://cloudresourcemanager.googleapis.com/v1/projects/astro-chat-7d044:testIamPermissions 200
+[debug] [2026-07-08T10:47:54.142Z] <<< [apiv2][body] POST https://cloudresourcemanager.googleapis.com/v1/projects/astro-chat-7d044:testIamPermissions {"permissions":["cloudfunctions.functions.create","cloudfunctions.functions.delete","cloudfunctions.functions.get","cloudfunctions.functions.list","cloudfunctions.functions.update","cloudfunctions.operations.get","firebase.projects.get"]}
+[debug] [2026-07-08T10:47:54.144Z] Checked if tokens are valid: true, expires at: 1783511248521
+[debug] [2026-07-08T10:47:54.144Z] Checked if tokens are valid: true, expires at: 1783511248521
+[debug] [2026-07-08T10:47:54.145Z] >>> [apiv2][query] POST https://iam.googleapis.com/v1/projects/astro-chat-7d044/serviceAccounts/astro-chat-7d044@appspot.gserviceaccount.com:testIamPermissions [none]
+[debug] [2026-07-08T10:47:54.145Z] >>> [apiv2][body] POST https://iam.googleapis.com/v1/projects/astro-chat-7d044/serviceAccounts/astro-chat-7d044@appspot.gserviceaccount.com:testIamPermissions {"permissions":["iam.serviceAccounts.actAs"]}
+[debug] [2026-07-08T10:47:54.987Z] <<< [apiv2][status] POST https://iam.googleapis.com/v1/projects/astro-chat-7d044/serviceAccounts/astro-chat-7d044@appspot.gserviceaccount.com:testIamPermissions 200
+[debug] [2026-07-08T10:47:54.987Z] <<< [apiv2][body] POST https://iam.googleapis.com/v1/projects/astro-chat-7d044/serviceAccounts/astro-chat-7d044@appspot.gserviceaccount.com:testIamPermissions {"permissions":["iam.serviceAccounts.actAs"]}
+[info] 
+[info] === Deploying to 'astro-chat-7d044'...
+[info] 
+[info] i  deploying functions 
+[debug] [2026-07-08T10:47:54.997Z] Checked if tokens are valid: true, expires at: 1783511248521
+[debug] [2026-07-08T10:47:54.998Z] Checked if tokens are valid: true, expires at: 1783511248521
+[debug] [2026-07-08T10:47:54.998Z] >>> [apiv2][query] GET https://cloudresourcemanager.googleapis.com/v1/projects/astro-chat-7d044 [none]
+[debug] [2026-07-08T10:47:55.202Z] <<< [apiv2][status] GET https://cloudresourcemanager.googleapis.com/v1/projects/astro-chat-7d044 200
+[debug] [2026-07-08T10:47:55.202Z] <<< [apiv2][body] GET https://cloudresourcemanager.googleapis.com/v1/projects/astro-chat-7d044 {"projectNumber":"64273019284","projectId":"astro-chat-7d044","lifecycleState":"ACTIVE","name":"astro-chat","labels":{"firebase":"enabled","firebase-core":"disabled"},"createTime":"2025-12-25T03:06:02.460760Z"}
+[info] i  functions: preparing codebase default for deployment 
+[info] i  functions: ensuring required API cloudfunctions.googleapis.com is enabled... 
+[info] i  functions: ensuring required API cloudbuild.googleapis.com is enabled... 
+[debug] [2026-07-08T10:47:55.210Z] Checked if tokens are valid: true, expires at: 1783511248521
+[debug] [2026-07-08T10:47:55.210Z] Checked if tokens are valid: true, expires at: 1783511248521
+[info] i  artifactregistry: ensuring required API artifactregistry.googleapis.com is enabled... 
+[debug] [2026-07-08T10:47:55.213Z] Checked if tokens are valid: true, expires at: 1783511248521
+[debug] [2026-07-08T10:47:55.213Z] Checked if tokens are valid: true, expires at: 1783511248521
+[debug] [2026-07-08T10:47:55.214Z] >>> [apiv2][query] GET https://serviceusage.googleapis.com/v1/projects/astro-chat-7d044/services/cloudbuild.googleapis.com [none]
+[debug] [2026-07-08T10:47:55.214Z] >>> [apiv2][(partial)header] GET https://serviceusage.googleapis.com/v1/projects/astro-chat-7d044/services/cloudbuild.googleapis.com x-goog-quota-user=projects/astro-chat-7d044
+[debug] [2026-07-08T10:47:55.218Z] >>> [apiv2][query] GET https://serviceusage.googleapis.com/v1/projects/astro-chat-7d044/services/artifactregistry.googleapis.com [none]
+[debug] [2026-07-08T10:47:55.218Z] >>> [apiv2][(partial)header] GET https://serviceusage.googleapis.com/v1/projects/astro-chat-7d044/services/artifactregistry.googleapis.com x-goog-quota-user=projects/astro-chat-7d044
+[debug] [2026-07-08T10:47:56.223Z] <<< [apiv2][status] GET https://serviceusage.googleapis.com/v1/projects/astro-chat-7d044/services/cloudbuild.googleapis.com 200
+[debug] [2026-07-08T10:47:56.224Z] <<< [apiv2][body] GET https://serviceusage.googleapis.com/v1/projects/astro-chat-7d044/services/cloudbuild.googleapis.com [omitted]
+[warn] !  functions: missing required API cloudbuild.googleapis.com. Enabling now... 
+[debug] [2026-07-08T10:47:56.225Z] Checked if tokens are valid: true, expires at: 1783511248521
+[debug] [2026-07-08T10:47:56.226Z] Checked if tokens are valid: true, expires at: 1783511248521
+[debug] [2026-07-08T10:47:56.226Z] >>> [apiv2][query] POST https://serviceusage.googleapis.com/v1/projects/astro-chat-7d044/services/cloudbuild.googleapis.com:enable [none]
+[debug] [2026-07-08T10:47:56.227Z] >>> [apiv2][(partial)header] POST https://serviceusage.googleapis.com/v1/projects/astro-chat-7d044/services/cloudbuild.googleapis.com:enable x-goog-quota-user=projects/astro-chat-7d044
+[debug] [2026-07-08T10:47:56.234Z] <<< [apiv2][status] GET https://serviceusage.googleapis.com/v1/projects/astro-chat-7d044/services/artifactregistry.googleapis.com 200
+[debug] [2026-07-08T10:47:56.234Z] <<< [apiv2][body] GET https://serviceusage.googleapis.com/v1/projects/astro-chat-7d044/services/artifactregistry.googleapis.com [omitted]
+[warn] !  artifactregistry: missing required API artifactregistry.googleapis.com. Enabling now... 
+[debug] [2026-07-08T10:47:56.235Z] Checked if tokens are valid: true, expires at: 1783511248521
+[debug] [2026-07-08T10:47:56.235Z] Checked if tokens are valid: true, expires at: 1783511248521
+[debug] [2026-07-08T10:47:56.236Z] >>> [apiv2][query] POST https://serviceusage.googleapis.com/v1/projects/astro-chat-7d044/services/artifactregistry.googleapis.com:enable [none]
+[debug] [2026-07-08T10:47:56.237Z] >>> [apiv2][(partial)header] POST https://serviceusage.googleapis.com/v1/projects/astro-chat-7d044/services/artifactregistry.googleapis.com:enable x-goog-quota-user=projects/astro-chat-7d044
+[debug] [2026-07-08T10:47:57.182Z] <<< [apiv2][status] POST https://serviceusage.googleapis.com/v1/projects/astro-chat-7d044/services/cloudbuild.googleapis.com:enable 400
+[debug] [2026-07-08T10:47:57.182Z] <<< [apiv2][body] POST https://serviceusage.googleapis.com/v1/projects/astro-chat-7d044/services/cloudbuild.googleapis.com:enable [omitted]
+[debug] [2026-07-08T10:47:57.194Z] <<< [apiv2][status] POST https://serviceusage.googleapis.com/v1/projects/astro-chat-7d044/services/artifactregistry.googleapis.com:enable 400
+[debug] [2026-07-08T10:47:57.194Z] <<< [apiv2][body] POST https://serviceusage.googleapis.com/v1/projects/astro-chat-7d044/services/artifactregistry.googleapis.com:enable [omitted]
+[error] 
+[error] Error: Your project astro-chat-7d044 must be on the Blaze (pay-as-you-go) plan to complete this command. Required API cloudbuild.googleapis.com can't be enabled until the upgrade is complete. To upgrade, visit the following URL:
+
+https://console.firebase.google.com/project/astro-chat-7d044/usage/details

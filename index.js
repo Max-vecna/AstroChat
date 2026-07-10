@@ -1,12 +1,20 @@
 const { onValueCreated } = require("firebase-functions/database");
 const { logger } = require("firebase-functions");
 const admin = require("firebase-admin");
+const webPush = require("web-push");
 
 admin.initializeApp();
 
 const DATABASE_INSTANCE = "astro-chat-7d044-default-rtdb";
 const FUNCTION_REGION = "us-central1";
 const MAX_MULTICAST_TOKENS = 500;
+const WEB_PUSH_PUBLIC_VAPID_KEY = "BLE7nXv1JR25D7PSPJgHRXcAIQUhe1R0XOhFPGheglqfIpNIo9G95_lSTDtFUNx4GjWZHFaRkdlMylcItINrvAs";
+const WEB_PUSH_PRIVATE_VAPID_KEY = String(process.env.WEB_PUSH_PRIVATE_VAPID_KEY || "").trim();
+const WEB_PUSH_SUBJECT = String(process.env.WEB_PUSH_SUBJECT || "mailto:astrochat@example.com").trim();
+
+if (WEB_PUSH_PRIVATE_VAPID_KEY) {
+  webPush.setVapidDetails(WEB_PUSH_SUBJECT, WEB_PUSH_PUBLIC_VAPID_KEY, WEB_PUSH_PRIVATE_VAPID_KEY);
+}
 
 exports.sendChatMessageNotification = onValueCreated(
   {
@@ -29,9 +37,13 @@ exports.sendChatMessageNotification = onValueCreated(
 
     if (!recipientUids.length) return;
 
-    const tokenRecords = await collectRecipientTokenRecords(rootRef, recipientUids);
-    if (!tokenRecords.length) {
-      logger.info("No FCM tokens for chat notification recipients.", { roomId, messageId });
+    const [tokenRecords, webPushRecords] = await Promise.all([
+      collectRecipientTokenRecords(rootRef, recipientUids),
+      collectRecipientWebPushSubscriptionRecords(rootRef, recipientUids)
+    ]);
+
+    if (!tokenRecords.length && !webPushRecords.length) {
+      logger.info("No push registrations for chat notification recipients.", { roomId, messageId });
       return;
     }
 
@@ -84,38 +96,45 @@ exports.sendChatMessageNotification = onValueCreated(
     let successCount = 0;
     let failureCount = 0;
 
-    for (const chunk of chunkArray(tokenRecords, MAX_MULTICAST_TOKENS)) {
-      const response = await admin.messaging().sendEachForMulticast({
-        tokens: chunk.map((record) => record.token),
-        notification: {
-          title,
-          body
-        },
-        data,
-        webpush
-      });
-
-      successCount += response.successCount;
-      failureCount += response.failureCount;
-
-      response.responses.forEach((result, index) => {
-        if (result.success) return;
-
-        const record = chunk[index];
-        logger.warn("FCM notification failed.", {
-          roomId,
-          messageId,
-          uid: record.uid,
-          deviceId: record.deviceId,
-          code: result.error?.code,
-          message: result.error?.message
+    if (tokenRecords.length) {
+      for (const chunk of chunkArray(tokenRecords, MAX_MULTICAST_TOKENS)) {
+        const response = await admin.messaging().sendEachForMulticast({
+          tokens: chunk.map((record) => record.token),
+          notification: {
+            title,
+            body
+          },
+          data,
+          webpush
         });
 
-        if (isInvalidFcmTokenError(result.error)) {
-          staleTokenUpdates[`fcmTokens/${record.uid}/${record.deviceId}`] = null;
-        }
-      });
+        successCount += response.successCount;
+        failureCount += response.failureCount;
+
+        response.responses.forEach((result, index) => {
+          if (result.success) return;
+
+          const record = chunk[index];
+          logger.warn("FCM notification failed.", {
+            roomId,
+            messageId,
+            uid: record.uid,
+            deviceId: record.deviceId,
+            code: result.error?.code,
+            message: result.error?.message
+          });
+
+          if (isInvalidFcmTokenError(result.error)) {
+            staleTokenUpdates[`fcmTokens/${record.uid}/${record.deviceId}`] = null;
+          }
+        });
+      }
     }
+
+    const standardPushResult = await sendStandardWebPushNotifications(rootRef, webPushRecords, {
+      data,
+      notification: webpush.notification
+    });
 
     if (Object.keys(staleTokenUpdates).length) {
       await rootRef.update(staleTokenUpdates);
@@ -128,6 +147,9 @@ exports.sendChatMessageNotification = onValueCreated(
       tokens: tokenRecords.length,
       successCount,
       failureCount,
+      webPushSubscriptions: webPushRecords.length,
+      webPushSuccessCount: standardPushResult.successCount,
+      webPushFailureCount: standardPushResult.failureCount,
       staleTokensRemoved: Object.keys(staleTokenUpdates).length
     });
   }
@@ -149,9 +171,13 @@ exports.sendInviteNotification = onValueCreated(
     if (toUid === fromUid) return;
 
     const rootRef = event.data.ref.root;
-    const tokenRecords = await collectRecipientTokenRecords(rootRef, [toUid]);
-    if (!tokenRecords.length) {
-      logger.info("No FCM tokens for invite notification recipient.", { inviteId, toUid });
+    const [tokenRecords, webPushRecords] = await Promise.all([
+      collectRecipientTokenRecords(rootRef, [toUid]),
+      collectRecipientWebPushSubscriptionRecords(rootRef, [toUid])
+    ]);
+
+    if (!tokenRecords.length && !webPushRecords.length) {
+      logger.info("No push registrations for invite notification recipient.", { inviteId, toUid });
       return;
     }
 
@@ -206,37 +232,44 @@ exports.sendInviteNotification = onValueCreated(
     let successCount = 0;
     let failureCount = 0;
 
-    for (const chunk of chunkArray(tokenRecords, MAX_MULTICAST_TOKENS)) {
-      const response = await admin.messaging().sendEachForMulticast({
-        tokens: chunk.map((record) => record.token),
-        notification: {
-          title,
-          body
-        },
-        data,
-        webpush
-      });
-
-      successCount += response.successCount;
-      failureCount += response.failureCount;
-
-      response.responses.forEach((result, index) => {
-        if (result.success) return;
-
-        const record = chunk[index];
-        logger.warn("FCM invite notification failed.", {
-          inviteId,
-          uid: record.uid,
-          deviceId: record.deviceId,
-          code: result.error?.code,
-          message: result.error?.message
+    if (tokenRecords.length) {
+      for (const chunk of chunkArray(tokenRecords, MAX_MULTICAST_TOKENS)) {
+        const response = await admin.messaging().sendEachForMulticast({
+          tokens: chunk.map((record) => record.token),
+          notification: {
+            title,
+            body
+          },
+          data,
+          webpush
         });
 
-        if (isInvalidFcmTokenError(result.error)) {
-          staleTokenUpdates[`fcmTokens/${record.uid}/${record.deviceId}`] = null;
-        }
-      });
+        successCount += response.successCount;
+        failureCount += response.failureCount;
+
+        response.responses.forEach((result, index) => {
+          if (result.success) return;
+
+          const record = chunk[index];
+          logger.warn("FCM invite notification failed.", {
+            inviteId,
+            uid: record.uid,
+            deviceId: record.deviceId,
+            code: result.error?.code,
+            message: result.error?.message
+          });
+
+          if (isInvalidFcmTokenError(result.error)) {
+            staleTokenUpdates[`fcmTokens/${record.uid}/${record.deviceId}`] = null;
+          }
+        });
+      }
     }
+
+    const standardPushResult = await sendStandardWebPushNotifications(rootRef, webPushRecords, {
+      data,
+      notification: webpush.notification
+    });
 
     if (Object.keys(staleTokenUpdates).length) {
       await rootRef.update(staleTokenUpdates);
@@ -248,6 +281,9 @@ exports.sendInviteNotification = onValueCreated(
       tokens: tokenRecords.length,
       successCount,
       failureCount,
+      webPushSubscriptions: webPushRecords.length,
+      webPushSuccessCount: standardPushResult.successCount,
+      webPushFailureCount: standardPushResult.failureCount,
       staleTokensRemoved: Object.keys(staleTokenUpdates).length
     });
   }
@@ -287,6 +323,109 @@ async function collectRecipientTokenRecords(rootRef, recipientUids) {
   });
 }
 
+async function collectRecipientWebPushSubscriptionRecords(rootRef, recipientUids) {
+  const snapshots = await Promise.all(
+    recipientUids.map(async (uid) => ({
+      uid,
+      subscriptionSnapshot: await rootRef.child(`webPushSubscriptions/${uid}`).get(),
+      tokenSnapshot: await rootRef.child(`fcmTokens/${uid}`).get()
+    }))
+  );
+
+  const seenEndpoints = new Set();
+
+  return snapshots.flatMap(({ uid, subscriptionSnapshot, tokenSnapshot }) => {
+    const devices = {
+      ...(extractWebPushSubscriptionsFromTokenRecords(tokenSnapshot.val() || {})),
+      ...(subscriptionSnapshot.val() || {})
+    };
+
+    return Object.entries(devices)
+      .map(([deviceId, record]) => ({
+        uid,
+        deviceId,
+        subscription: normalizeWebPushSubscription(record)
+      }))
+      .filter((record) => {
+        const endpoint = record.subscription?.endpoint || "";
+        if (!endpoint || !record.subscription?.keys?.p256dh || !record.subscription?.keys?.auth) return false;
+        if (seenEndpoints.has(endpoint)) return false;
+        seenEndpoints.add(endpoint);
+        return true;
+      });
+  });
+}
+
+function extractWebPushSubscriptionsFromTokenRecords(tokenRecords = {}) {
+  return Object.fromEntries(
+    Object.entries(tokenRecords)
+      .map(([deviceId, record]) => [deviceId, record?.webPushSubscription])
+      .filter(([, subscription]) => subscription?.endpoint)
+  );
+}
+
+function normalizeWebPushSubscription(record = {}) {
+  if (!record || typeof record !== "object") return null;
+
+  return {
+    endpoint: String(record.endpoint || ""),
+    expirationTime: record.expirationTime || null,
+    keys: {
+      p256dh: String(record.keys?.p256dh || ""),
+      auth: String(record.keys?.auth || "")
+    }
+  };
+}
+
+async function sendStandardWebPushNotifications(rootRef, records, payload) {
+  const result = {
+    successCount: 0,
+    failureCount: 0
+  };
+
+  if (!records.length) return result;
+
+  if (!WEB_PUSH_PRIVATE_VAPID_KEY) {
+    logger.warn("Standard Web Push skipped: WEB_PUSH_PRIVATE_VAPID_KEY is not configured.", {
+      subscriptions: records.length
+    });
+    result.failureCount = records.length;
+    return result;
+  }
+
+  const staleSubscriptionUpdates = {};
+  const body = JSON.stringify(payload);
+
+  await Promise.all(records.map(async (record) => {
+    try {
+      await webPush.sendNotification(record.subscription, body, {
+        TTL: 86400,
+        urgency: "high"
+      });
+      result.successCount += 1;
+    } catch (error) {
+      result.failureCount += 1;
+      logger.warn("Standard Web Push notification failed.", {
+        uid: record.uid,
+        deviceId: record.deviceId,
+        statusCode: error?.statusCode,
+        message: error?.message
+      });
+
+      if (isInvalidWebPushSubscriptionError(error)) {
+        staleSubscriptionUpdates[`webPushSubscriptions/${record.uid}/${record.deviceId}`] = null;
+        staleSubscriptionUpdates[`fcmTokens/${record.uid}/${record.deviceId}/webPushSubscription`] = null;
+      }
+    }
+  }));
+
+  if (Object.keys(staleSubscriptionUpdates).length) {
+    await rootRef.update(staleSubscriptionUpdates);
+  }
+
+  return result;
+}
+
 function stringifyData(value) {
   return Object.fromEntries(
     Object.entries(value).map(([key, item]) => [key, String(item ?? "")])
@@ -312,4 +451,8 @@ function isInvalidFcmTokenError(error) {
     "messaging/invalid-registration-token",
     "messaging/registration-token-not-registered"
   ].includes(error?.code);
+}
+
+function isInvalidWebPushSubscriptionError(error) {
+  return [404, 410].includes(Number(error?.statusCode || 0));
 }
