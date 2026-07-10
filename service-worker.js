@@ -1,4 +1,4 @@
-const CACHE_NAME = "astrochat-cache-v118";
+const CACHE_NAME = "astrochat-cache-v119";
 const SERVICE_WORKER_VERSION = "v118";
 const PUSH_SETTINGS_CACHE = "astrochat-push-settings-v1";
 const PUSH_SETTINGS_REQUEST = "./__astrochat-system-push-settings";
@@ -156,12 +156,15 @@ self.addEventListener("notificationclick", (event) => {
   const notificationData = event.notification.data || {};
   const fcmMessage = notificationData.FCM_MSG || {};
   const fcmData = fcmMessage.data || {};
-  const roomId = notificationData.roomId || fcmData.roomId || "";
+  const type = notificationData.type || fcmData.type || "";
+  const roomId = type === "chat-message"
+    ? (notificationData.roomId || fcmData.roomId || "")
+    : "";
   const targetUrl =
     notificationData.url ||
     fcmData.url ||
     fcmMessage.fcmOptions?.link ||
-    (roomId ? `./index.html#room=${encodeURIComponent(roomId)}` : "./");
+    (roomId ? `./index.html#room=${encodeURIComponent(roomId)}` : "./index.html#notifications");
 
   event.waitUntil(
     clients.matchAll({ type: "window", includeUncontrolled: true }).then((clientList) => {
@@ -170,11 +173,10 @@ self.addEventListener("notificationclick", (event) => {
       if (sameOriginClient) {
         if (roomId) {
           sameOriginClient.postMessage({ type: "OPEN_ROOM_FROM_NOTIFICATION", roomId });
-        } else if (String(targetUrl).includes("#notifications")) {
+        } else {
           sameOriginClient.postMessage({ type: "OPEN_NOTIFICATIONS_FROM_NOTIFICATION" });
         }
-        sameOriginClient.focus();
-        return;
+        return sameOriginClient.focus();
       }
 
       if (clients.openWindow) {
@@ -214,7 +216,8 @@ async function requestFcmTokenRefreshFromClients(reason = "push") {
 
 function isAstroChatFcmPayload(payload = {}) {
   const data = payload.data || payload.notification?.data || {};
-  return data.fcmSource === "astrochat" || Boolean(data.type && data.roomId) || data.type === "chat-message";
+  const supportedTypes = new Set(["chat-message", "friend-request", "room-invite"]);
+  return String(data.fcmSource || "").startsWith("astrochat") || supportedTypes.has(String(data.type || ""));
 }
 
 function createNotificationFromPushPayload(payload = {}) {
@@ -223,27 +226,34 @@ function createNotificationFromPushPayload(payload = {}) {
     ...(notification.data || {}),
     ...(payload.data || {})
   };
-  const roomId = data.roomId || payload.roomId || "";
+  const type = String(data.type || "");
+  const isChatMessage = type === "chat-message";
+  const roomId = isChatMessage ? (data.roomId || payload.roomId || "") : "";
   const messageId = data.messageId || data.message_id || payload.messageId || "";
+  const inviteId = data.inviteId || "";
   const timestamp = getPayloadTimestamp(data);
   const title = data.title || notification.title || payload.title || "AstroChat";
   const body = data.body || notification.body || payload.body || "Nova atividade no AstroChat.";
-  const url = data.url || payload.url || (roomId ? `./index.html#room=${encodeURIComponent(roomId)}` : "./");
-  const isChatMessage = data.type === "chat-message" || Boolean(roomId);
-  const uniqueMessagePart = messageId || timestamp || Math.random().toString(36).slice(2, 10);
-  const tag = isChatMessage ? `chat:${roomId || "room"}:${uniqueMessagePart}` : (data.tag || payload.tag || createUniqueNotificationTag());
+  const url = data.url || payload.url || (roomId
+    ? `./index.html#room=${encodeURIComponent(roomId)}`
+    : "./index.html#notifications");
+  const uniquePart = messageId || inviteId || timestamp || Math.random().toString(36).slice(2, 10);
+  const tag = isChatMessage
+    ? `chat:${roomId || "room"}:${uniquePart}`
+    : `invite:${inviteId || uniquePart}`;
   const notificationKey = isChatMessage
-    ? `chat:${roomId || "room"}:${uniqueMessagePart}:${data.authorUid || "user"}`
-    : tag;
+    ? `chat:${roomId || "room"}:${uniquePart}:${data.authorUid || "user"}`
+    : `${type || "activity"}:${inviteId || uniquePart}:${data.fromUid || "user"}`;
 
   return {
     title,
     notificationKey,
     payloadData: {
       ...data,
-      type: data.type || (roomId ? "chat-message" : ""),
+      type,
       roomId,
       messageId,
+      inviteId,
       timestamp: String(timestamp),
       title,
       body,
@@ -260,8 +270,10 @@ function createNotificationFromPushPayload(payload = {}) {
       vibrate: data.mentioned === "1" ? [120, 60, 120, 60, 180] : [120, 80, 120],
       data: {
         url,
+        type,
         roomId,
         messageId,
+        inviteId,
         timestamp,
         ...data
       }

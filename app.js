@@ -51,7 +51,7 @@ const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
 const STANDARD_WEB_PUSH_PUBLIC_VAPID_KEY = "BLE7nXv1JR25D7PSPJgHRXcAIQUhe1R0XOhFPGheglqfIpNIo9G95_lSTDtFUNx4GjWZHFaRkdlMylcItINrvAs";
-const CHAT_VERSION = "v118";
+const CHAT_VERSION = "v119";
 // Backend externo opcional para enviar push com o site fechado.
 // Depois de publicar o Cloudflare Worker, cole aqui a URL dele.
 // Exemplo: https://astrochat-push.seu-usuario.workers.dev/notify
@@ -4344,10 +4344,10 @@ async function sendFirebaseMessage(room, text, options = {}) {
   return message;
 }
 
-async function notifyPushWorkerAboutMessage(room, message) {
+async function notifyPushWorker(payload = {}, eventLabel = "evento") {
   const endpoint = String(PUSH_WORKER_ENDPOINT || "").trim();
-  if (!endpoint || !room?.id || !message?.id) return;
-  if (!currentFirebaseUser?.getIdToken) return;
+  if (!endpoint || !payload || typeof payload !== "object") return null;
+  if (!currentFirebaseUser?.getIdToken) return null;
 
   try {
     const idToken = await currentFirebaseUser.getIdToken(false);
@@ -4361,11 +4361,7 @@ async function notifyPushWorkerAboutMessage(room, message) {
           "Content-Type": "application/json",
           "Accept": "application/json"
         },
-        body: JSON.stringify({
-          roomId: room.id,
-          messageId: message.id,
-          idToken
-        }),
+        body: JSON.stringify({ ...payload, idToken }),
         signal: controller.signal
       });
 
@@ -4375,52 +4371,79 @@ async function notifyPushWorkerAboutMessage(room, message) {
       }));
 
       if (!response.ok || result?.ok === false) {
-        console.warn("[AstroChat Push] Worker recusou a notificacao.", {
+        console.warn(`[AstroChat Push] Worker recusou ${eventLabel}.`, {
           status: response.status,
+          eventType: payload.type || payload.eventType || "",
           result
         });
         updatePushWorkerConsoleStatus("error", { status: response.status, result });
-        return;
+        return result;
       }
 
       const sent = Number(result?.sent || 0);
       const failed = Number(result?.failed || 0);
       const skipped = String(result?.skipped || "");
+      const eventType = String(result?.eventType || payload.type || payload.eventType || "");
 
       if (sent > 0) {
         console.info(
-          "%c[AstroChat Push] Cloudflare Worker funcionando: notificacao enviada.",
+          `%c[AstroChat Push] ${eventLabel} enviado pelo Cloudflare Worker.`,
           "color:#10b486;font-weight:800",
-          { sent, failed, result }
+          { eventType, sent, failed, result }
         );
         updatePushWorkerConsoleStatus("online", { status: response.status, result });
       } else if (failed > 0) {
         console.error(
-          "[AstroChat Push] Worker online, mas o FCM rejeitou a entrega.",
-          { sent, failed, errors: result?.errors || [], result }
+          `[AstroChat Push] Worker online, mas o FCM rejeitou ${eventLabel}.`,
+          { eventType, sent, failed, errors: result?.errors || [], result }
         );
         updatePushWorkerConsoleStatus("delivery-error", { status: response.status, result });
       } else {
         console.info(
-          "%c[AstroChat Push] Worker online; nenhuma notificacao precisou ser enviada.",
+          `%c[AstroChat Push] Worker processou ${eventLabel}; nenhum push precisou ser enviado.`,
           "color:#0ea5e9;font-weight:800",
-          { sent, failed, skipped, result }
+          { eventType, sent, failed, skipped, result }
         );
         updatePushWorkerConsoleStatus("online", { status: response.status, result });
       }
+
+      return result;
     } finally {
       window.clearTimeout(timeoutId);
     }
   } catch (error) {
     if (error?.name === "AbortError") {
-      console.warn("[AstroChat Push] Worker demorou para responder.");
+      console.warn(`[AstroChat Push] Worker demorou para processar ${eventLabel}.`);
       updatePushWorkerConsoleStatus("timeout", { error: String(error?.message || error) });
-      return;
+      return null;
     }
 
-    console.warn("[AstroChat Push] Nao foi possivel chamar o Worker.", error);
+    console.warn(`[AstroChat Push] Nao foi possivel enviar ${eventLabel} ao Worker.`, error);
     updatePushWorkerConsoleStatus("offline", { error: String(error?.message || error) });
+    return null;
   }
+}
+
+function notifyPushWorkerAboutMessage(room, message) {
+  if (!room?.id || !message?.id) return Promise.resolve(null);
+  return notifyPushWorker({
+    type: "chat-message",
+    roomId: room.id,
+    messageId: message.id
+  }, "push de mensagem");
+}
+
+function notifyPushWorkerAboutInvite(invite = {}) {
+  if (!invite?.id) return Promise.resolve(null);
+  const type = isFriendRequestInvite(invite) ? "friend-request" : "room-invite";
+  const label = type === "friend-request"
+    ? "push de pedido de amizade"
+    : "push de convite para sala";
+
+  return notifyPushWorker({
+    type,
+    inviteId: invite.id
+  }, label);
 }
 
 function getPushWorkerHealthEndpoint() {
@@ -4485,6 +4508,18 @@ async function checkPushWorkerHealth() {
         result
       );
       updatePushWorkerConsoleStatus("online-not-ready", { status: response.status, result });
+      return false;
+    }
+
+    const requiredEvents = ["chat-message", "friend-request", "room-invite"];
+    const supportedEvents = Array.isArray(result.supportedEvents) ? result.supportedEvents : [];
+    const missingEvents = requiredEvents.filter((eventType) => !supportedEvents.includes(eventType));
+    if (missingEvents.length) {
+      console.warn(
+        "[AstroChat Push] Worker online, mas esta desatualizado para alguns tipos de notificacao.",
+        { missingEvents, result }
+      );
+      updatePushWorkerConsoleStatus("online-outdated", { status: response.status, result, missingEvents });
       return false;
     }
 
@@ -9367,6 +9402,8 @@ async function createFirebaseInvite(room, friend) {
     [`rooms/${room.id}/updatedAt`]: serverTimestamp(),
     [`rooms/${room.id}/updatedAtMillis`]: now
   });
+
+  void notifyPushWorkerAboutInvite(invitePayload);
 }
 
 async function inviteFriendToRoom(room, friend) {
@@ -10663,6 +10700,7 @@ async function sendFriendRequest(user, options = {}) {
     [`userInvites/${user.uid}/received/${requestId}`]: true
   });
 
+  void notifyPushWorkerAboutInvite(payload);
   return "sent";
 }
 
@@ -12817,6 +12855,48 @@ function refreshNotificationUi() {
   refreshNotificationsModalIfOpen();
 }
 
+function handleForegroundFcmNotification(payload = {}, options = {}) {
+  const data = payload?.data || {};
+  const type = String(data.type || "").trim();
+
+  if (type === "chat-message") {
+    handleForegroundFcmChatMessage(payload, options);
+    return;
+  }
+
+  if (type !== "friend-request" && type !== "room-invite") return;
+  if (data.fromUid === currentFirebaseUid) return;
+  if (data.toUid && data.toUid !== currentFirebaseUid) return;
+
+  const inviteId = sanitizeText(data.inviteId || "", 180);
+  const isFriendRequest = type === "friend-request";
+  const title = data.title || (isFriendRequest ? "Novo pedido de amizade" : "Novo convite para sala");
+  const body = data.body || (isFriendRequest
+    ? `${data.fromNick || "Alguem"} quer adicionar voce como amigo.`
+    : `${data.fromNick || "Alguem"} convidou voce para ${data.roomName || "uma sala"}.`);
+
+  if (inviteId) {
+    const seen = new Set(notificationState.seenInviteIds || []);
+    seen.add(inviteId);
+    notificationState.seenInviteIds = Array.from(seen).slice(-100);
+    saveNotificationState();
+  }
+
+  if (areInternalPushNotificationsEnabled()) {
+    showToast(title, body, "Ver pedidos", () => openNotificationsModal());
+  }
+
+  if (!options.silentSystemNotification) {
+    const systemNotificationPromise = showBrowserNotification(title, body, {
+      tag: `invite:${inviteId || Date.now()}`
+    });
+    playNotificationSoundAfterSystemNotification(systemNotificationPromise);
+  }
+
+  updateBadges();
+  refreshNotificationsModalIfOpen();
+}
+
 function handleForegroundFcmChatMessage(payload = {}, options = {}) {
   const data = payload?.data || {};
   if (data.type !== "chat-message" || data.authorUid === currentFirebaseUid) return;
@@ -12918,7 +12998,7 @@ function setupServiceWorkerMessageHandling() {
 
     if (data.type === "ASTROCHAT_PUSH_RECEIVED") {
       const payloadData = data.payloadData || {};
-      handleForegroundFcmChatMessage(
+      handleForegroundFcmNotification(
         { data: payloadData },
         { silentSystemNotification: payloadData.systemNotificationShown === true }
       );
@@ -13717,8 +13797,8 @@ async function setupFirebaseMessagingForegroundListener() {
 
     firebaseMessagingForegroundUnsubscribe = onMessage(messaging, (payload) => {
       const data = payload?.data || {};
-      if (data.type !== "chat-message" || data.authorUid === currentFirebaseUid) return;
-      handleForegroundFcmChatMessage(payload);
+      if (data.authorUid === currentFirebaseUid || data.fromUid === currentFirebaseUid) return;
+      handleForegroundFcmNotification(payload);
     });
   } catch (error) {
     console.warn("Nao foi possivel iniciar listener FCM em primeiro plano.", error);
