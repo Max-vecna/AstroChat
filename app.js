@@ -51,7 +51,7 @@ const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
 const STANDARD_WEB_PUSH_PUBLIC_VAPID_KEY = "BLE7nXv1JR25D7PSPJgHRXcAIQUhe1R0XOhFPGheglqfIpNIo9G95_lSTDtFUNx4GjWZHFaRkdlMylcItINrvAs";
-const CHAT_VERSION = "v116";
+const CHAT_VERSION = "v117";
 // Backend externo opcional para enviar push com o site fechado.
 // Depois de publicar o Cloudflare Worker, cole aqui a URL dele.
 // Exemplo: https://astrochat-push.seu-usuario.workers.dev/notify
@@ -4390,15 +4390,21 @@ async function notifyPushWorkerAboutMessage(room, message) {
           "color:#10b486;font-weight:800",
           { sent, failed, result }
         );
+        updatePushWorkerConsoleStatus("online", { status: response.status, result });
+      } else if (failed > 0) {
+        console.error(
+          "[AstroChat Push] Worker online, mas o FCM rejeitou a entrega.",
+          { sent, failed, errors: result?.errors || [], result }
+        );
+        updatePushWorkerConsoleStatus("delivery-error", { status: response.status, result });
       } else {
         console.info(
-          "%c[AstroChat Push] Cloudflare Worker respondeu corretamente.",
+          "%c[AstroChat Push] Worker online; nenhuma notificacao precisou ser enviada.",
           "color:#0ea5e9;font-weight:800",
           { sent, failed, skipped, result }
         );
+        updatePushWorkerConsoleStatus("online", { status: response.status, result });
       }
-
-      updatePushWorkerConsoleStatus("online", { status: response.status, result });
     } finally {
       window.clearTimeout(timeoutId);
     }
