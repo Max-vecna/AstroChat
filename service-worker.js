@@ -1,5 +1,5 @@
-const CACHE_NAME = "astrochat-cache-v119";
-const SERVICE_WORKER_VERSION = "v118";
+const CACHE_NAME = "astrochat-cache-v120";
+const SERVICE_WORKER_VERSION = "v120";
 const PUSH_SETTINGS_CACHE = "astrochat-push-settings-v1";
 const PUSH_SETTINGS_REQUEST = "./__astrochat-system-push-settings";
 const FCM_TOKEN_REFRESH_REQUEST = "./__astrochat-fcm-token-refresh-request";
@@ -265,6 +265,7 @@ function createNotificationFromPushPayload(payload = {}) {
       badge: data.badge || payload.badge || "icons/icon-192.png",
       tag,
       renotify: true,
+      silent: false,
       timestamp,
       requireInteraction: data.mentioned === "1",
       vibrate: data.mentioned === "1" ? [120, 60, 120, 60, 180] : [120, 80, 120],
@@ -323,12 +324,15 @@ async function notifyOpenClientsAboutPush(payloadData = {}) {
   }
 }
 
-async function syncOpenClientsFromPushPayload(payload = {}) {
+async function syncOpenClientsFromPushPayload(payload = {}, options = {}) {
   try {
     const { payloadData, notificationKey } = createNotificationFromPushPayload(payload);
     if (wasNotificationRecentlyShown(notificationKey)) return;
     markNotificationRecentlyShown(notificationKey);
-    await notifyOpenClientsAboutPush(payloadData);
+    await notifyOpenClientsAboutPush({
+      ...payloadData,
+      systemNotificationShown: options.systemNotificationShown === true
+    });
   } catch (error) {
     console.warn("Nao foi possivel sincronizar clientes abertos com o push.", error);
   }
@@ -370,7 +374,7 @@ function initializeFirebaseMessaging() {
       console.log("AstroChat FCM background payload recebido.", payload);
       if (payload?.notification?.title) {
         console.log("[AstroChat Push] Notificação visível será exibida automaticamente pelo FCM/navegador.");
-        return Promise.resolve();
+        return syncOpenClientsFromPushPayload(payload, { systemNotificationShown: true });
       }
       return showAstroChatNotification(payload, "fcm-data");
     });
@@ -384,7 +388,10 @@ function initializeFirebaseMessaging() {
 self.addEventListener("push", (event) => {
   const payload = getPayloadFromPushEvent(event);
   if (!payload || !isAstroChatFcmPayload(payload)) return;
-  if (payload?.notification?.title) return;
+  if (payload?.notification?.title) {
+    event.waitUntil(syncOpenClientsFromPushPayload(payload, { systemNotificationShown: true }));
+    return;
+  }
 
   event.waitUntil(showAstroChatNotification(payload, "push-data"));
 });

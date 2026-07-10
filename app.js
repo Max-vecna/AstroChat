@@ -12332,9 +12332,9 @@ function mapMessageData(messageId, data = {}) {
 
   return {
     id: messageId,
-    text: data.text || "",
-    originalText: data.originalText || "",
-    translatedText: data.translatedText || "",
+    text: normalizeStoredMessageText(data.text || ""),
+    originalText: normalizeStoredMessageText(data.originalText || ""),
+    translatedText: normalizeStoredMessageText(data.translatedText || ""),
     translationSourceText: data.translationSourceText || "",
     targetLanguageCode: data.targetLanguageCode || "",
     targetLanguageName: data.targetLanguageName || "",
@@ -12384,6 +12384,14 @@ function mapMessageData(messageId, data = {}) {
     createdAt: displayTime,
     createdAtMillis: clientTime || displayTime
   };
+}
+
+function normalizeStoredMessageText(value) {
+  const text = String(value || "");
+  if (!/<\/?[a-z][^>]*>/i.test(text) && !/&(?:lt|gt|amp|quot|#39);/i.test(text)) return text;
+  const template = document.createElement("template");
+  template.innerHTML = text;
+  return (template.content.textContent || "").replace(/\n{3,}/g, "\n\n").trim();
 }
 
 function compareMessagesBySendOrder(a, b) {
