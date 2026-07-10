@@ -1,5 +1,5 @@
-const CACHE_NAME = "astrochat-cache-v117";
-const SERVICE_WORKER_VERSION = "v117";
+const CACHE_NAME = "astrochat-cache-v118";
+const SERVICE_WORKER_VERSION = "v118";
 const PUSH_SETTINGS_CACHE = "astrochat-push-settings-v1";
 const PUSH_SETTINGS_REQUEST = "./__astrochat-system-push-settings";
 const FCM_TOKEN_REFRESH_REQUEST = "./__astrochat-fcm-token-refresh-request";
@@ -356,7 +356,11 @@ function initializeFirebaseMessaging() {
 
     messaging.onBackgroundMessage((payload) => {
       console.log("AstroChat FCM background payload recebido.", payload);
-      return showAstroChatNotification(payload, "fcm");
+      if (payload?.notification?.title) {
+        console.log("[AstroChat Push] Notificação visível será exibida automaticamente pelo FCM/navegador.");
+        return Promise.resolve();
+      }
+      return showAstroChatNotification(payload, "fcm-data");
     });
   } catch (error) {
     firebaseMessagingReady = false;
@@ -368,8 +372,9 @@ function initializeFirebaseMessaging() {
 self.addEventListener("push", (event) => {
   const payload = getPayloadFromPushEvent(event);
   if (!payload || !isAstroChatFcmPayload(payload)) return;
+  if (payload?.notification?.title) return;
 
-  event.waitUntil(showAstroChatNotification(payload, "push"));
+  event.waitUntil(showAstroChatNotification(payload, "push-data"));
 });
 
 function getPayloadFromPushEvent(event) {

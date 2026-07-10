@@ -51,7 +51,7 @@ const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
 const STANDARD_WEB_PUSH_PUBLIC_VAPID_KEY = "BLE7nXv1JR25D7PSPJgHRXcAIQUhe1R0XOhFPGheglqfIpNIo9G95_lSTDtFUNx4GjWZHFaRkdlMylcItINrvAs";
-const CHAT_VERSION = "v117";
+const CHAT_VERSION = "v118";
 // Backend externo opcional para enviar push com o site fechado.
 // Depois de publicar o Cloudflare Worker, cole aqui a URL dele.
 // Exemplo: https://astrochat-push.seu-usuario.workers.dev/notify
@@ -69,6 +69,9 @@ const FCM_DEVICE_ID_STORAGE_KEY = "astrochat-fcm-device-id-v1";
 const FCM_TOKEN_STORAGE_KEY = "astrochat-fcm-token-v1";
 const WEB_PUSH_SUBSCRIPTION_STORAGE_KEY = "astrochat-web-push-subscription-v1";
 const FCM_TOKEN_REFRESHED_AT_STORAGE_KEY = "astrochat-fcm-token-refreshed-at-v1";
+const FCM_VAPID_KEY_STORAGE_KEY = "astrochat-fcm-vapid-key-v1";
+const FCM_REGISTRATION_SCHEMA_STORAGE_KEY = "astrochat-fcm-registration-schema-v1";
+const FCM_REGISTRATION_SCHEMA = "fcm-first-v2";
 const PUSH_SETTINGS_CACHE = "astrochat-push-settings-v1";
 const FCM_TOKEN_REFRESH_REQUEST = "./__astrochat-fcm-token-refresh-request";
 const SPEECH_RATE_STORAGE_KEY = "astrochat-speech-rate-v1";
@@ -13365,8 +13368,8 @@ function hasSavedSystemPushRegistration() {
 
 function hasSavedPrimarySystemPushRegistration() {
   return Boolean(
-    localStorage.getItem(WEB_PUSH_SUBSCRIPTION_STORAGE_KEY) ||
-    (!("PushManager" in window) && localStorage.getItem(FCM_TOKEN_STORAGE_KEY))
+    localStorage.getItem(FCM_TOKEN_STORAGE_KEY) ||
+    localStorage.getItem(WEB_PUSH_SUBSCRIPTION_STORAGE_KEY)
   );
 }
 
@@ -13387,6 +13390,9 @@ function refreshFcmTokenRegistrationIfNeeded(options = {}) {
 
 function shouldRefreshFcmTokenRegistration(options = {}) {
   const lastRefresh = Number(localStorage.getItem(FCM_TOKEN_REFRESHED_AT_STORAGE_KEY) || 0);
+  const registrationSchema = localStorage.getItem(FCM_REGISTRATION_SCHEMA_STORAGE_KEY) || "";
+
+  if (registrationSchema !== FCM_REGISTRATION_SCHEMA) return true;
 
   if (options.force) {
     if (!hasSavedPrimarySystemPushRegistration()) return true;
@@ -13410,63 +13416,70 @@ async function ensureFcmTokenRegistration(options = {}) {
     if (!areSystemPushNotificationsEnabled()) return null;
     if (!("Notification" in window) || Notification.permission !== "granted") return null;
 
-    const standardVapidKeyValidation = getStandardWebPushVapidKeyValidation();
-    if (!standardVapidKeyValidation.valid) {
-      if (options.showErrors) {
-        showToast("Web Push sem chave VAPID valida", standardVapidKeyValidation.message);
-      }
-      return null;
-    }
-
-    let standardSubscription = null;
-
-    try {
-      standardSubscription = await ensureStandardWebPushSubscription(options);
-    } catch (error) {
-      console.warn("Nao foi possivel registrar Web Push padrao; tentando FCM.", error);
-    }
-
-    const standardEndpoint = standardSubscription?.endpoint || null;
-
     const vapidKeyValidation = getFcmVapidKeyValidation();
-    if (!vapidKeyValidation.valid) {
-      if (options.showErrors) {
-        showToast("FCM sem chave VAPID valida", vapidKeyValidation.message);
+    let fcmRegistrationError = null;
+
+    if (vapidKeyValidation.valid) {
+      const messaging = await getFirebaseMessagingIfSupported();
+
+      if (messaging) {
+        try {
+          const registration = await navigator.serviceWorker.ready;
+          await preparePushSubscriptionForFcm(registration);
+
+          const token = await getToken(messaging, {
+            vapidKey: getNormalizedFcmVapidKey(),
+            serviceWorkerRegistration: registration
+          });
+
+          if (!token) {
+            throw new Error("O Firebase não retornou um token FCM.");
+          }
+
+          await saveFcmTokenForCurrentUser(token);
+          setupFirebaseMessagingForegroundListener().catch((error) => {
+            console.warn("Nao foi possivel preparar mensagens FCM em primeiro plano.", error);
+          });
+
+          console.log("[AstroChat Push] Token FCM registrado com a chave VAPID do Firebase.", {
+            deviceId: getFcmDeviceId(),
+            tokenLength: token.length
+          });
+          return token;
+        } catch (error) {
+          fcmRegistrationError = error;
+          console.warn("[AstroChat Push] Registro FCM falhou; tentando Web Push padrão.", error);
+        }
       }
-      return standardEndpoint;
+    } else if (options.showErrors) {
+      showToast("FCM sem chave VAPID válida", vapidKeyValidation.message);
     }
 
-    const messaging = await getFirebaseMessagingIfSupported();
-    if (!messaging) {
-      if (options.showErrors) {
-        showToast(
-          standardSubscription ? "Web Push padrao ativado" : "FCM indisponivel",
-          standardSubscription
-            ? "Este aparelho foi registrado pelo PushManager nativo."
-            : "Este navegador nao suporta Firebase Cloud Messaging para Web Push."
-        );
+    // Fallback: só cria a assinatura Web Push com a segunda chave quando o FCM
+    // realmente não pôde ser registrado. Isso evita duas chaves VAPID disputando
+    // a única PushSubscription permitida para o mesmo Service Worker.
+    try {
+      const standardVapidKeyValidation = getStandardWebPushVapidKeyValidation();
+      if (!standardVapidKeyValidation.valid) {
+        if (options.showErrors) {
+          showToast("Web Push sem chave VAPID válida", standardVapidKeyValidation.message);
+        }
+        return null;
       }
-      return standardEndpoint;
+
+      const standardSubscription = await ensureStandardWebPushSubscription(options);
+      if (standardSubscription) {
+        console.warn("[AstroChat Push] Usando apenas Web Push padrão neste aparelho; não há token FCM utilizável.");
+        return standardSubscription.endpoint || null;
+      }
+    } catch (error) {
+      console.warn("Nao foi possivel registrar Web Push padrao.", error);
     }
 
-    const registration = await navigator.serviceWorker.ready;
-    const token = await getToken(messaging, {
-      vapidKey: getNormalizedFcmVapidKey(),
-      serviceWorkerRegistration: registration
-    });
-
-    if (!token) {
-      if (options.showErrors) {
-        showToast("Token FCM ausente", "O Firebase nao retornou um token para este navegador.");
-      }
-      return standardEndpoint;
+    if (options.showErrors && fcmRegistrationError) {
+      showToast("Não foi possível ativar o push", String(fcmRegistrationError?.message || fcmRegistrationError));
     }
-
-    await saveFcmTokenForCurrentUser(token);
-    setupFirebaseMessagingForegroundListener().catch((error) => {
-      console.warn("Nao foi possivel preparar mensagens FCM em primeiro plano.", error);
-    });
-    return token || standardEndpoint || null;
+    return null;
   })();
 
   try {
@@ -13474,6 +13487,29 @@ async function ensureFcmTokenRegistration(options = {}) {
   } finally {
     fcmTokenRegistrationPromise = null;
   }
+}
+
+async function preparePushSubscriptionForFcm(registration) {
+  if (!registration?.pushManager) return;
+
+  const expectedVapidKey = getNormalizedFcmVapidKey();
+  const subscription = await registration.pushManager.getSubscription();
+  if (!subscription) return;
+
+  const savedFcmToken = localStorage.getItem(FCM_TOKEN_STORAGE_KEY) || "";
+  const savedFcmVapidKey = localStorage.getItem(FCM_VAPID_KEY_STORAGE_KEY) || "";
+  const isKnownFcmSubscription = Boolean(savedFcmToken && savedFcmVapidKey === expectedVapidKey);
+  const browserReportsMatchingKey = doesPushSubscriptionUseVapidKey(subscription, expectedVapidKey);
+
+  if (isKnownFcmSubscription || browserReportsMatchingKey) return;
+
+  console.warn("[AstroChat Push] Removendo assinatura Push criada com outra chave VAPID antes de registrar o FCM.");
+  await subscription.unsubscribe();
+  localStorage.removeItem(WEB_PUSH_SUBSCRIPTION_STORAGE_KEY);
+  localStorage.removeItem(FCM_TOKEN_STORAGE_KEY);
+  localStorage.removeItem(FCM_VAPID_KEY_STORAGE_KEY);
+  localStorage.removeItem(FCM_REGISTRATION_SCHEMA_STORAGE_KEY);
+  localStorage.removeItem(FCM_TOKEN_REFRESHED_AT_STORAGE_KEY);
 }
 
 async function saveFcmTokenForCurrentUser(token) {
@@ -13497,6 +13533,8 @@ async function saveFcmTokenForCurrentUser(token) {
   });
 
   localStorage.setItem(FCM_TOKEN_STORAGE_KEY, token);
+  localStorage.setItem(FCM_VAPID_KEY_STORAGE_KEY, getNormalizedFcmVapidKey());
+  localStorage.setItem(FCM_REGISTRATION_SCHEMA_STORAGE_KEY, FCM_REGISTRATION_SCHEMA);
   localStorage.setItem(FCM_TOKEN_REFRESHED_AT_STORAGE_KEY, String(now));
 }
 
@@ -13580,6 +13618,7 @@ async function saveWebPushSubscriptionForCurrentUser(subscription) {
     vapidPublicKey: getNormalizedStandardWebPushVapidKey(),
     updatedAtMillis: now
   }));
+  localStorage.setItem(FCM_REGISTRATION_SCHEMA_STORAGE_KEY, FCM_REGISTRATION_SCHEMA);
   localStorage.setItem(FCM_TOKEN_REFRESHED_AT_STORAGE_KEY, String(now));
 }
 
@@ -13663,6 +13702,8 @@ async function unregisterFcmTokenForCurrentUser(options = {}) {
   }
 
   localStorage.removeItem(FCM_TOKEN_STORAGE_KEY);
+  localStorage.removeItem(FCM_VAPID_KEY_STORAGE_KEY);
+  localStorage.removeItem(FCM_REGISTRATION_SCHEMA_STORAGE_KEY);
   localStorage.removeItem(WEB_PUSH_SUBSCRIPTION_STORAGE_KEY);
   localStorage.removeItem(FCM_TOKEN_REFRESHED_AT_STORAGE_KEY);
 }
