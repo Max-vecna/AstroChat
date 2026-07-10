@@ -55,7 +55,7 @@ const CHAT_VERSION = "v115";
 // Backend externo opcional para enviar push com o site fechado.
 // Depois de publicar o Cloudflare Worker, cole aqui a URL dele.
 // Exemplo: https://astrochat-push.seu-usuario.workers.dev/notify
-const PUSH_WORKER_ENDPOINT = "patient-pond-0cd9.maxsuelsoarescustodio.workers.dev";
+const PUSH_WORKER_ENDPOINT = "https://patient-pond-0cd9.maxsuelsoarescustodio.workers.dev/notify";
 const PUSH_WORKER_TIMEOUT_MS = 7000;
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
