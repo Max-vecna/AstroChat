@@ -51,12 +51,13 @@ const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
 const STANDARD_WEB_PUSH_PUBLIC_VAPID_KEY = "BLE7nXv1JR25D7PSPJgHRXcAIQUhe1R0XOhFPGheglqfIpNIo9G95_lSTDtFUNx4GjWZHFaRkdlMylcItINrvAs";
-const CHAT_VERSION = "v115";
+const CHAT_VERSION = "v116";
 // Backend externo opcional para enviar push com o site fechado.
 // Depois de publicar o Cloudflare Worker, cole aqui a URL dele.
 // Exemplo: https://astrochat-push.seu-usuario.workers.dev/notify
 const PUSH_WORKER_ENDPOINT = "https://patient-pond-0cd9.maxsuelsoarescustodio.workers.dev/notify";
 const PUSH_WORKER_TIMEOUT_MS = 7000;
+const PUSH_WORKER_HEALTH_TIMEOUT_MS = 5000;
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
 const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
@@ -489,6 +490,8 @@ bootApp().catch((error) => {
   showLogin();
 });
 registerServiceWorker();
+checkPushWorkerHealth();
+window.testAstroChatPushWorker = checkPushWorkerHealth;
 
 loginForm.addEventListener("submit", async (event) => {
   event.preventDefault();
@@ -4342,7 +4345,6 @@ async function notifyPushWorkerAboutMessage(room, message) {
   const endpoint = String(PUSH_WORKER_ENDPOINT || "").trim();
   if (!endpoint || !room?.id || !message?.id) return;
   if (!currentFirebaseUser?.getIdToken) return;
-  if (!areSystemPushNotificationsEnabled()) return;
 
   try {
     const idToken = await currentFirebaseUser.getIdToken(false);
@@ -4353,7 +4355,8 @@ async function notifyPushWorkerAboutMessage(room, message) {
       const response = await fetch(endpoint, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json"
+          "Content-Type": "application/json",
+          "Accept": "application/json"
         },
         body: JSON.stringify({
           roomId: room.id,
@@ -4363,20 +4366,136 @@ async function notifyPushWorkerAboutMessage(room, message) {
         signal: controller.signal
       });
 
-      if (!response.ok) {
-        const details = await response.text().catch(() => "");
-        console.warn("Backend de push recusou a notificacao.", response.status, details);
+      const result = await response.json().catch(async () => ({
+        ok: false,
+        details: await response.text().catch(() => "")
+      }));
+
+      if (!response.ok || result?.ok === false) {
+        console.warn("[AstroChat Push] Worker recusou a notificacao.", {
+          status: response.status,
+          result
+        });
+        updatePushWorkerConsoleStatus("error", { status: response.status, result });
+        return;
       }
+
+      const sent = Number(result?.sent || 0);
+      const failed = Number(result?.failed || 0);
+      const skipped = String(result?.skipped || "");
+
+      if (sent > 0) {
+        console.info(
+          "%c[AstroChat Push] Cloudflare Worker funcionando: notificacao enviada.",
+          "color:#10b486;font-weight:800",
+          { sent, failed, result }
+        );
+      } else {
+        console.info(
+          "%c[AstroChat Push] Cloudflare Worker respondeu corretamente.",
+          "color:#0ea5e9;font-weight:800",
+          { sent, failed, skipped, result }
+        );
+      }
+
+      updatePushWorkerConsoleStatus("online", { status: response.status, result });
     } finally {
       window.clearTimeout(timeoutId);
     }
   } catch (error) {
     if (error?.name === "AbortError") {
-      console.warn("Backend de push demorou para responder.");
+      console.warn("[AstroChat Push] Worker demorou para responder.");
+      updatePushWorkerConsoleStatus("timeout", { error: String(error?.message || error) });
       return;
     }
 
-    console.warn("Nao foi possivel chamar o backend externo de push.", error);
+    console.warn("[AstroChat Push] Nao foi possivel chamar o Worker.", error);
+    updatePushWorkerConsoleStatus("offline", { error: String(error?.message || error) });
+  }
+}
+
+function getPushWorkerHealthEndpoint() {
+  const endpoint = String(PUSH_WORKER_ENDPOINT || "").trim();
+  if (!endpoint) return "";
+
+  try {
+    const url = new URL(endpoint, window.location.href);
+    url.pathname = url.pathname.replace(/\/notify\/?$/i, "/health");
+    if (!url.pathname.endsWith("/health")) {
+      url.pathname = `${url.pathname.replace(/\/+$/g, "")}/health`;
+    }
+    url.search = "";
+    url.hash = "";
+    return url.toString();
+  } catch (error) {
+    return "";
+  }
+}
+
+function updatePushWorkerConsoleStatus(status, details = {}) {
+  window.__ASTROCHAT_PUSH_WORKER_STATUS__ = {
+    status,
+    checkedAt: new Date().toISOString(),
+    endpoint: PUSH_WORKER_ENDPOINT,
+    ...details
+  };
+}
+
+async function checkPushWorkerHealth() {
+  const healthEndpoint = getPushWorkerHealthEndpoint();
+  if (!healthEndpoint) {
+    console.warn("[AstroChat Push] PUSH_WORKER_ENDPOINT nao foi configurado.");
+    updatePushWorkerConsoleStatus("not-configured");
+    return false;
+  }
+
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), PUSH_WORKER_HEALTH_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(healthEndpoint, {
+      method: "GET",
+      headers: { "Accept": "application/json" },
+      cache: "no-store",
+      signal: controller.signal
+    });
+    const result = await response.json().catch(() => ({}));
+
+    if (!response.ok || result?.ok !== true) {
+      console.warn("[AstroChat Push] Worker respondeu, mas o health check falhou.", {
+        status: response.status,
+        result
+      });
+      updatePushWorkerConsoleStatus("error", { status: response.status, result });
+      return false;
+    }
+
+    if (result.ready === false) {
+      console.warn(
+        "[AstroChat Push] Cloudflare Worker esta online, mas faltam configuracoes/secrets.",
+        result
+      );
+      updatePushWorkerConsoleStatus("online-not-ready", { status: response.status, result });
+      return false;
+    }
+
+    console.info(
+      "%c[AstroChat Push] Cloudflare Worker online e configurado.",
+      "color:#10b486;font-weight:800",
+      result
+    );
+    updatePushWorkerConsoleStatus("online", { status: response.status, result });
+    return true;
+  } catch (error) {
+    const reason = error?.name === "AbortError" ? "timeout" : "offline";
+    console.warn(
+      `[AstroChat Push] Health check do Worker falhou (${reason}). Confira URL, deploy e ALLOWED_ORIGIN.`,
+      error
+    );
+    updatePushWorkerConsoleStatus(reason, { error: String(error?.message || error) });
+    return false;
+  } finally {
+    window.clearTimeout(timeoutId);
   }
 }
 
@@ -13766,6 +13885,12 @@ async function registerServiceWorker() {
     const registration = await navigator.serviceWorker.register("service-worker.js", { updateViaCache: "none" });
     syncSystemPushPreferenceToServiceWorker();
     await registration.update();
+    const readyRegistration = await navigator.serviceWorker.ready;
+    console.info(
+      "%c[AstroChat Push] Service Worker registrado e ativo.",
+      "color:#10b486;font-weight:800",
+      { scope: readyRegistration.scope, state: readyRegistration.active?.state || "unknown" }
+    );
     await consumePendingFcmTokenRefreshRequest();
   } catch (error) {
     console.warn("Service worker não registrado.", error);

@@ -1,4 +1,5 @@
-const CACHE_NAME = "astrochat-cache-v115";
+const CACHE_NAME = "astrochat-cache-v116";
+const SERVICE_WORKER_VERSION = "v116";
 const PUSH_SETTINGS_CACHE = "astrochat-push-settings-v1";
 const PUSH_SETTINGS_REQUEST = "./__astrochat-system-push-settings";
 const FCM_TOKEN_REFRESH_REQUEST = "./__astrochat-fcm-token-refresh-request";
@@ -26,6 +27,7 @@ const APP_FILES = [
 ];
 
 self.addEventListener("install", (event) => {
+  console.info(`[AstroChat Push] Instalando Service Worker ${SERVICE_WORKER_VERSION}.`);
   self.skipWaiting();
   event.waitUntil(installAppShell());
 });
@@ -52,6 +54,7 @@ self.addEventListener("activate", (event) => {
 });
 
 async function activateLatestWorker() {
+  console.info(`[AstroChat Push] Service Worker ${SERVICE_WORKER_VERSION} ativo.`);
   const keys = await caches.keys();
   const oldKeys = keys.filter((key) => key.startsWith("astrochat-cache-") && key !== CACHE_NAME);
 
