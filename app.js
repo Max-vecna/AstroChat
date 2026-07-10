@@ -50,7 +50,13 @@ const DATABASE_URL = "https://astro-chat-7d044-default-rtdb.firebaseio.com";
 const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
-const CHAT_VERSION = "v114";
+const STANDARD_WEB_PUSH_PUBLIC_VAPID_KEY = "BLE7nXv1JR25D7PSPJgHRXcAIQUhe1R0XOhFPGheglqfIpNIo9G95_lSTDtFUNx4GjWZHFaRkdlMylcItINrvAs";
+const CHAT_VERSION = "v115";
+// Backend externo opcional para enviar push com o site fechado.
+// Depois de publicar o Cloudflare Worker, cole aqui a URL dele.
+// Exemplo: https://astrochat-push.seu-usuario.workers.dev/notify
+const PUSH_WORKER_ENDPOINT = "patient-pond-0cd9.maxsuelsoarescustodio.workers.dev/notify";
+const PUSH_WORKER_TIMEOUT_MS = 7000;
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
 const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
@@ -60,6 +66,7 @@ const INTERNAL_PUSH_STORAGE_KEY = "astrochat-internal-push-enabled-v1";
 const SYSTEM_PUSH_STORAGE_KEY = "astrochat-system-push-enabled-v1";
 const FCM_DEVICE_ID_STORAGE_KEY = "astrochat-fcm-device-id-v1";
 const FCM_TOKEN_STORAGE_KEY = "astrochat-fcm-token-v1";
+const WEB_PUSH_SUBSCRIPTION_STORAGE_KEY = "astrochat-web-push-subscription-v1";
 const FCM_TOKEN_REFRESHED_AT_STORAGE_KEY = "astrochat-fcm-token-refreshed-at-v1";
 const PUSH_SETTINGS_CACHE = "astrochat-push-settings-v1";
 const FCM_TOKEN_REFRESH_REQUEST = "./__astrochat-fcm-token-refresh-request";
@@ -1427,6 +1434,7 @@ async function addProfileCleanupUpdates(updates, uid) {
 
   updates[`users/${uid}`] = null;
   updates[`fcmTokens/${uid}`] = null;
+  updates[`webPushSubscriptions/${uid}`] = null;
 }
 
 function setupConnectivityDetection() {
@@ -3012,7 +3020,7 @@ async function handleProfileNotificationsButtonClickWithFcm() {
     return;
   }
 
-  if (status === "granted" && areSystemPushNotificationsEnabled() && localStorage.getItem(FCM_TOKEN_STORAGE_KEY)) {
+  if (status === "granted" && areSystemPushNotificationsEnabled() && hasSavedPrimarySystemPushRegistration()) {
     profileNotificationsButton.disabled = true;
     updateProfileNotificationsButtonState("Desativando push do sistema...");
     setSystemPushNotificationsEnabled(false, { updateUi: false });
@@ -3035,12 +3043,12 @@ async function handleProfileNotificationsButtonClickWithFcm() {
     setSystemPushNotificationsEnabled(true);
 
     try {
-      const token = await ensureFcmTokenRegistration({ force: true, showErrors: true });
+      const registrationId = await ensureFcmTokenRegistration({ force: true, showErrors: true });
       showToast(
-        token ? "Push do sistema ativado" : "Permissao ativada",
-        token
-          ? "Este navegador ja pode receber avisos pelo Firebase Cloud Messaging."
-          : "O navegador permitiu notificacoes, mas o FCM ainda nao retornou token."
+        registrationId ? "Push do sistema ativado" : "Permissao ativada",
+        registrationId
+          ? "Este navegador ja pode receber avisos mesmo com o app em segundo plano."
+          : "O navegador permitiu notificacoes, mas ainda nao retornou um registro de push."
       );
     } catch (error) {
       const notice = getFcmRegistrationErrorNotice(error);
@@ -3061,12 +3069,12 @@ async function handleProfileNotificationsButtonClickWithFcm() {
 
     if (permission === "granted") {
       updateProfileNotificationsButtonState("Registrando este navegador...");
-      const token = await ensureFcmTokenRegistration({ force: true, showErrors: true });
+      const registrationId = await ensureFcmTokenRegistration({ force: true, showErrors: true });
       showToast(
-        token ? "Push do sistema ativado" : "Permissao ativada",
-        token
-          ? "Voce recebera avisos de mensagens pelo Firebase Cloud Messaging."
-          : "O navegador permitiu notificacoes, mas o FCM ainda nao retornou token."
+        registrationId ? "Push do sistema ativado" : "Permissao ativada",
+        registrationId
+          ? "Voce recebera avisos de mensagens mesmo com o app em segundo plano."
+          : "O navegador permitiu notificacoes, mas ainda nao retornou um registro de push."
       );
     } else if (permission === "denied") {
       showToast("Permissao negada", "As notificacoes ficaram bloqueadas neste navegador.");
@@ -3087,7 +3095,7 @@ function updateProfileNotificationsButtonState(statusOverride = "") {
 
   const status = getBrowserNotificationStatus();
   const systemPushEnabled = areSystemPushNotificationsEnabled();
-  const hasFcmToken = Boolean(localStorage.getItem(FCM_TOKEN_STORAGE_KEY));
+  const hasPushRegistration = hasSavedPrimarySystemPushRegistration();
   const labels = {
     unsupported: {
       title: "Notificações indisponíveis",
@@ -3122,21 +3130,21 @@ function updateProfileNotificationsButtonState(statusOverride = "") {
   };
 
   const config = { ...(labels[status] || labels.default) };
-  const vapidKeyValidation = getFcmVapidKeyValidation();
+  const vapidKeyValidation = getStandardWebPushVapidKeyValidation();
   if (status === "granted" && !systemPushEnabled) {
     config.title = "Push do sistema desativado";
     config.detail = "Clique para ativar os avisos do navegador. Os avisos internos continuam no app.";
     config.icon = "fa-solid fa-bell-slash";
   } else if (status === "granted" && !vapidKeyValidation.valid) {
-    config.title = "FCM pendente";
+    config.title = "Web Push pendente";
     config.detail = vapidKeyValidation.message;
     config.icon = "fa-solid fa-bell";
-  } else if (status === "granted" && hasFcmToken) {
+  } else if (status === "granted" && hasPushRegistration) {
     config.title = "Push do sistema ativado";
-    config.detail = "Este navegador esta registrado no Firebase Cloud Messaging.";
+    config.detail = "Este navegador esta registrado para Web Push.";
   } else if (status === "granted") {
     config.title = "Ativar push do sistema";
-    config.detail = "Permissao concedida. Clique para registrar este navegador no FCM.";
+    config.detail = "Permissao concedida. Clique para registrar este navegador no Web Push.";
   }
   const icon = profileNotificationsButton.querySelector("i");
   const title = profileNotificationsButton.querySelector("strong");
@@ -3145,7 +3153,7 @@ function updateProfileNotificationsButtonState(statusOverride = "") {
   if (title) title.textContent = config.title;
   profileNotificationsStatus.textContent = statusOverride || config.detail;
   profileNotificationsButton.disabled = Boolean(statusOverride) ? true : config.disabled;
-  profileNotificationsButton.classList.toggle("is-enabled", status === "granted" && systemPushEnabled && hasFcmToken);
+  profileNotificationsButton.classList.toggle("is-enabled", status === "granted" && systemPushEnabled && hasPushRegistration);
   profileNotificationsButton.classList.toggle("is-blocked", status === "denied" || status === "unsupported" || status === "insecure" || (status === "granted" && !systemPushEnabled));
 }
 
@@ -4300,6 +4308,7 @@ async function sendFirebaseMessage(room, text, options = {}) {
 
   try {
     await update(ref(db), updates);
+    notifyPushWorkerAboutMessage(room, message);
   } catch (error) {
     queueOfflineMessageFromMessage(room, message, {
       replyPayload,
@@ -4327,6 +4336,48 @@ async function sendFirebaseMessage(room, text, options = {}) {
   }
 
   return message;
+}
+
+async function notifyPushWorkerAboutMessage(room, message) {
+  const endpoint = String(PUSH_WORKER_ENDPOINT || "").trim();
+  if (!endpoint || !room?.id || !message?.id) return;
+  if (!currentFirebaseUser?.getIdToken) return;
+  if (!areSystemPushNotificationsEnabled()) return;
+
+  try {
+    const idToken = await currentFirebaseUser.getIdToken(false);
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(() => controller.abort(), PUSH_WORKER_TIMEOUT_MS);
+
+    try {
+      const response = await fetch(endpoint, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          roomId: room.id,
+          messageId: message.id,
+          idToken
+        }),
+        signal: controller.signal
+      });
+
+      if (!response.ok) {
+        const details = await response.text().catch(() => "");
+        console.warn("Backend de push recusou a notificacao.", response.status, details);
+      }
+    } finally {
+      window.clearTimeout(timeoutId);
+    }
+  } catch (error) {
+    if (error?.name === "AbortError") {
+      console.warn("Backend de push demorou para responder.");
+      return;
+    }
+
+    console.warn("Nao foi possivel chamar o backend externo de push.", error);
+  }
 }
 
 function syncLocalSentFirebaseMessage(room, message, { displayText = "", originalText = "", sentAt = Date.now() } = {}) {
@@ -13057,6 +13108,10 @@ function getNormalizedFcmVapidKey() {
   return String(FCM_WEB_PUSH_PUBLIC_VAPID_KEY || "").replace(/\s+/g, "").trim();
 }
 
+function getNormalizedStandardWebPushVapidKey() {
+  return String(STANDARD_WEB_PUSH_PUBLIC_VAPID_KEY || "").replace(/\s+/g, "").trim();
+}
+
 function getFcmVapidKeyValidation() {
   const key = getNormalizedFcmVapidKey();
 
@@ -13086,6 +13141,44 @@ function getFcmVapidKeyValidation() {
     return {
       valid: false,
       message: "A chave VAPID atual nao pode ser decodificada. Copie novamente a chave publica Web Push."
+    };
+  }
+
+  return {
+    valid: true,
+    message: ""
+  };
+}
+
+function getStandardWebPushVapidKeyValidation() {
+  const key = getNormalizedStandardWebPushVapidKey();
+
+  if (!key || key.includes("COLE") || key.includes("SUA_CHAVE")) {
+    return {
+      valid: false,
+      message: "Configure STANDARD_WEB_PUSH_PUBLIC_VAPID_KEY para o Web Push padrao."
+    };
+  }
+
+  if (!/^[A-Za-z0-9_-]+={0,2}$/.test(key)) {
+    return {
+      valid: false,
+      message: "A chave publica Web Push padrao deve ser base64url."
+    };
+  }
+
+  try {
+    const bytes = base64UrlToUint8Array(key);
+    if (bytes.length !== 65 || bytes[0] !== 4) {
+      return {
+        valid: false,
+        message: "A chave publica Web Push padrao nao parece ser uma chave VAPID completa."
+      };
+    }
+  } catch (error) {
+    return {
+      valid: false,
+      message: "A chave publica Web Push padrao nao pode ser decodificada."
     };
   }
 
@@ -13138,6 +13231,20 @@ function getFcmDeviceId() {
   return nextId;
 }
 
+function hasSavedSystemPushRegistration() {
+  return Boolean(
+    localStorage.getItem(FCM_TOKEN_STORAGE_KEY) ||
+    localStorage.getItem(WEB_PUSH_SUBSCRIPTION_STORAGE_KEY)
+  );
+}
+
+function hasSavedPrimarySystemPushRegistration() {
+  return Boolean(
+    localStorage.getItem(WEB_PUSH_SUBSCRIPTION_STORAGE_KEY) ||
+    (!("PushManager" in window) && localStorage.getItem(FCM_TOKEN_STORAGE_KEY))
+  );
+}
+
 function registerFcmTokenIfNotificationGranted(options = {}) {
   if (!areSystemPushNotificationsEnabled()) return;
   if (!("Notification" in window) || Notification.permission !== "granted") return;
@@ -13157,6 +13264,7 @@ function shouldRefreshFcmTokenRegistration(options = {}) {
   const lastRefresh = Number(localStorage.getItem(FCM_TOKEN_REFRESHED_AT_STORAGE_KEY) || 0);
 
   if (options.force) {
+    if (!hasSavedPrimarySystemPushRegistration()) return true;
     const minIntervalMs = Math.max(0, Number(options.minIntervalMs || 0));
     if (minIntervalMs && lastRefresh && Date.now() - lastRefresh < minIntervalMs) return false;
     return true;
@@ -13166,7 +13274,7 @@ function shouldRefreshFcmTokenRegistration(options = {}) {
   if (!areSystemPushNotificationsEnabled()) return false;
   if (!("Notification" in window) || Notification.permission !== "granted") return false;
 
-  return !localStorage.getItem(FCM_TOKEN_STORAGE_KEY) || !lastRefresh || Date.now() - lastRefresh > FCM_TOKEN_REFRESH_INTERVAL_MS;
+  return !hasSavedPrimarySystemPushRegistration() || !lastRefresh || Date.now() - lastRefresh > FCM_TOKEN_REFRESH_INTERVAL_MS;
 }
 
 async function ensureFcmTokenRegistration(options = {}) {
@@ -13177,20 +13285,43 @@ async function ensureFcmTokenRegistration(options = {}) {
     if (!areSystemPushNotificationsEnabled()) return null;
     if (!("Notification" in window) || Notification.permission !== "granted") return null;
 
+    const standardVapidKeyValidation = getStandardWebPushVapidKeyValidation();
+    if (!standardVapidKeyValidation.valid) {
+      if (options.showErrors) {
+        showToast("Web Push sem chave VAPID valida", standardVapidKeyValidation.message);
+      }
+      return null;
+    }
+
+    let standardSubscription = null;
+
+    try {
+      standardSubscription = await ensureStandardWebPushSubscription(options);
+    } catch (error) {
+      console.warn("Nao foi possivel registrar Web Push padrao; tentando FCM.", error);
+    }
+
+    const standardEndpoint = standardSubscription?.endpoint || null;
+
     const vapidKeyValidation = getFcmVapidKeyValidation();
     if (!vapidKeyValidation.valid) {
       if (options.showErrors) {
         showToast("FCM sem chave VAPID valida", vapidKeyValidation.message);
       }
-      return null;
+      return standardEndpoint;
     }
 
     const messaging = await getFirebaseMessagingIfSupported();
     if (!messaging) {
       if (options.showErrors) {
-        showToast("FCM indisponivel", "Este navegador nao suporta Firebase Cloud Messaging para Web Push.");
+        showToast(
+          standardSubscription ? "Web Push padrao ativado" : "FCM indisponivel",
+          standardSubscription
+            ? "Este aparelho foi registrado pelo PushManager nativo."
+            : "Este navegador nao suporta Firebase Cloud Messaging para Web Push."
+        );
       }
-      return null;
+      return standardEndpoint;
     }
 
     const registration = await navigator.serviceWorker.ready;
@@ -13203,14 +13334,14 @@ async function ensureFcmTokenRegistration(options = {}) {
       if (options.showErrors) {
         showToast("Token FCM ausente", "O Firebase nao retornou um token para este navegador.");
       }
-      return null;
+      return standardEndpoint;
     }
 
     await saveFcmTokenForCurrentUser(token);
     setupFirebaseMessagingForegroundListener().catch((error) => {
       console.warn("Nao foi possivel preparar mensagens FCM em primeiro plano.", error);
     });
-    return token;
+    return token || standardEndpoint || null;
   })();
 
   try {
@@ -13244,6 +13375,136 @@ async function saveFcmTokenForCurrentUser(token) {
   localStorage.setItem(FCM_TOKEN_REFRESHED_AT_STORAGE_KEY, String(now));
 }
 
+async function ensureStandardWebPushSubscription(options = {}) {
+  if (!("serviceWorker" in navigator) || !("PushManager" in window)) {
+    if (options.showErrors) {
+      showToast("Web Push indisponivel", "Este navegador nao oferece PushManager para avisos em segundo plano.");
+    }
+    return null;
+  }
+
+  const registration = await navigator.serviceWorker.ready;
+  if (!registration?.pushManager) return null;
+
+  let subscription = await registration.pushManager.getSubscription();
+  const savedSubscription = getSavedWebPushSubscriptionSummary();
+  const standardVapidKey = getNormalizedStandardWebPushVapidKey();
+
+  if (
+    subscription &&
+    savedSubscription?.vapidPublicKey !== standardVapidKey &&
+    !doesPushSubscriptionUseVapidKey(subscription, standardVapidKey)
+  ) {
+    try {
+      await subscription.unsubscribe();
+      subscription = null;
+    } catch (error) {
+      console.warn("Nao foi possivel trocar assinatura Web Push antiga.", error);
+    }
+  }
+
+  if (!subscription) {
+    subscription = await registration.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: base64UrlToUint8Array(standardVapidKey)
+    });
+  }
+
+  await saveWebPushSubscriptionForCurrentUser(subscription);
+  return subscription;
+}
+
+async function saveWebPushSubscriptionForCurrentUser(subscription) {
+  if (!subscription || !currentFirebaseUid) return;
+
+  const payload = serializeWebPushSubscription(subscription);
+  if (!payload?.endpoint || !payload.keys?.p256dh || !payload.keys?.auth) return;
+
+  const deviceId = getFcmDeviceId();
+  const now = Date.now();
+  const subscriptionRecord = {
+    uid: currentFirebaseUid,
+    deviceId,
+    platform: "web",
+    nick: currentUser?.nick || "",
+    userAgent: String(navigator.userAgent || "").slice(0, 180),
+    endpoint: payload.endpoint,
+    expirationTime: payload.expirationTime || null,
+    keys: payload.keys,
+    vapidPublicKey: getNormalizedStandardWebPushVapidKey(),
+    updatedAt: serverTimestamp(),
+    updatedAtMillis: now,
+    lastRegisteredAtMillis: now
+  };
+
+  try {
+    await update(ref(db), {
+      [`webPushSubscriptions/${currentFirebaseUid}/${deviceId}`]: subscriptionRecord
+    });
+  } catch (error) {
+    console.warn("Nao foi possivel salvar assinatura em webPushSubscriptions; tentando fcmTokens.", error);
+    await update(ref(db), {
+      [`fcmTokens/${currentFirebaseUid}/${deviceId}/webPushSubscription`]: subscriptionRecord,
+      [`fcmTokens/${currentFirebaseUid}/${deviceId}/updatedAt`]: serverTimestamp(),
+      [`fcmTokens/${currentFirebaseUid}/${deviceId}/updatedAtMillis`]: now
+    });
+  }
+
+  localStorage.setItem(WEB_PUSH_SUBSCRIPTION_STORAGE_KEY, JSON.stringify({
+    endpoint: payload.endpoint,
+    vapidPublicKey: getNormalizedStandardWebPushVapidKey(),
+    updatedAtMillis: now
+  }));
+  localStorage.setItem(FCM_TOKEN_REFRESHED_AT_STORAGE_KEY, String(now));
+}
+
+function getSavedWebPushSubscriptionSummary() {
+  try {
+    return JSON.parse(localStorage.getItem(WEB_PUSH_SUBSCRIPTION_STORAGE_KEY) || "null");
+  } catch (error) {
+    return null;
+  }
+}
+
+function doesPushSubscriptionUseVapidKey(subscription, vapidKey) {
+  const applicationServerKey = subscription?.options?.applicationServerKey;
+  if (!applicationServerKey) return false;
+
+  return arrayBufferToBase64Url(applicationServerKey) === vapidKey;
+}
+
+function serializeWebPushSubscription(subscription) {
+  if (!subscription) return null;
+
+  if (typeof subscription.toJSON === "function") {
+    const payload = subscription.toJSON();
+    if (payload?.endpoint && payload?.keys?.p256dh && payload?.keys?.auth) {
+      return payload;
+    }
+  }
+
+  const p256dh = arrayBufferToBase64Url(subscription.getKey?.("p256dh"));
+  const auth = arrayBufferToBase64Url(subscription.getKey?.("auth"));
+
+  return {
+    endpoint: subscription.endpoint || "",
+    expirationTime: subscription.expirationTime || null,
+    keys: { p256dh, auth }
+  };
+}
+
+function arrayBufferToBase64Url(buffer) {
+  if (!buffer) return "";
+
+  const bytes = new Uint8Array(buffer);
+  let binary = "";
+  bytes.forEach((byte) => {
+    binary += String.fromCharCode(byte);
+  });
+
+  return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+}
+
 async function unregisterFcmTokenForCurrentUser(options = {}) {
   const uid = currentFirebaseUid;
   const deviceId = localStorage.getItem(FCM_DEVICE_ID_STORAGE_KEY);
@@ -13251,10 +13512,11 @@ async function unregisterFcmTokenForCurrentUser(options = {}) {
   if (uid && deviceId && firebaseReady && isInternetAvailable()) {
     try {
       await update(ref(db), {
-        [`fcmTokens/${uid}/${deviceId}`]: null
+        [`fcmTokens/${uid}/${deviceId}`]: null,
+        [`webPushSubscriptions/${uid}/${deviceId}`]: null
       });
     } catch (error) {
-      console.warn("Nao foi possivel remover o token FCM do Firebase.", error);
+      console.warn("Nao foi possivel remover registros de push do Firebase.", error);
     }
   }
 
@@ -13265,9 +13527,18 @@ async function unregisterFcmTokenForCurrentUser(options = {}) {
     } catch (error) {
       console.warn("Nao foi possivel apagar o token FCM local.", error);
     }
+
+    try {
+      const registration = "serviceWorker" in navigator ? await navigator.serviceWorker.ready : null;
+      const subscription = await registration?.pushManager?.getSubscription?.();
+      if (subscription) await subscription.unsubscribe();
+    } catch (error) {
+      console.warn("Nao foi possivel cancelar a assinatura Web Push local.", error);
+    }
   }
 
   localStorage.removeItem(FCM_TOKEN_STORAGE_KEY);
+  localStorage.removeItem(WEB_PUSH_SUBSCRIPTION_STORAGE_KEY);
   localStorage.removeItem(FCM_TOKEN_REFRESHED_AT_STORAGE_KEY);
 }
 
