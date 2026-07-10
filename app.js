@@ -51,7 +51,7 @@ const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
 const STANDARD_WEB_PUSH_PUBLIC_VAPID_KEY = "BLE7nXv1JR25D7PSPJgHRXcAIQUhe1R0XOhFPGheglqfIpNIo9G95_lSTDtFUNx4GjWZHFaRkdlMylcItINrvAs";
-const CHAT_VERSION = "v119";
+const CHAT_VERSION = "v120";
 // Backend externo opcional para enviar push com o site fechado.
 // Depois de publicar o Cloudflare Worker, cole aqui a URL dele.
 // Exemplo: https://astrochat-push.seu-usuario.workers.dev/notify
@@ -251,6 +251,7 @@ let notificationAudioContext = null;
 let notificationSoundUnlocked = false;
 let notificationSoundPrimed = false;
 let pendingNotificationSound = false;
+let pendingNotificationSoundKind = "default";
 let activeToastElement = null;
 let activeToastTimer = null;
 let messageSelectionMode = false;
@@ -12886,12 +12887,12 @@ function handleForegroundFcmNotification(payload = {}, options = {}) {
     showToast(title, body, "Ver pedidos", () => openNotificationsModal());
   }
 
-  if (!options.silentSystemNotification) {
-    const systemNotificationPromise = showBrowserNotification(title, body, {
+  const systemNotificationPromise = options.silentSystemNotification
+    ? Promise.resolve(true)
+    : showBrowserNotification(title, body, {
       tag: `invite:${inviteId || Date.now()}`
     });
-    playNotificationSoundAfterSystemNotification(systemNotificationPromise);
-  }
+  playNotificationSoundAfterSystemNotification(systemNotificationPromise);
 
   updateBadges();
   refreshNotificationsModalIfOpen();
@@ -12922,15 +12923,7 @@ function handleForegroundFcmChatMessage(payload = {}, options = {}) {
   markMessageAsUnreadOnce(roomId, key);
   refreshNotificationUi();
 
-  if (options.silentSystemNotification) {
-    if (!wasAlreadyNotified) {
-      markMessageNotificationShown(key);
-      refreshNotificationUi();
-    }
-    return;
-  }
-
-  if (!options.silentSystemNotification && !wasAlreadyNotified) {
+  if (!wasAlreadyNotified) {
     const wasMentioned = isCurrentUserMentionedInNotificationData(data);
     const title = wasMentioned
       ? `${data.authorNick || "Alguem"} mencionou você em ${data.roomName || getRoomDisplayName(room) || "AstroChat"}`
@@ -12941,13 +12934,15 @@ function handleForegroundFcmChatMessage(payload = {}, options = {}) {
     if (areInternalPushNotificationsEnabled()) {
       showToast(title, body, "Abrir", () => openRoomFromNotification(roomId));
     }
-    const systemNotificationPromise = showBrowserNotification(title, body, {
-      tag: key,
-      roomId,
-      messageId: data.messageId || "",
-      timestamp,
-      mentioned: wasMentioned
-    });
+    const systemNotificationPromise = options.silentSystemNotification
+      ? Promise.resolve(true)
+      : showBrowserNotification(title, body, {
+        tag: key,
+        roomId,
+        messageId: data.messageId || "",
+        timestamp,
+        mentioned: wasMentioned
+      });
     playNotificationSoundAfterSystemNotification(systemNotificationPromise, wasMentioned ? "mention" : "default");
     markMessageNotificationShown(key);
     refreshNotificationUi();
@@ -13125,9 +13120,9 @@ function saveNotificationState() {
 }
 
 function setupNotificationSoundUnlock() {
-  window.addEventListener("pointerdown", unlockNotificationSound, { once: true, passive: true });
-  window.addEventListener("touchstart", unlockNotificationSound, { once: true, passive: true });
-  window.addEventListener("keydown", unlockNotificationSound, { once: true });
+  window.addEventListener("pointerdown", unlockNotificationSound, { passive: true });
+  window.addEventListener("touchstart", unlockNotificationSound, { passive: true });
+  window.addEventListener("keydown", unlockNotificationSound);
 }
 
 async function unlockNotificationSound() {
@@ -13144,8 +13139,10 @@ async function unlockNotificationSound() {
     }
 
     if (notificationSoundUnlocked && pendingNotificationSound) {
+      const pendingKind = pendingNotificationSoundKind;
       pendingNotificationSound = false;
-      window.setTimeout(playNotificationSound, 0);
+      pendingNotificationSoundKind = "default";
+      window.setTimeout(() => playNotificationSound(pendingKind), 0);
     }
   } catch (error) {
     console.warn("Nao foi possivel destravar o som de notificacao.", error);
@@ -13183,6 +13180,8 @@ function primeNotificationSound(context) {
 }
 
 function playNotificationSound(kind = "default") {
+  if (!areInternalPushNotificationsEnabled()) return;
+
   if ("vibrate" in navigator && areInternalPushNotificationsEnabled()) {
     navigator.vibrate(kind === "mention" ? [120, 60, 120, 60, 180] : [45, 35, 45]);
   }
@@ -13196,6 +13195,7 @@ function playNotificationSound(kind = "default") {
 
   if (context.state !== "running") {
     pendingNotificationSound = true;
+    pendingNotificationSoundKind = kind;
     unlockNotificationSound();
     return;
   }
@@ -13229,18 +13229,28 @@ function canShowSystemBrowserNotification() {
 }
 
 function playNotificationSoundAfterSystemNotification(systemNotificationPromise, kind = "default") {
+  if (!areInternalPushNotificationsEnabled()) return;
+
   if (!canShowSystemBrowserNotification()) {
     playNotificationSound(kind);
     return;
   }
 
+  let soundPlayed = false;
+  const playOnce = () => {
+    if (soundPlayed) return;
+    soundPlayed = true;
+    playNotificationSound(kind);
+  };
+  const fallbackTimer = window.setTimeout(playOnce, NOTIFICATION_SOUND_AFTER_SYSTEM_DELAY_MS + 600);
+
   Promise.resolve(systemNotificationPromise)
-    .then((shown) => {
-      if (!shown) return;
-      window.setTimeout(() => playNotificationSound(kind), NOTIFICATION_SOUND_AFTER_SYSTEM_DELAY_MS);
-    })
     .catch((error) => {
       console.warn("Nao foi possivel aguardar a notificacao do sistema antes do som.", error);
+    })
+    .then(() => {
+      window.clearTimeout(fallbackTimer);
+      window.setTimeout(playOnce, NOTIFICATION_SOUND_AFTER_SYSTEM_DELAY_MS);
     });
 }
 
@@ -13268,6 +13278,7 @@ async function showBrowserNotification(title, body, data = {}) {
     badge: "icons/icon-192.png",
     tag: data.tag || title,
     renotify: true,
+    silent: false,
     requireInteraction: Boolean(data.mentioned),
     vibrate: data.mentioned ? [120, 60, 120, 60, 180] : [45, 35, 45],
     data: {
