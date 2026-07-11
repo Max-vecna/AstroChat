@@ -51,7 +51,7 @@ const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
 const STANDARD_WEB_PUSH_PUBLIC_VAPID_KEY = "BLE7nXv1JR25D7PSPJgHRXcAIQUhe1R0XOhFPGheglqfIpNIo9G95_lSTDtFUNx4GjWZHFaRkdlMylcItINrvAs";
-const CHAT_VERSION = "v138";
+const CHAT_VERSION = "v140";
 // Backend externo opcional para enviar push com o site fechado.
 // Depois de publicar o Cloudflare Worker, cole aqui a URL dele.
 // Exemplo: https://astrochat-push.seu-usuario.workers.dev/notify
@@ -415,6 +415,16 @@ const closeAiFriendModalButton = document.querySelector("#closeAiFriendModalButt
 const cancelAiFriendButton = document.querySelector("#cancelAiFriendButton");
 
 const inviteButton = document.querySelector("#inviteButton");
+const letterButton = document.querySelector("#letterButton");
+const letterModal = document.querySelector("#letterModal");
+const letterForm = document.querySelector("#letterForm");
+const closeLetterButton = document.querySelector("#closeLetterButton");
+const letterTitleInput = document.querySelector("#letterTitleInput");
+const letterMessageInput = document.querySelector("#letterMessageInput");
+const requestLetterLocationButton = document.querySelector("#requestLetterLocationButton");
+const letterLocationStatus = document.querySelector("#letterLocationStatus");
+const letterMap = document.querySelector("#letterMap");
+let activeLetterMap = null;
 const inviteModal = document.querySelector("#inviteModal");
 const inviteForm = document.querySelector("#inviteForm");
 const inviteFriendsList = document.querySelector("#inviteFriendsList");
@@ -922,6 +932,11 @@ async function handleClearActiveChat() {
 }
 
 inviteButton.addEventListener("click", openInviteModal);
+letterButton?.addEventListener("click", openLetterModal);
+closeLetterButton?.addEventListener("click", closeLetterModal);
+letterModal?.addEventListener("click", (event) => { if (event.target === letterModal) closeLetterModal(); });
+letterForm?.addEventListener("submit", sendPrivateLetter);
+requestLetterLocationButton?.addEventListener("click", requestPrivateLetterLocation);
 closeInviteModalButton.addEventListener("click", closeInviteModal);
 cancelInviteButton.addEventListener("click", closeInviteModal);
 
@@ -1227,6 +1242,7 @@ function closeUserSessionModals() {
   closeInviteModal();
   closeAiAssistModal();
   closeMessageAiTranslationModal();
+  closeLetterModal();
 }
 
 function clearStoredAstroChatData() {
@@ -3975,7 +3991,9 @@ function renderActiveRoom(forceMessages = false) {
     markRoomAsRead(activeRoom);
   }
   renderReplyPreview();
-  inviteButton.hidden = isAi;
+  const isPrivate = isPrivateRoom(activeRoom);
+  inviteButton.hidden = isAi || isPrivate;
+  if (letterButton) letterButton.hidden = !isPrivate;
   roomMenuButton.hidden = false;
   updateLiveTypingButtonState();
   subscribeToActiveRoomTyping();
@@ -4333,6 +4351,11 @@ async function sendFirebaseMessage(room, text, options = {}) {
     createdAt: serverTimestamp(),
     createdAtMillis
   };
+
+  const letter = normalizeLetterPayload(options.letter);
+  if (letter) message.letter = letter;
+  const letterLocationRequest = normalizeLetterLocationRequest(options.letterLocationRequest);
+  if (letterLocationRequest) message.letterLocationRequest = letterLocationRequest;
 
   if (options.forwarded) {
     message.forwarded = true;
@@ -6546,6 +6569,100 @@ async function retryLocalAiTranslationMessage(room, messageId, button = null) {
   await translateLocalAiMessage(room.id, message.id, sourceText, language);
 }
 
+function normalizeLetterPayload(value) {
+  if (!value || typeof value !== "object") return null;
+  const title = sanitizeText(value.title || "", 60);
+  const content = cleanMessageText(value.content || "", 1500);
+  if (!title || !content) return null;
+  const transport = ["droid", "drone", "rocket"].includes(value.transport) ? value.transport : "droid";
+  const latitude = Number(value.latitude);
+  const longitude = Number(value.longitude);
+  return { title, content, originalContent: cleanMessageText(value.originalContent || "", 1500), transport, status: value.status === "delivered" ? "delivered" : "transit", sentAtMillis: Number(value.sentAtMillis || Date.now()), ...(Number.isFinite(latitude) && Number.isFinite(longitude) ? { latitude, longitude } : {}) };
+}
+
+function normalizeLetterLocationRequest(value) {
+  if (!value || typeof value !== "object") return null;
+  const latitude = Number(value.latitude);
+  const longitude = Number(value.longitude);
+  return {
+    requesterUid: sanitizeText(value.requesterUid || "", 180),
+    status: Number.isFinite(latitude) && Number.isFinite(longitude) ? "shared" : "requested",
+    ...(Number.isFinite(latitude) && Number.isFinite(longitude) ? { latitude, longitude } : {})
+  };
+}
+
+function createLetterMessageElement(letterValue) {
+  const letter = normalizeLetterPayload(letterValue);
+  const card = document.createElement("article");
+  const transportInfo = {
+    droid: { icon: "fa-robot", name: "Droid-X" },
+    drone: { icon: "fa-helicopter", name: "Sky-Drone" },
+    rocket: { icon: "fa-rocket", name: "Astro-Rocket" }
+  }[letter?.transport || "droid"];
+  card.className = "message-letter";
+  const delivered = Date.now() - Number(letter?.sentAtMillis || 0) >= 8000;
+  card.innerHTML = `<div class="message-letter-head"><i class="fa-solid ${transportInfo.icon}" aria-hidden="true"></i><span><strong>${escapeHtml(letter?.title || "Carta")}</strong><small class="message-letter-status">${escapeHtml(transportInfo.name)} · ${delivered ? "entregue" : "em trânsito"}</small></span></div><p class="message-letter-text">${escapeHtml(letter?.content || "")}</p><div class="message-letter-route" aria-hidden="true"><span></span></div>`;
+  if (!delivered) {
+    window.setTimeout(() => {
+      const status = card.querySelector(".message-letter-status");
+      if (status) status.textContent = `${transportInfo.name} · entregue`;
+    }, Math.max(0, 8000 - (Date.now() - Number(letter?.sentAtMillis || 0))));
+  }
+  if (Number.isFinite(letter?.latitude) && Number.isFinite(letter?.longitude)) {
+    const mapButton = document.createElement("button");
+    mapButton.type = "button";
+    mapButton.className = "small-action";
+    mapButton.innerHTML = '<i class="fa-solid fa-map-location-dot"></i><span>Ver rota no mapa</span>';
+    mapButton.addEventListener("click", (event) => { event.stopPropagation(); openLetterModal(); });
+    card.appendChild(mapButton);
+  }
+  return card;
+}
+
+function createLetterLocationRequestElement(message) {
+  const request = normalizeLetterLocationRequest(message.letterLocationRequest);
+  const card = document.createElement("section");
+  card.className = "letter-location-request";
+  const isRequester = request?.requesterUid === currentFirebaseUid;
+  const shared = request?.status === "shared";
+  card.innerHTML = `<strong><i class="fa-solid fa-location-dot"></i> Localização para entrega</strong><span>${shared ? "Localização compartilhada com segurança nesta conversa." : isRequester ? "Aguardando o destinatário compartilhar a localização." : "O remetente pediu sua localização para entregar uma carta."}</span>`;
+  if (!shared && !isRequester) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "small-action";
+    button.innerHTML = '<i class="fa-solid fa-location-crosshairs"></i><span>Compartilhar minha localização</span>';
+    button.addEventListener("click", (event) => {
+      event.stopPropagation();
+      shareLocationForLetter(message, button);
+    });
+    card.appendChild(button);
+  }
+  return card;
+}
+
+async function shareLocationForLetter(message, button) {
+  const room = getActiveRoom();
+  if (!room?.id || !message?.id || !navigator.geolocation) {
+    showToast("Localização indisponível", "Este aparelho não oferece acesso à localização.");
+    return;
+  }
+  setButtonBusy(button, true, "Obtendo local...");
+  try {
+    const position = await new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }));
+    await update(ref(db), {
+      [`rooms/${room.id}/messages/${message.id}/letterLocationRequest/status`]: "shared",
+      [`rooms/${room.id}/messages/${message.id}/letterLocationRequest/latitude`]: Number(position.coords.latitude),
+      [`rooms/${room.id}/messages/${message.id}/letterLocationRequest/longitude`]: Number(position.coords.longitude),
+      [`rooms/${room.id}/messages/${message.id}/letterLocationRequest/sharedAtMillis`]: Date.now()
+    });
+    showToast("Localização compartilhada", "Agora o remetente pode visualizar o destino no mapa.");
+  } catch (error) {
+    console.warn("Localização não compartilhada.", error);
+    showToast("Permissão necessária", "Autorize a localização para compartilhar o destino da carta.");
+    setButtonBusy(button, false);
+  }
+}
+
 function createMessageElement(message, animated = false, options = {}) {
   message = getMessageWithLiveAuthorProfile(message);
 
@@ -6606,7 +6723,11 @@ function createMessageElement(message, animated = false, options = {}) {
     bubble.appendChild(createReplyQuoteElement(message.replyTo));
   }
 
-  if (hasHydration) {
+  if (message.letterLocationRequest) {
+    bubble.appendChild(createLetterLocationRequestElement(message));
+  } else if (message.letter) {
+    bubble.appendChild(createLetterMessageElement(message.letter));
+  } else if (hasHydration) {
     bubble.classList.add("is-hydrated-message");
     const hydrationActionKey = messageRoomId && message?.id ? `${messageRoomId}:${message.id}` : "";
     const shouldShowHydrationEffect = Boolean(hydrationActionKey && hydratingMessageIds.has(hydrationActionKey));
@@ -9243,6 +9364,8 @@ function getMessageSignature(message) {
   const profile = getLiveAuthorProfile(message);
   return JSON.stringify({
     id: message.id || "",
+    letter: message.letter || null,
+    letterLocationRequest: message.letterLocationRequest || null,
     text: message.text || "",
     originalText: message.originalText || "",
     translatedText: message.translatedText || "",
@@ -9789,7 +9912,7 @@ async function createFirebaseRoom(name, description, selectedFriends, language =
 async function createFirebaseInvite(room, friend) {
   if (!requireFirebaseConnection("enviar convite")) return;
 
-  if (!friend?.uid || !currentFirebaseUid) return;
+  if (!room || isPrivateRoom(room) || !friend?.uid || !currentFirebaseUid) return;
 
   const inviteId = `${room.id}_${friend.uid}`;
   const inviteSnapshot = await get(ref(db, `invites/${inviteId}`));
@@ -9881,6 +10004,15 @@ async function acceptInvite(inviteId) {
   }
 
   try {
+    const invitedRoomSnapshot = await get(ref(db, `rooms/${invite.roomId}`));
+    const invitedRoomData = invitedRoomSnapshot.val() || {};
+    if (isPrivateRoom(invitedRoomData)) {
+      const privateMembers = Object.keys(invitedRoomData.memberUids || {}).filter((uid) => invitedRoomData.memberUids?.[uid]);
+      if (!privateMembers.includes(currentFirebaseUid) && privateMembers.length >= 2) {
+        window.alert("Esta conversa privada já possui os dois participantes permitidos.");
+        return;
+      }
+    }
     const now = Date.now();
     await update(ref(db), {
       [`invites/${invite.id}/status`]: "aceito",
@@ -11240,6 +11372,21 @@ async function startPrivateConversation(friend, options = {}) {
       updatedAtMillis: now
     };
   } else {
+    const privateRoomData = snapshot.val() || {};
+    const allowedPrivateUids = new Set([currentFirebaseUid, friend.uid]);
+    Object.keys(privateRoomData.memberUids || {}).forEach((uid) => {
+      if (!allowedPrivateUids.has(uid)) {
+        updates[`rooms/${roomId}/memberUids/${uid}`] = null;
+        updates[`rooms/${roomId}/memberNicks/${uid}`] = null;
+        updates[`rooms/${roomId}/memberAvatarIcons/${uid}`] = null;
+        updates[`userRooms/${uid}/${roomId}`] = null;
+      }
+    });
+    Object.keys(privateRoomData.invitedUids || {}).forEach((uid) => {
+      updates[`rooms/${roomId}/invitedUids/${uid}`] = null;
+      updates[`rooms/${roomId}/invitedNicks/${uid}`] = null;
+      updates[`rooms/${roomId}/invitedAvatarIcons/${uid}`] = null;
+    });
     updates[`rooms/${roomId}/languageCode`] = language?.code || "";
     updates[`rooms/${roomId}/languageName`] = language?.name || "";
     updates[`rooms/${roomId}/translationEnabled`] = Boolean(language?.code);
@@ -11382,7 +11529,7 @@ function createAiFriendRoom(name, persona, avatarIcon, language = getLanguageOpt
 
 function openInviteModal() {
   const activeRoom = getActiveRoom();
-  if (!activeRoom || isAiRoom(activeRoom)) return;
+  if (!activeRoom || isAiRoom(activeRoom) || isPrivateRoom(activeRoom)) return;
   if (!requireFirebaseConnection("convidar usuarios")) return;
 
   const availableFriends = friends.filter((friend) => friend.uid && !isFriendLinkedToRoom(friend.uid, activeRoom));
@@ -11392,6 +11539,107 @@ function openInviteModal() {
   renderFriendCheckboxes(inviteFriendsList, availableFriends, "Nenhum amigo disponível. Busque um usuário pelo nick acima para convidar.");
   inviteModal.hidden = false;
   inviteModal.setAttribute("aria-hidden", "false");
+}
+
+function openLetterModal() {
+  const room = getActiveRoom();
+  if (!room || !isPrivateRoom(room) || !letterModal) return;
+  letterForm?.reset();
+  const defaultTransport = letterForm?.querySelector('input[name="letterTransport"][value="droid"]');
+  if (defaultTransport) defaultTransport.checked = true;
+  letterModal.hidden = false;
+  letterModal.setAttribute("aria-hidden", "false");
+  renderLatestLetterDestination(room);
+  window.setTimeout(() => letterTitleInput?.focus(), 50);
+}
+
+function closeLetterModal() {
+  if (!letterModal) return;
+  letterModal.hidden = true;
+  letterModal.setAttribute("aria-hidden", "true");
+  if (activeLetterMap) { activeLetterMap.remove(); activeLetterMap = null; }
+}
+
+function getLatestSharedLetterLocation(room) {
+  return [...(room?.messages || [])].reverse().map((message) => message?.letterLocationRequest).find((request) => request?.status === "shared" && Number.isFinite(Number(request.latitude)) && Number.isFinite(Number(request.longitude))) || null;
+}
+
+function renderLatestLetterDestination(room) {
+  const destination = getLatestSharedLetterLocation(room);
+  if (letterLocationStatus) letterLocationStatus.textContent = destination ? "Destino autorizado e pronto para a entrega." : "Localização do destinatário ainda não compartilhada.";
+  if (!letterMap) return;
+  letterMap.hidden = !destination;
+  if (!destination || !window.L) return;
+  if (activeLetterMap) activeLetterMap.remove();
+  activeLetterMap = window.L.map(letterMap, { zoomControl: true, attributionControl: false }).setView([destination.latitude, destination.longitude], 13);
+  window.L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", { maxZoom: 19 }).addTo(activeLetterMap);
+  window.L.marker([destination.latitude, destination.longitude]).addTo(activeLetterMap).bindPopup("Destino da carta").openPopup();
+  navigator.geolocation?.getCurrentPosition((position) => {
+    if (!activeLetterMap) return;
+    const origin = [position.coords.latitude, position.coords.longitude];
+    const target = [destination.latitude, destination.longitude];
+    window.L.marker(origin).addTo(activeLetterMap).bindPopup("Origem");
+    window.L.polyline([origin, target], { color: "#00e5c3", weight: 3, dashArray: "10 8" }).addTo(activeLetterMap);
+    activeLetterMap.fitBounds([origin, target], { padding: [28, 28] });
+  }, () => {}, { timeout: 6000, maximumAge: 120000 });
+  window.setTimeout(() => activeLetterMap?.invalidateSize(), 80);
+}
+
+async function requestPrivateLetterLocation() {
+  const room = getActiveRoom();
+  if (!room || !isPrivateRoom(room)) return;
+  setButtonBusy(requestLetterLocationButton, true, "Solicitando...");
+  try {
+    await sendFirebaseMessage(room, "Solicitação de localização para entrega de carta", {
+      skipTranslation: true,
+      translationDisabled: true,
+      letterLocationRequest: { requesterUid: currentFirebaseUid, status: "requested" }
+    });
+    showToast("Solicitação enviada", "O destinatário poderá escolher se deseja compartilhar a localização.");
+    closeLetterModal();
+  } catch (error) {
+    console.error("Não foi possível solicitar a localização.", error);
+    showToast("Falha", "Não foi possível solicitar a localização agora.");
+  } finally {
+    setButtonBusy(requestLetterLocationButton, false);
+  }
+}
+
+async function sendPrivateLetter(event) {
+  event?.preventDefault();
+  const room = getActiveRoom();
+  if (!room || !isPrivateRoom(room)) return;
+  const title = sanitizeText(letterTitleInput?.value || "", 60);
+  const content = cleanMessageText(letterMessageInput?.value || "", 1500);
+  const transport = sanitizeText(letterForm?.querySelector('input[name="letterTransport"]:checked')?.value || "droid", 20);
+  if (!title || !content) return;
+
+  const submit = letterForm?.querySelector('button[type="submit"]');
+  setButtonBusy(submit, true, "Enviando...");
+  try {
+    const language = getRoomLanguage(room);
+    let deliveredTitle = title;
+    let deliveredContent = content;
+    if (language?.code) {
+      [deliveredTitle, deliveredContent] = await Promise.all([
+        translateMessageText(title, language),
+        translateMessageText(content, language)
+      ]);
+    }
+    const destination = getLatestSharedLetterLocation(room);
+    await sendFirebaseMessage(room, `Carta: ${title}`, {
+      skipTranslation: true,
+      translationDisabled: true,
+      letter: { title: deliveredTitle, content: deliveredContent, originalContent: content, transport, status: "transit", sentAtMillis: Date.now(), latitude: destination?.latitude, longitude: destination?.longitude }
+    });
+    closeLetterModal();
+    showToast("Carta enviada", `A carta para ${getPrivateOtherNick(room) || "seu contato"} está em rota.`);
+  } catch (error) {
+    console.error("Não foi possível enviar a carta.", error);
+    showToast("Falha no envio", "Não foi possível enviar a carta agora.");
+  } finally {
+    setButtonBusy(submit, false);
+  }
 }
 
 function closeInviteModal() {
@@ -13017,6 +13265,8 @@ function mapMessageData(messageId, data = {}) {
 
   return {
     id: messageId,
+    letter: normalizeLetterPayload(data.letter),
+    letterLocationRequest: normalizeLetterLocationRequest(data.letterLocationRequest),
     text: normalizeStoredMessageText(data.text || ""),
     originalText: normalizeStoredMessageText(data.originalText || ""),
     translatedText: normalizeStoredMessageText(data.translatedText || ""),

@@ -11,6 +11,7 @@
   <link rel="icon" href="icons/icon-192.png" />
   <link rel="apple-touch-icon" href="icons/icon-192.png" />
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" crossorigin="anonymous" referrerpolicy="no-referrer"/>
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
   <link rel="stylesheet" href="style.css" />
 </head>
 <body class="auth-loading">
@@ -212,6 +213,9 @@
         </button>
         <button class="icon-button" id="inviteButton" title="Convidar amigos" aria-label="Convidar amigos">
           <i class="fa-solid fa-user-plus" aria-hidden="true"></i>
+        </button>
+        <button class="icon-button" id="letterButton" hidden title="Enviar carta" aria-label="Enviar carta">
+          <i class="fa-solid fa-envelope-open-text" aria-hidden="true"></i>
         </button>
         <button class="icon-button" id="roomMenuButton" title="Menu da sala" aria-label="Menu da sala">
           <i class="fa-solid fa-ellipsis-vertical" aria-hidden="true"></i>
@@ -862,6 +866,25 @@
     </div>
   </section>
 
+  <section class="modal-backdrop" id="letterModal" hidden aria-hidden="true">
+    <form class="modal-card letter-compose-card" id="letterForm">
+      <header class="modal-header"><div><strong>Enviar carta</strong><span>Transmissão especial para esta conversa privada.</span></div><button class="icon-button" id="closeLetterButton" type="button"><i class="fa-solid fa-xmark"></i></button></header>
+      <label class="letter-field">Título<input id="letterTitleInput" maxlength="60" placeholder="Ex: Uma mensagem para você" required></label>
+      <label class="letter-field">Carta<textarea id="letterMessageInput" maxlength="1500" rows="7" placeholder="Escreva sua carta..." required></textarea></label>
+      <section class="letter-location-panel">
+        <div><strong>Destino da carta</strong><small id="letterLocationStatus">Localização do destinatário ainda não compartilhada.</small></div>
+        <button class="small-action" id="requestLetterLocationButton" type="button"><i class="fa-solid fa-location-dot"></i><span>Solicitar localização</span></button>
+      </section>
+      <div class="letter-map" id="letterMap" hidden aria-label="Mapa da entrega"></div>
+      <div class="letter-transport-picker" id="letterTransportPicker">
+        <label><input type="radio" name="letterTransport" value="droid" checked><span><i class="fa-solid fa-robot"></i><strong>Droid-X</strong><small>Seguro · 20 km/h</small></span></label>
+        <label><input type="radio" name="letterTransport" value="drone"><span><i class="fa-solid fa-helicopter"></i><strong>Sky-Drone</strong><small>Aéreo · 100 km/h</small></span></label>
+        <label><input type="radio" name="letterTransport" value="rocket"><span><i class="fa-solid fa-rocket"></i><strong>Astro-Rocket</strong><small>Expresso · 500 km/h</small></span></label>
+      </div>
+      <button class="login-button" type="submit"><span>Enviar carta</span><i class="fa-solid fa-paper-plane"></i></button>
+    </form>
+  </section>
+
   <section class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="false"></section>
   <template id="roomItemTemplate">
     <button class="chat-item" type="button">
@@ -878,6 +901,7 @@
     </button>
   </template>
 
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
   <script type="module" src="app.js"></script>
 </body>
 </html>
