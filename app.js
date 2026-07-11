@@ -51,13 +51,17 @@ const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
 const STANDARD_WEB_PUSH_PUBLIC_VAPID_KEY = "BLE7nXv1JR25D7PSPJgHRXcAIQUhe1R0XOhFPGheglqfIpNIo9G95_lSTDtFUNx4GjWZHFaRkdlMylcItINrvAs";
-const CHAT_VERSION = "v120";
+const CHAT_VERSION = "v128";
 // Backend externo opcional para enviar push com o site fechado.
 // Depois de publicar o Cloudflare Worker, cole aqui a URL dele.
 // Exemplo: https://astrochat-push.seu-usuario.workers.dev/notify
 const PUSH_WORKER_ENDPOINT = "https://patient-pond-0cd9.maxsuelsoarescustodio.workers.dev/notify";
 const PUSH_WORKER_TIMEOUT_MS = 7000;
 const PUSH_WORKER_HEALTH_TIMEOUT_MS = 5000;
+const GEMINI_TRANSLATE_ENDPOINT = PUSH_WORKER_ENDPOINT.replace(/\/notify\/?$/, "/translate");
+const GEMINI_TRANSLATE_TIMEOUT_MS = 23000;
+const GEMINI_AI_ENDPOINT = PUSH_WORKER_ENDPOINT.replace(/\/notify\/?$/, "/ai");
+const GEMINI_AI_TIMEOUT_MS = 23000;
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
 const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
@@ -4074,6 +4078,7 @@ function addLocalAiMessage(room, options = {}) {
     originalText: hasPresetTranslation ? presetOriginalText : "",
     translatedText: hasPresetTranslation ? presetTranslatedText : "",
     translationProvider: hasPresetTranslation ? "Pollinations.AI" : "",
+    aiProvider: sanitizeText(options.aiProvider || "", 32),
     translationSourceText: shouldTranslate ? sourceText : "",
     targetLanguageCode: shouldTranslate || hasPresetTranslation ? language.code || "" : "",
     targetLanguageName: shouldTranslate || hasPresetTranslation ? language.name || "" : "",
@@ -4240,6 +4245,7 @@ async function sendFirebaseMessage(room, text, options = {}) {
     originalText: presetOriginalText,
     translatedText: presetTranslatedText,
     translationProvider: sanitizeText(options.translationProvider || (hasPresetTranslation ? "Pollinations.AI" : ""), 32),
+    aiProvider: sanitizeText(options.aiProvider || "", 32),
     targetLanguageCode: options.targetLanguageCode || language?.code || "",
     targetLanguageName: options.targetLanguageName || language?.name || "",
     learningTest,
@@ -5055,6 +5061,7 @@ async function analyzeFirebaseMessageLearning(room, message, sourceText = "") {
       learningTest: true,
       learningFeedback: learningFeedback || null,
       learningFeedbackStatus: "done",
+      aiProvider: feedbackResult.provider || "",
       translationDisabled: true,
       deliveryStatus: "sent",
       pendingOffline: false,
@@ -5065,6 +5072,7 @@ async function analyzeFirebaseMessageLearning(room, message, sourceText = "") {
       [`rooms/${room.id}/messages/${message.id}/learningTest`]: true,
       [`rooms/${room.id}/messages/${message.id}/learningFeedback`]: learningFeedback || null,
       [`rooms/${room.id}/messages/${message.id}/learningFeedbackStatus`]: "done",
+      [`rooms/${room.id}/messages/${message.id}/aiProvider`]: updatedMessage.aiProvider,
       [`rooms/${room.id}/messages/${message.id}/translationDisabled`]: true,
       [`rooms/${room.id}/messages/${message.id}/deliveryStatus`]: "sent",
       [`rooms/${room.id}/messages/${message.id}/pendingOffline`]: false,
@@ -6598,6 +6606,7 @@ function createMessageElement(message, animated = false, options = {}) {
   const deliveryStatus = createMessageDeliveryStatusElement(message);
   const metaBadges = createMessageMetaBadgesElement(message);
   const translationProviderIcon = createTranslationProviderIcon(message.translationProvider);
+  const aiProviderIcon = createAiProviderIcon(message.aiProvider);
 
   if (messageTools) {
     footer.classList.add("has-message-tools");
@@ -6609,6 +6618,7 @@ function createMessageElement(message, animated = false, options = {}) {
   }
 
   if (translationProviderIcon) footer.appendChild(translationProviderIcon);
+  if (aiProviderIcon) footer.appendChild(aiProviderIcon);
   footer.appendChild(time);
 
   if (deliveryStatus) {
@@ -7048,12 +7058,34 @@ function createTranslationProviderIcon(provider) {
   icon.title = `Traduzido com ${safeProvider}`;
   icon.setAttribute("aria-label", icon.title);
 
-  if (safeProvider === "MyMemory") {
+  if (safeProvider === "Gemini") {
+    icon.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>';
+  } else if (safeProvider === "MyMemory") {
     icon.innerHTML = '<i class="fa-solid fa-brain" aria-hidden="true"></i>';
   } else if (safeProvider === "Pollinations.AI") {
     icon.textContent = "🌸";
   } else {
     return null;
+  }
+
+  return icon;
+}
+
+function createAiProviderIcon(provider) {
+  const safeProvider = sanitizeText(provider || "", 32);
+  if (!safeProvider) return null;
+
+  const icon = document.createElement("span");
+  icon.className = "ai-provider-icon";
+  icon.title = `IA usada: ${safeProvider}`;
+  icon.setAttribute("aria-label", icon.title);
+
+  if (safeProvider === "Gemini") {
+    icon.innerHTML = '<i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i>';
+  } else if (safeProvider === "Pollinations.AI") {
+    icon.textContent = "🌸";
+  } else {
+    icon.innerHTML = '<i class="fa-solid fa-robot" aria-hidden="true"></i>';
   }
 
   return icon;
@@ -8859,6 +8891,7 @@ function getMessageSignature(message) {
     text: message.text || "",
     originalText: message.originalText || "",
     translatedText: message.translatedText || "",
+    aiProvider: message.aiProvider || "",
     translationSourceText: isPendingTranslationMessage(message) ? message.translationSourceText || "" : "",
     targetLanguageCode: message.targetLanguageCode || "",
     learningTest: Boolean(message.learningTest),
@@ -11433,7 +11466,8 @@ Se houver erro, retorne a frase corrigida em ${languageName}; nao traduza para o
 Explique cada erro em ingles simples no campo explanationEnglish.
 Se estiver correta, retorne correctedText igual ao texto original e errors como lista vazia.
 Responda em JSON valido no formato: {"correctedText":"...","errors":[{"original":"...","correction":"...","explanationEnglish":"..."}]}`;
-  const content = await askPollinationsForJson(systemPrompt, text, 0.15, 700);
+  const aiResult = await askAiForJson("learning-test", systemPrompt, text, 0.15, 700);
+  const content = aiResult.content;
   const parsed = parseJsonFromAi(content);
   const correctedText = cleanMessageText(parsed?.correctedText || parsed?.corrected || "", 800) || text;
   const errors = Array.isArray(parsed?.errors)
@@ -11444,7 +11478,7 @@ Responda em JSON valido no formato: {"correctedText":"...","errors":[{"original"
     })).filter((item) => item.original || item.correction || item.explanationEnglish).slice(0, 8)
     : [];
 
-  return { correctedText, errors, raw: content };
+  return { correctedText, errors, raw: content, provider: aiResult.provider };
 }
 
 function normalizeLearningFeedback(feedback) {
@@ -11557,7 +11591,7 @@ Gere exatamente 3 sugestões melhores para a mensagem do usuário.
 Preserve a intenção, não invente fatos e mantenha o texto natural para conversa.
 Use ${languageHint}.
 Responda em JSON válido no formato: {"suggestions":[{"text":"...","tone":"...","reason":"..."}]}`;
-  const content = await askPollinationsForJson(systemPrompt, text, 0.55, 600);
+  const { content } = await askAiForJson("suggestions", systemPrompt, text, 0.55, 600);
   const parsed = parseJsonFromAi(content);
   const rawSuggestions = Array.isArray(parsed?.suggestions) ? parsed.suggestions : [];
   const suggestions = rawSuggestions
@@ -11585,7 +11619,7 @@ Analise a mensagem do usuário e mostre problemas reais, sem exagerar.
 Use ${languageHint}.
 Responda em JSON válido no formato: {"correctedText":"...","errors":[{"original":"...","correction":"...","explanation":"..."}]}
 Se não houver erro, retorne errors como lista vazia e correctedText igual ao texto original.`;
-  const content = await askPollinationsForJson(systemPrompt, text, 0.2, 700);
+  const { content } = await askAiForJson("spellcheck", systemPrompt, text, 0.2, 700);
   const parsed = parseJsonFromAi(content);
   const correctedText = cleanMessageText(parsed?.correctedText || parsed?.corrected || "", 800) || text;
   const errors = Array.isArray(parsed?.errors)
@@ -11597,6 +11631,88 @@ Se não houver erro, retorne errors como lista vazia e correctedText igual ao te
     : [];
 
   return { correctedText, errors, raw: content };
+}
+
+async function askAiForJson(task, systemPrompt, userText, temperature = 0.3, maxTokens = 700) {
+  try {
+    const content = await askGeminiForJson(task, systemPrompt, userText, temperature, maxTokens);
+    if (!parseJsonFromAi(content)) {
+      throw new Error("Gemini retornou JSON inválido para este recurso.");
+    }
+    return { content, provider: "Gemini" };
+  } catch (error) {
+    console.warn(`Gemini indisponível para ${task}; tentando Pollinations.AI.`, error);
+    return { content: await askPollinationsForJson(systemPrompt, userText, temperature, maxTokens), provider: "Pollinations.AI" };
+  }
+}
+
+async function askGeminiForJson(task, systemPrompt, userText, temperature = 0.3, maxTokens = 700) {
+  if (!requireInternet("usar a IA")) {
+    throw new Error("Sem internet para usar a IA.");
+  }
+
+  const endpoint = String(GEMINI_AI_ENDPOINT || "").trim();
+  const cleanTask = sanitizeText(task || "", 40).toLowerCase();
+  const cleanSystemPrompt = cleanMessageText(systemPrompt, 3500);
+  const cleanUserText = cleanMessageText(userText, 2000);
+
+  if (!endpoint || !cleanTask || !cleanSystemPrompt || !cleanUserText) {
+    throw new Error("Gemini não está configurado para este recurso de IA.");
+  }
+  if (!currentFirebaseUser?.getIdToken) {
+    throw new Error("Usuário Firebase indisponível para usar o Gemini.");
+  }
+
+  const idToken = await currentFirebaseUser.getIdToken(false);
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), GEMINI_AI_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+      },
+      body: JSON.stringify({
+        idToken,
+        task: cleanTask,
+        systemPrompt: cleanSystemPrompt,
+        userText: cleanUserText,
+        temperature: Number(temperature),
+        maxTokens: Number(maxTokens)
+      }),
+      signal: controller.signal
+    });
+
+    const rawBody = await response.text();
+    let data = {};
+    try {
+      data = rawBody ? JSON.parse(rawBody) : {};
+    } catch {
+      data = { ok: false, error: rawBody };
+    }
+
+    if (!response.ok || data?.ok === false) {
+      const errorParts = [data?.error, data?.details].filter(Boolean);
+      const errorMessage = errorParts.join(" — ") || `Gemini respondeu HTTP ${response.status}`;
+      console.warn("Gemini não concluiu o recurso de IA; usando Pollinations como fallback.", {
+        task: cleanTask,
+        status: response.status,
+        code: data?.code || "",
+        upstreamStatus: data?.upstreamStatus || 0,
+        modelsTried: data?.modelsTried || [],
+        details: data?.details || ""
+      });
+      throw new Error(errorMessage);
+    }
+
+    const content = cleanAiText(data?.content || data?.text || "");
+    if (!content) throw new Error("Gemini retornou uma resposta vazia.");
+    return content;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
 }
 
 async function askPollinationsForJson(systemPrompt, userText, temperature = 0.3, maxTokens = 700) {
@@ -11773,6 +11889,15 @@ async function translateMessageTextResult(text, language) {
     throw new Error("Sem internet para traduzir.");
   }
 
+  try {
+    return {
+      text: await translateMessageTextWithGemini(clean, language),
+      provider: "Gemini"
+    };
+  } catch (error) {
+    console.warn("Gemini indisponível para tradução, tentando Pollinations.AI.", error);
+  }
+
   const payload = {
     model: "openai",
     messages: [
@@ -11837,6 +11962,63 @@ async function translateMessageTextResult(text, language) {
   }
 
   throw new Error("Nenhum serviço de tradução está disponível no momento.");
+}
+
+async function translateMessageTextWithGemini(text, language) {
+  const endpoint = String(GEMINI_TRANSLATE_ENDPOINT || "").trim();
+  const targetLanguageCode = sanitizeText(language?.code || "", 12).toLowerCase();
+  const cleanText = cleanMessageText(text, 2000);
+
+  if (!endpoint || !cleanText || !targetLanguageCode) {
+    throw new Error("Gemini não está configurado para tradução.");
+  }
+  if (!currentFirebaseUser?.getIdToken) {
+    throw new Error("Usuário Firebase indisponível para usar o Gemini.");
+  }
+
+  const idToken = await currentFirebaseUser.getIdToken(false);
+  const controller = new AbortController();
+  const timeoutId = window.setTimeout(() => controller.abort(), GEMINI_TRANSLATE_TIMEOUT_MS);
+
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "application/json"
+      },
+      body: JSON.stringify({
+        idToken,
+        text: cleanText,
+        targetLanguageCode
+      }),
+      signal: controller.signal
+    });
+
+    const data = await response.json().catch(async () => ({
+      ok: false,
+      error: await response.text().catch(() => "")
+    }));
+
+    if (!response.ok || data?.ok === false) {
+      const errorParts = [data?.error, data?.details].filter(Boolean);
+      const errorMessage = errorParts.join(" — ") || `Gemini respondeu HTTP ${response.status}`;
+      console.warn("Gemini não traduziu; o AstroChat usará o próximo provedor.", {
+        status: response.status,
+        code: data?.code || "",
+        upstreamStatus: data?.upstreamStatus || 0,
+        modelsTried: data?.modelsTried || [],
+        details: data?.details || ""
+      });
+      throw new Error(errorMessage);
+    }
+
+    const translated = cleanAiText(data?.text || "").replace(/^['"]|['"]$/g, "");
+    if (!translated) throw new Error("Gemini retornou uma tradução vazia.");
+    return translated;
+  } finally {
+    window.clearTimeout(timeoutId);
+  }
 }
 
 async function translateMessageTextWithMyMemory(text, language) {
@@ -11953,6 +12135,7 @@ async function handleAiRoomMessage(text) {
       from: "ai",
       author: aiAuthor,
       text: reply,
+      aiProvider: "Pollinations.AI",
       time: Date.now()
     });
   } catch (error) {
@@ -11983,14 +12166,16 @@ async function handleAiFriendRoomMessage(room, text) {
   const replyPayload = getReplyPayloadForMessage();
   const aiAuthor = getAiAuthorName(room);
   const language = getRoomLanguage(room);
-  const shouldBundleTranslation = Boolean(language?.code);
+  const shouldTranslate = Boolean(language?.code);
 
+  // Mantém o texto original disponível para o contexto da IA. A tradução é
+  // iniciada somente depois que o Pollinations termina de criar a resposta.
   const userMessage = addLocalAiMessage(room, {
     from: "me",
     author: currentUser?.nick || "Voce",
     text,
     replyTo: replyPayload,
-    skipTranslation: shouldBundleTranslation
+    skipTranslation: shouldTranslate
   });
   clearReplyTarget();
 
@@ -11998,33 +12183,19 @@ async function handleAiFriendRoomMessage(room, text) {
   appendAiTypingIndicator(room.id);
 
   try {
-    const replyBundle = shouldBundleTranslation
-      ? await requestAiFriendReplyBundle(room, text, language)
-      : { replyText: await requestLanguageAiReply(room) };
-    const reply = cleanMessageText(replyBundle.replyText || "");
+    const reply = cleanMessageText(await requestLanguageAiReply(room));
     removeAiTypingIndicator(room.id);
 
-    if (shouldBundleTranslation && userMessage?.id) {
-      const translatedUserText = cleanMessageText(replyBundle.userTranslatedText || "");
-      if (translatedUserText) {
-        applyBundledLocalAiTranslation(room, userMessage.id, text, translatedUserText, language);
-      } else {
-        markLocalAiTranslationUnavailable(room, userMessage.id, text, language);
-      }
+    if (shouldTranslate && userMessage?.id) {
+      startLocalAiMessageTranslation(room, userMessage, text, language);
     }
 
-    const aiMessage = addLocalAiMessage(room, {
+    addLocalAiMessage(room, {
       from: "ai",
       author: aiAuthor,
       text: reply || "Nao consegui montar uma resposta agora.",
-      originalText: reply,
-      translatedText: shouldBundleTranslation ? replyBundle.replyTranslatedText || "" : "",
-      skipTranslation: shouldBundleTranslation && !replyBundle.replyTranslatedText
+      aiProvider: "Pollinations.AI"
     });
-
-    if (shouldBundleTranslation && aiMessage?.id && !replyBundle.replyTranslatedText) {
-      markLocalAiTranslationUnavailable(room, aiMessage.id, reply || aiMessage.text, language);
-    }
   } catch (error) {
     console.warn("Erro ao consultar amigo IA.", error);
     removeAiTypingIndicator(room.id);
@@ -12032,11 +12203,33 @@ async function handleAiFriendRoomMessage(room, text) {
       from: "ai",
       author: aiAuthor,
       text: "Nao consegui responder agora. Verifique sua conexao e tente novamente em instantes.",
-      skipTranslation: shouldBundleTranslation
+      skipTranslation: shouldTranslate
     });
   } finally {
     setAiLoading(false);
   }
+}
+
+function startLocalAiMessageTranslation(room, message, sourceText, language = getRoomLanguage(room)) {
+  const cleanSourceText = cleanMessageText(sourceText, 2000);
+  if (!room?.id || !message?.id || !language?.code || !cleanSourceText) return;
+
+  updateLocalAiMessage(room.id, message.id, {
+    text: PUBLIC_TRANSLATION_PENDING_TEXT,
+    originalText: "",
+    translatedText: "",
+    translationProvider: "",
+    translationSourceText: cleanSourceText,
+    targetLanguageCode: language.code || "",
+    targetLanguageName: language.name || "",
+    translationDisabled: false,
+    translationStatus: "pending",
+    translationError: false,
+    deliveryStatus: "processing",
+    processingType: MESSAGE_PROCESSING_TRANSLATION
+  });
+
+  translateLocalAiMessage(room.id, message.id, cleanSourceText, language);
 }
 
 async function requestAiFriendReplyBundle(room, latestUserText, language) {
@@ -12426,6 +12619,7 @@ function mapMessageData(messageId, data = {}) {
     originalText: normalizeStoredMessageText(data.originalText || ""),
     translatedText: normalizeStoredMessageText(data.translatedText || ""),
     translationProvider: sanitizeText(data.translationProvider || "", 32),
+    aiProvider: sanitizeText(data.aiProvider || "", 32),
     translationSourceText: data.translationSourceText || "",
     targetLanguageCode: data.targetLanguageCode || "",
     targetLanguageName: data.targetLanguageName || "",
