@@ -11773,15 +11773,6 @@ async function translateMessageTextResult(text, language) {
     throw new Error("Sem internet para traduzir.");
   }
 
-  try {
-    return {
-      text: await translateMessageTextWithMyMemory(clean, language),
-      provider: "MyMemory"
-    };
-  } catch (error) {
-    console.warn("MyMemory indisponível para tradução, tentando Pollinations.AI.", error);
-  }
-
   const payload = {
     model: "openai",
     messages: [
@@ -11832,6 +11823,17 @@ async function translateMessageTextResult(text, language) {
     throw new Error("Tradução vazia.");
   } catch (error) {
     console.warn("Pollinations.AI indisponível para tradução.", error);
+  }
+
+  // MyMemory pode responder HTTP 200 mesmo quando entrega uma traducao
+  // excessivamente literal. Use-o apenas como contingencia.
+  try {
+    return {
+      text: await translateMessageTextWithMyMemory(clean, language),
+      provider: "MyMemory"
+    };
+  } catch (error) {
+    console.warn("MyMemory indisponível para tradução.", error);
   }
 
   throw new Error("Nenhum serviço de tradução está disponível no momento.");
