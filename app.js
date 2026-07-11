@@ -51,7 +51,7 @@ const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
 const STANDARD_WEB_PUSH_PUBLIC_VAPID_KEY = "BLE7nXv1JR25D7PSPJgHRXcAIQUhe1R0XOhFPGheglqfIpNIo9G95_lSTDtFUNx4GjWZHFaRkdlMylcItINrvAs";
-const CHAT_VERSION = "v131";
+const CHAT_VERSION = "v134";
 // Backend externo opcional para enviar push com o site fechado.
 // Depois de publicar o Cloudflare Worker, cole aqui a URL dele.
 // Exemplo: https://astrochat-push.seu-usuario.workers.dev/notify
@@ -4160,7 +4160,9 @@ async function translateLocalAiMessage(roomId, messageId, sourceText, language) 
   if (!roomId || !messageId || !cleanSourceText || !language?.code) return;
 
   try {
-    const translationResult = await translateMessageTextResult(cleanSourceText, language);
+    const translationResult = await translateMessageTextResult(cleanSourceText, language, {
+      onProgress: (partialText) => updateLocalAiMessage(roomId, messageId, { text: partialText })
+    });
     const translated = cleanMessageText(translationResult.text, 1000);
     if (!translated) throw new Error("Traducao vazia.");
 
@@ -8471,21 +8473,15 @@ async function speakMessage(message) {
     audio.onerror = () => {
       if (activeSpeechAudio !== audio) return;
       releaseActiveSpeechAudio();
-      activeSpeechMessage = null;
-      activeSpeechMessageKey = "";
-      clearSpeechProgress();
-      showToast("Voz Gemini indisponível", "Não foi possível reproduzir o áudio gerado.");
+      void speakMessageWithBrowserVoice(message, true);
     };
     await audio.play();
   } catch (error) {
-    if (error?.name === "AbortError") return;
+    if (error?.name === "AbortError" && !activeSpeechMessage) return;
     console.warn("Gemini TTS indisponível.", error);
     activeSpeechRequestController = null;
     releaseActiveSpeechAudio();
-    activeSpeechMessage = null;
-    activeSpeechMessageKey = "";
-    clearSpeechProgress();
-    showToast("Voz Gemini indisponível", "Use Ouvir para tentar o sintetizador do navegador.");
+    await speakMessageWithBrowserVoice(message, true);
   }
 }
 
@@ -8635,7 +8631,7 @@ async function clearTemporaryAppStorage() {
   showToast("Temporários limpos", "Áudios, caches e filas temporárias foram removidos.");
 }
 
-async function speakMessageWithBrowserVoice(message) {
+async function speakMessageWithBrowserVoice(message, isGeminiFallback = false) {
   const text = getMessageAudioText(message);
   stopSpeaking();
   if (!("speechSynthesis" in window)) {
@@ -8645,6 +8641,10 @@ async function speakMessageWithBrowserVoice(message) {
     clearSpeechProgress();
     showToast("Sintetizador indisponível", "Este navegador não oferece voz local.");
     return;
+  }
+
+  if (isGeminiFallback) {
+    showToast("Usando voz local", "O Gemini não retornou áudio; reproduzindo com o sintetizador do navegador.");
   }
 
   window.speechSynthesis.cancel();
@@ -11947,7 +11947,7 @@ async function askGeminiForJson(task, systemPrompt, userText, temperature = 0.3,
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Accept": "application/json"
+        "Accept": "text/event-stream, application/json"
       },
       body: JSON.stringify({
         idToken,
@@ -11955,10 +11955,17 @@ async function askGeminiForJson(task, systemPrompt, userText, temperature = 0.3,
         systemPrompt: cleanSystemPrompt,
         userText: cleanUserText,
         temperature: Number(temperature),
-        maxTokens: Number(maxTokens)
+        maxTokens: Number(maxTokens),
+        stream: true
       }),
       signal: controller.signal
     });
+
+    if (response.ok && String(response.headers.get("Content-Type") || "").includes("text/event-stream")) {
+      const content = cleanAiText(await readGeminiEventStream(response));
+      if (!content) throw new Error("Gemini retornou uma resposta vazia.");
+      return content;
+    }
 
     const rawBody = await response.text();
     let data = {};
@@ -12157,7 +12164,7 @@ async function translateMessageText(text, language) {
   return result.text;
 }
 
-async function translateMessageTextResult(text, language) {
+async function translateMessageTextResult(text, language, options = {}) {
   const clean = cleanMessageText(text);
   if (!clean || !language?.code) return { text: clean, provider: "" };
   if (!requireInternet("traduzir mensagens")) {
@@ -12166,7 +12173,7 @@ async function translateMessageTextResult(text, language) {
 
   try {
     return {
-      text: await translateMessageTextWithGemini(clean, language),
+      text: await translateMessageTextWithGemini(clean, language, options.onProgress),
       provider: "Gemini"
     };
   } catch (error) {
@@ -12239,7 +12246,7 @@ async function translateMessageTextResult(text, language) {
   throw new Error("Nenhum serviço de tradução está disponível no momento.");
 }
 
-async function translateMessageTextWithGemini(text, language) {
+async function translateMessageTextWithGemini(text, language, onProgress = null) {
   const endpoint = String(GEMINI_TRANSLATE_ENDPOINT || "").trim();
   const targetLanguageCode = sanitizeText(language?.code || "", 12).toLowerCase();
   const cleanText = cleanMessageText(text, 2000);
@@ -12260,20 +12267,24 @@ async function translateMessageTextWithGemini(text, language) {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Accept": "application/json"
+        "Accept": "text/event-stream, application/json"
       },
       body: JSON.stringify({
         idToken,
         text: cleanText,
-        targetLanguageCode
+        targetLanguageCode,
+        stream: true
       }),
       signal: controller.signal
     });
 
-    const data = await response.json().catch(async () => ({
-      ok: false,
-      error: await response.text().catch(() => "")
-    }));
+    if (response.ok && String(response.headers.get("Content-Type") || "").includes("text/event-stream")) {
+      const translated = cleanAiText(await readGeminiEventStream(response, onProgress)).replace(/^['"]|['"]$/g, "");
+      if (!translated) throw new Error("Gemini retornou uma tradução vazia.");
+      return translated;
+    }
+
+    const data = await response.json().catch(() => ({ ok: false, error: "Resposta inválida do Gemini." }));
 
     if (!response.ok || data?.ok === false) {
       const errorParts = [data?.error, data?.details].filter(Boolean);
@@ -12294,6 +12305,41 @@ async function translateMessageTextWithGemini(text, language) {
   } finally {
     window.clearTimeout(timeoutId);
   }
+}
+
+async function readGeminiEventStream(response, onProgress = null) {
+  if (!response?.body) return "";
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result = "";
+
+  const consumeLine = (line) => {
+    const trimmed = line.trim();
+    if (!trimmed.startsWith("data:")) return;
+    const payload = trimmed.slice(5).trim();
+    if (!payload || payload === "[DONE]") return;
+    try {
+      const data = JSON.parse(payload);
+      const chunk = (data?.candidates?.[0]?.content?.parts || []).map((part) => part?.text || "").join("");
+      if (!chunk) return;
+      result += chunk;
+      if (typeof onProgress === "function") onProgress(result, chunk);
+    } catch (error) {
+      console.warn("Bloco SSE inválido recebido do Gemini.", error);
+    }
+  };
+
+  while (true) {
+    const { value, done } = await reader.read();
+    buffer += decoder.decode(value || new Uint8Array(), { stream: !done });
+    const lines = buffer.split(/\r?\n/);
+    buffer = lines.pop() || "";
+    lines.forEach(consumeLine);
+    if (done) break;
+  }
+  if (buffer.trim()) consumeLine(buffer);
+  return result;
 }
 
 async function translateMessageTextWithMyMemory(text, language) {
