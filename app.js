@@ -51,7 +51,7 @@ const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
 const STANDARD_WEB_PUSH_PUBLIC_VAPID_KEY = "BLE7nXv1JR25D7PSPJgHRXcAIQUhe1R0XOhFPGheglqfIpNIo9G95_lSTDtFUNx4GjWZHFaRkdlMylcItINrvAs";
-const CHAT_VERSION = "v128";
+const CHAT_VERSION = "v131";
 // Backend externo opcional para enviar push com o site fechado.
 // Depois de publicar o Cloudflare Worker, cole aqui a URL dele.
 // Exemplo: https://astrochat-push.seu-usuario.workers.dev/notify
@@ -62,6 +62,10 @@ const GEMINI_TRANSLATE_ENDPOINT = PUSH_WORKER_ENDPOINT.replace(/\/notify\/?$/, "
 const GEMINI_TRANSLATE_TIMEOUT_MS = 23000;
 const GEMINI_AI_ENDPOINT = PUSH_WORKER_ENDPOINT.replace(/\/notify\/?$/, "/ai");
 const GEMINI_AI_TIMEOUT_MS = 23000;
+const GEMINI_TTS_ENDPOINT = PUSH_WORKER_ENDPOINT.replace(/\/notify\/?$/, "/tts");
+const GEMINI_TTS_TIMEOUT_MS = 32000;
+const GEMINI_TTS_CACHE_NAME = "astrochat-gemini-tts-v1";
+const GEMINI_TTS_MAX_TEXT_LENGTH = 1200;
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
 const FRIENDS_STORAGE_KEY = "chat-pwa-amigos-v2-firebase";
@@ -80,6 +84,7 @@ const PUSH_SETTINGS_CACHE = "astrochat-push-settings-v1";
 const FCM_TOKEN_REFRESH_REQUEST = "./__astrochat-fcm-token-refresh-request";
 const SPEECH_RATE_STORAGE_KEY = "astrochat-speech-rate-v1";
 const SPEECH_PLAYBACK_STORAGE_KEY = "astrochat-speech-playback-v1";
+const ROOM_VOICE_SETTINGS_STORAGE_KEY = "astrochat-room-voice-settings-v1";
 const LIVE_TYPING_STORAGE_KEY = "astrochat-live-typing-v1";
 const LEARNING_TEST_STORAGE_KEY = "astrochat-learning-test-v1";
 const PROCESSED_FRIEND_REQUESTS_STORAGE_KEY = "astrochat-friend-requests-processados-v1";
@@ -230,12 +235,16 @@ let activeView = "rooms";
 let deferredInstallPrompt = null;
 let aiReplyInProgress = false;
 let activeSpeechUtterance = null;
+let activeSpeechAudio = null;
+let activeSpeechAudioUrl = "";
+let activeSpeechRequestController = null;
 let activeSpeechMessage = null;
 let activeSpeechMessageKey = "";
 let activeSpeechAnimationTimer = 0;
 let activeSpeechProgressClearTimer = 0;
 let speechPlaybackRate = normalizeSpeechPlaybackRate(loadFromStorage(SPEECH_RATE_STORAGE_KEY, 1));
 let speechPlaybackByRoom = loadFromStorage(SPEECH_PLAYBACK_STORAGE_KEY, {});
+let roomVoiceSettings = loadFromStorage(ROOM_VOICE_SETTINGS_STORAGE_KEY, {});
 let firebaseReady = false;
 let firebaseInitPromise = null;
 let logoutInProgress = false;
@@ -374,6 +383,11 @@ const profileNotificationsButton = document.querySelector("#profileNotifications
 const profileNotificationsStatus = document.querySelector("#profileNotificationsStatus");
 const internalPushToggleButton = document.querySelector("#internalPushToggleButton");
 const internalPushToggleStatus = document.querySelector("#internalPushToggleStatus");
+const profileStorageStatus = document.querySelector("#profileStorageStatus");
+const profileStorageBar = document.querySelector("#profileStorageBar");
+const clearSavedAudioButton = document.querySelector("#clearSavedAudioButton");
+const clearLocalConversationsButton = document.querySelector("#clearLocalConversationsButton");
+const clearAppStorageButton = document.querySelector("#clearAppStorageButton");
 const profileVersionLabel = document.querySelector("#profileVersionLabel");
 const roomItemTemplate = document.querySelector("#roomItemTemplate");
 
@@ -445,6 +459,9 @@ const roomSettingsLiveTypingButton = document.querySelector("#roomSettingsLiveTy
 const roomSettingsLiveTypingCheckbox = document.querySelector("#roomSettingsLiveTypingCheckbox");
 const roomSettingsSpeechPlaybackButton = document.querySelector("#roomSettingsSpeechPlaybackButton");
 const roomSettingsSpeechPlaybackCheckbox = document.querySelector("#roomSettingsSpeechPlaybackCheckbox");
+const roomSettingsVoiceSelect = document.querySelector("#roomSettingsVoiceSelect");
+const roomSettingsVoiceRateSelect = document.querySelector("#roomSettingsVoiceRateSelect");
+const saveRoomVoiceSettingsButton = document.querySelector("#saveRoomVoiceSettingsButton");
 const roomSettingsClearChatButton = document.querySelector("#roomSettingsClearChatButton");
 const roomSettingsPinButton = document.querySelector("#roomSettingsPinButton");
 const roomSettingsSelectMessagesButton = document.querySelector("#roomSettingsSelectMessagesButton");
@@ -615,6 +632,9 @@ resetLocalProfileButton?.addEventListener("click", () => {
 });
 profileNotificationsButton?.addEventListener("click", handleProfileNotificationsButtonClickWithFcm);
 internalPushToggleButton?.addEventListener("click", toggleInternalPushNotifications);
+clearSavedAudioButton?.addEventListener("click", clearSavedGeminiAudio);
+clearLocalConversationsButton?.addEventListener("click", clearLocalConversationData);
+clearAppStorageButton?.addEventListener("click", clearTemporaryAppStorage);
 
 profileNickInput?.addEventListener("input", updateProfileSettingsPreview);
 profileNativeLanguageSelect?.addEventListener("change", updateProfileSettingsPreview);
@@ -835,6 +855,7 @@ saveRoomLanguageButton?.addEventListener("click", saveActiveRoomLanguageFromSett
 deleteRoomButton?.addEventListener("click", handleDeleteOrLeaveRoomFromSettings);
 roomSettingsLiveTypingCheckbox?.addEventListener("change", () => toggleLiveTypingForActiveRoom());
 roomSettingsSpeechPlaybackCheckbox?.addEventListener("change", () => setSpeechPlaybackForActiveRoom(Boolean(roomSettingsSpeechPlaybackCheckbox.checked)));
+saveRoomVoiceSettingsButton?.addEventListener("click", saveActiveRoomVoiceSettings);
 roomSettingsClearChatButton?.addEventListener("click", handleClearActiveChat);
 roomSettingsPinButton?.addEventListener("click", toggleActiveRoomPin);
 roomSettingsSelectMessagesButton?.addEventListener("click", () => {
@@ -1210,6 +1231,7 @@ function clearStoredAstroChatData() {
     FCM_TOKEN_REFRESHED_AT_STORAGE_KEY,
     SPEECH_RATE_STORAGE_KEY,
     SPEECH_PLAYBACK_STORAGE_KEY,
+    ROOM_VOICE_SETTINGS_STORAGE_KEY,
     LIVE_TYPING_STORAGE_KEY,
     LEARNING_TEST_STORAGE_KEY,
     PROCESSED_FRIEND_REQUESTS_STORAGE_KEY,
@@ -1229,6 +1251,7 @@ function loadLocalSessionData() {
   syncSystemPushPreferenceToServiceWorker();
   liveTypingByRoom = loadFromStorage(LIVE_TYPING_STORAGE_KEY, {});
   speechPlaybackByRoom = loadFromStorage(SPEECH_PLAYBACK_STORAGE_KEY, {});
+  roomVoiceSettings = loadFromStorage(ROOM_VOICE_SETTINGS_STORAGE_KEY, {});
   learningTestByRoom = loadFromStorage(LEARNING_TEST_STORAGE_KEY, {});
   processedFriendRequestIds = loadFromStorage(PROCESSED_FRIEND_REQUESTS_STORAGE_KEY, {});
   pinnedConversationIds = new Set(loadFromStorage(PINNED_CONVERSATIONS_STORAGE_KEY, []));
@@ -2766,10 +2789,10 @@ function setSpeechPlaybackForActiveRoom(enabled) {
   updateSpeechPlaybackToggleState(activeRoom);
 
   showToast(
-    enabled ? "Barras abaixo do texto" : "Barras no lugar do texto",
+    enabled ? "Voz abaixo do texto" : "Voz no lugar do texto",
     enabled
-      ? "Ao clicar em Ouvir, as barras aparecem embaixo da mensagem sem esconder o texto."
-      : "Ao clicar em Ouvir, as barras aparecem no lugar do texto da mensagem."
+      ? "Ao clicar em Gerar voz, as barras aparecem embaixo da mensagem sem esconder o texto."
+      : "Ao clicar em Gerar voz, as barras aparecem no lugar do texto da mensagem."
   );
 }
 
@@ -2779,6 +2802,33 @@ function isSpeechPlaybackEnabledForRoom(roomId) {
 
 function saveSpeechPlaybackSettings() {
   localStorage.setItem(SPEECH_PLAYBACK_STORAGE_KEY, JSON.stringify(speechPlaybackByRoom || {}));
+}
+
+function getRoomVoiceSettings(roomId) {
+  const saved = roomVoiceSettings?.[roomId] || {};
+  return { voice: sanitizeText(saved.voice || "Kore", 32), rate: Math.min(1.4, Math.max(0.8, Number(saved.rate) || 1)) };
+}
+
+function getActiveRoomVoiceSettings() {
+  return getRoomVoiceSettings(getActiveRoom()?.id || "");
+}
+
+function saveActiveRoomVoiceSettings() {
+  const room = getActiveRoom();
+  if (!room?.id) return;
+  roomVoiceSettings[room.id] = {
+    voice: sanitizeText(roomSettingsVoiceSelect?.value || "Kore", 32),
+    rate: Math.min(1.4, Math.max(0.8, Number(roomSettingsVoiceRateSelect?.value) || 1))
+  };
+  localStorage.setItem(ROOM_VOICE_SETTINGS_STORAGE_KEY, JSON.stringify(roomVoiceSettings));
+  stopSpeaking();
+  showToast("Voz salva", `Esta sala usará ${roomVoiceSettings[room.id].voice} em ${roomVoiceSettings[room.id].rate}×.`);
+}
+
+function renderRoomVoiceSettings(room) {
+  const settings = getRoomVoiceSettings(room?.id || "");
+  if (roomSettingsVoiceSelect) roomSettingsVoiceSelect.value = settings.voice;
+  if (roomSettingsVoiceRateSelect) roomSettingsVoiceRateSelect.value = String(settings.rate);
 }
 
 function updateSpeechPlaybackToggleState(activeRoom = getActiveRoom()) {
@@ -2792,8 +2842,8 @@ function updateSpeechPlaybackToggleState(activeRoom = getActiveRoom()) {
     const status = roomSettingsSpeechPlaybackButton.querySelector(".room-menu-toggle-status") || roomSettingsSpeechPlaybackButton.querySelector("small");
     if (status) status.textContent = enabled ? "Aparece abaixo do texto" : "Aparece no lugar do texto";
     roomSettingsSpeechPlaybackButton.title = enabled
-      ? "As barras de voz aparecem abaixo do texto quando você clicar em Ouvir"
-      : "As barras de voz substituem o texto quando você clicar em Ouvir";
+      ? "As barras de voz aparecem abaixo do texto quando você clicar em Gerar voz"
+      : "As barras de voz substituem o texto quando você clicar em Gerar voz";
   }
 
   if (roomSettingsSpeechPlaybackCheckbox) {
@@ -2947,6 +2997,7 @@ function openProfileSettingsModal() {
   updateProfileSettingsPreview();
   updateProfileNotificationsButtonState();
   updateInternalPushToggleState();
+  updateProfileStorageUsage();
   profileSettingsModal.hidden = false;
   profileSettingsModal.setAttribute("aria-hidden", "false");
 }
@@ -7151,25 +7202,31 @@ function shouldShowInlineSpeechPlaybackButton(message, roomId = activeRoomId) {
 
 function createInlineSpeechPlaybackElement(message) {
   const wrap = document.createElement("div");
-  const button = document.createElement("button");
-  const isSpeaking = isMessageCurrentlySpeaking(message);
+  const geminiButton = document.createElement("button");
+  const browserButton = document.createElement("button");
 
   wrap.className = "message-inline-audio";
-  button.className = "message-inline-audio-button";
-  button.type = "button";
-  button.title = isSpeaking ? "Reiniciar áudio da mensagem" : "Reproduzir mensagem em áudio";
-  button.setAttribute("aria-label", button.title);
-  button.innerHTML = `
-    <i class="fa-solid ${isSpeaking ? "fa-rotate-right" : "fa-volume-high"}" aria-hidden="true"></i>
-    <span>${isSpeaking ? "Reiniciar voz" : "Ouvir mensagem"}</span>
-    <span class="message-audio-speed-value">${escapeHtml(formatSpeechPlaybackRate(speechPlaybackRate))}</span>
-  `;
-  button.addEventListener("click", (event) => {
+  geminiButton.className = "message-inline-audio-button gemini-voice-button";
+  geminiButton.type = "button";
+  geminiButton.title = "Gerar voz com Gemini";
+  geminiButton.setAttribute("aria-label", geminiButton.title);
+  geminiButton.innerHTML = `<i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i><span>Gerar voz</span>`;
+  geminiButton.addEventListener("click", (event) => {
     event.stopPropagation();
     speakMessage(message);
   });
 
-  wrap.appendChild(button);
+  browserButton.className = "message-inline-audio-button browser-voice-button";
+  browserButton.type = "button";
+  browserButton.title = "Ouvir com o sintetizador do navegador";
+  browserButton.setAttribute("aria-label", browserButton.title);
+  browserButton.innerHTML = `<i class="fa-solid fa-volume-high" aria-hidden="true"></i><span>Ouvir</span>`;
+  browserButton.addEventListener("click", (event) => {
+    event.stopPropagation();
+    speakMessageWithBrowserVoice(message);
+  });
+
+  wrap.append(geminiButton, browserButton);
   return wrap;
 }
 
@@ -7177,8 +7234,8 @@ function createListenMessageButton(message) {
   const button = document.createElement("button");
   button.className = "listen-message-button translated-tool-button";
   button.type = "button";
-  button.title = "Reproduzir mensagem em áudio";
-  button.setAttribute("aria-label", "Reproduzir mensagem em áudio");
+  button.title = "Gerar voz natural com Gemini";
+  button.setAttribute("aria-label", "Gerar voz natural para a mensagem");
   button.innerHTML = `<i class="fa-solid fa-volume-high" aria-hidden="true"></i>`;
   button.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -7291,13 +7348,16 @@ function openMessageMenu(message, row, bubble) {
     selectReplyTarget(message);
   });
 
-  const isSpeakingThisMessage = isMessageCurrentlySpeaking(message);
-  const listenAction = createMenuButton(isSpeakingThisMessage ? "fa-solid fa-rotate-right" : "fa-solid fa-volume-high", isSpeakingThisMessage ? "Reiniciar áudio" : "Ouvir", () => {
+  const geminiVoiceAction = createMenuButton("fa-solid fa-wand-magic-sparkles", "Gerar voz (Gemini)", () => {
     closeMessageMenus();
     speakMessage(message);
   });
+  const browserVoiceAction = createMenuButton("fa-solid fa-volume-high", "Ouvir (navegador)", () => {
+    closeMessageMenus();
+    speakMessageWithBrowserVoice(message);
+  });
 
-  menu.append(reactionAnchor, replyAction, listenAction);
+  menu.append(reactionAnchor, replyAction, geminiVoiceAction, browserVoiceAction);
 
   const analyzeAction = createLearningAnalysisMenuButton(message);
   if (analyzeAction) menu.appendChild(analyzeAction);
@@ -8127,8 +8187,12 @@ function createSpeechSpeedButton() {
   return speedButton;
 }
 
+function hasActiveSpeechSession() {
+  return Boolean(activeSpeechUtterance || activeSpeechAudio || activeSpeechRequestController);
+}
+
 function isSpeechPlaybackActive() {
-  return Boolean(activeSpeechUtterance) || Boolean(window.speechSynthesis?.speaking || window.speechSynthesis?.pending);
+  return hasActiveSpeechSession() || Boolean(window.speechSynthesis?.speaking || window.speechSynthesis?.pending);
 }
 
 function getSpeechMessageKey(message) {
@@ -8137,7 +8201,7 @@ function getSpeechMessageKey(message) {
 }
 
 function isMessageCurrentlySpeaking(message) {
-  return Boolean(activeSpeechUtterance && activeSpeechMessageKey && activeSpeechMessageKey === getSpeechMessageKey(message));
+  return Boolean(hasActiveSpeechSession() && activeSpeechMessageKey && activeSpeechMessageKey === getSpeechMessageKey(message));
 }
 
 function startSpeechProgress(message) {
@@ -8145,7 +8209,7 @@ function startSpeechProgress(message) {
   updateSpeechProgressElement(message);
 
   activeSpeechAnimationTimer = window.setInterval(() => {
-    if (!activeSpeechUtterance || !activeSpeechMessage) {
+    if (!hasActiveSpeechSession() || !activeSpeechMessage) {
       window.clearInterval(activeSpeechAnimationTimer);
       activeSpeechAnimationTimer = 0;
       return;
@@ -8183,12 +8247,12 @@ function createSpeechProgressElement(message) {
   progress.className = "message-audio-progress";
   progress.dataset.messageId = message?.id || "";
   progress.setAttribute("role", "group");
-  progress.setAttribute("aria-label", "Audio da mensagem em reproducao");
+  progress.setAttribute("aria-label", "Voz da mensagem em reprodução");
 
   stopButton.className = "message-audio-control stop-audio-control";
   stopButton.type = "button";
-  stopButton.title = "Parar audio";
-  stopButton.setAttribute("aria-label", "Parar audio da mensagem");
+  stopButton.title = "Parar voz";
+  stopButton.setAttribute("aria-label", "Parar voz da mensagem");
   stopButton.innerHTML = `<i class="fa-solid fa-stop" aria-hidden="true"></i>`;
   stopButton.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -8197,7 +8261,7 @@ function createSpeechProgressElement(message) {
 
   waveWrap.className = "message-audio-wave-wrap";
   waveWrap.setAttribute("role", "img");
-  waveWrap.setAttribute("aria-label", "Barras de voz em reproducao");
+  waveWrap.setAttribute("aria-label", "Barras de voz em reprodução");
   wave.className = "message-audio-wave";
   wave.setAttribute("aria-hidden", "true");
   for (let index = 0; index < 30; index += 1) {
@@ -8308,13 +8372,13 @@ function showSpeechFinishedControls(message) {
   progress.className = "message-audio-progress is-finished";
   progress.dataset.messageId = message?.id || "";
   progress.setAttribute("role", "group");
-  progress.setAttribute("aria-label", "Audio da mensagem finalizado");
+  progress.setAttribute("aria-label", "Voz da mensagem finalizada");
   progress.innerHTML = "";
 
   repeatButton.className = "message-audio-control repeat-audio-control";
   repeatButton.type = "button";
-  repeatButton.title = "Repetir audio";
-  repeatButton.setAttribute("aria-label", "Repetir audio da mensagem");
+  repeatButton.title = "Repetir voz";
+  repeatButton.setAttribute("aria-label", "Repetir voz da mensagem");
   repeatButton.innerHTML = `<i class="fa-solid fa-rotate-right" aria-hidden="true"></i>`;
   repeatButton.addEventListener("click", (event) => {
     event.stopPropagation();
@@ -8322,7 +8386,7 @@ function showSpeechFinishedControls(message) {
   });
 
   label.className = "message-audio-finished-label";
-  label.innerHTML = `<i class="fa-solid fa-circle-check" aria-hidden="true"></i><span>Audio concluido</span>`;
+  label.innerHTML = `<i class="fa-solid fa-circle-check" aria-hidden="true"></i><span>Voz concluída</span>`;
 
   backButton.className = "message-audio-control back-to-text-audio-control";
   backButton.type = "button";
@@ -8353,35 +8417,245 @@ function clearSpeechProgress() {
   });
 }
 
-function stopSpeaking() {
-  if ("speechSynthesis" in window) {
-    window.speechSynthesis.cancel();
+function releaseActiveSpeechAudio() {
+  if (activeSpeechAudio) {
+    activeSpeechAudio.onended = null;
+    activeSpeechAudio.onerror = null;
+    activeSpeechAudio.pause();
+    activeSpeechAudio.src = "";
   }
+  activeSpeechAudio = null;
+  if (activeSpeechAudioUrl) URL.revokeObjectURL(activeSpeechAudioUrl);
+  activeSpeechAudioUrl = "";
+}
+
+function stopSpeaking() {
+  activeSpeechRequestController?.abort();
+  activeSpeechRequestController = null;
+  releaseActiveSpeechAudio();
+  if ("speechSynthesis" in window) window.speechSynthesis.cancel();
   activeSpeechUtterance = null;
   activeSpeechMessage = null;
   activeSpeechMessageKey = "";
   clearSpeechProgress();
 }
 
-function speakMessage(message) {
+async function speakMessage(message) {
   const text = getMessageAudioText(message);
   if (!text) return;
 
+  stopSpeaking();
+  activeSpeechMessage = message;
+  activeSpeechMessageKey = getSpeechMessageKey(message);
+  activeSpeechRequestController = new AbortController();
+  startSpeechProgress(message);
+
+  try {
+    const audioBlob = await requestGeminiSpeechBlob(text, getSpeechLanguageForMessage(message), activeSpeechRequestController.signal);
+    if (!activeSpeechMessage || activeSpeechMessageKey !== getSpeechMessageKey(message)) return;
+
+    activeSpeechRequestController = null;
+    activeSpeechAudioUrl = URL.createObjectURL(audioBlob);
+    const audio = new Audio(activeSpeechAudioUrl);
+    activeSpeechAudio = audio;
+    audio.playbackRate = getActiveRoomVoiceSettings().rate;
+    audio.preservesPitch = true;
+    audio.onended = () => {
+      if (activeSpeechAudio !== audio) return;
+      const finishedMessage = activeSpeechMessage;
+      releaseActiveSpeechAudio();
+      finishSpeechProgress(finishedMessage);
+      activeSpeechMessage = null;
+      activeSpeechMessageKey = "";
+    };
+    audio.onerror = () => {
+      if (activeSpeechAudio !== audio) return;
+      releaseActiveSpeechAudio();
+      activeSpeechMessage = null;
+      activeSpeechMessageKey = "";
+      clearSpeechProgress();
+      showToast("Voz Gemini indisponível", "Não foi possível reproduzir o áudio gerado.");
+    };
+    await audio.play();
+  } catch (error) {
+    if (error?.name === "AbortError") return;
+    console.warn("Gemini TTS indisponível.", error);
+    activeSpeechRequestController = null;
+    releaseActiveSpeechAudio();
+    activeSpeechMessage = null;
+    activeSpeechMessageKey = "";
+    clearSpeechProgress();
+    showToast("Voz Gemini indisponível", "Use Ouvir para tentar o sintetizador do navegador.");
+  }
+}
+
+async function requestGeminiSpeechBlob(text, languageCode, signal) {
+  const endpoint = String(GEMINI_TTS_ENDPOINT || "").trim();
+  const cleanText = cleanMessageText(text, GEMINI_TTS_MAX_TEXT_LENGTH);
+  if (!endpoint || !cleanText) throw new Error("Gemini TTS não está configurado.");
+  if (!currentFirebaseUser?.getIdToken) throw new Error("Usuário Firebase indisponível para gerar voz.");
+
+  const voiceSettings = getActiveRoomVoiceSettings();
+  const cacheKey = await getGeminiSpeechCacheKey(cleanText, languageCode, voiceSettings);
+  const cached = await readGeminiSpeechCache(cacheKey);
+  if (cached) return cached;
+
+  const idToken = await currentFirebaseUser.getIdToken(false);
+  const timeoutController = new AbortController();
+  const timeoutId = window.setTimeout(() => timeoutController.abort(), GEMINI_TTS_TIMEOUT_MS);
+  const abort = () => timeoutController.abort();
+  signal?.addEventListener("abort", abort, { once: true });
+
+  try {
+    const response = await fetch(endpoint, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Accept": "audio/wav, application/json"
+      },
+      body: JSON.stringify({ idToken, text: cleanText, languageCode, voice: voiceSettings.voice }),
+      signal: timeoutController.signal
+    });
+
+    if (!response.ok) {
+      const data = await response.json().catch(() => ({}));
+      throw new Error([data?.error, data?.details].filter(Boolean).join(" — ") || `Gemini TTS respondeu HTTP ${response.status}`);
+    }
+
+    const blob = await response.blob();
+    if (!blob.size || !String(blob.type || "").includes("audio")) {
+      throw new Error("Gemini TTS retornou áudio inválido.");
+    }
+    await writeGeminiSpeechCache(cacheKey, blob);
+    return blob;
+  } finally {
+    window.clearTimeout(timeoutId);
+    signal?.removeEventListener("abort", abort);
+  }
+}
+
+async function getGeminiSpeechCacheKey(text, languageCode, settings = {}) {
+  const source = `${languageCode || "auto"}|${settings.voice || "Kore"}|${settings.rate || 1}|${text}`;
+  if (crypto?.subtle && typeof TextEncoder !== "undefined") {
+    const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(source));
+    return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+  }
+  let hash = 2166136261;
+  for (let index = 0; index < source.length; index += 1) {
+    hash ^= source.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(16);
+}
+
+function getGeminiSpeechCacheRequest(cacheKey) {
+  return new Request(`${location.origin}/__astrochat-gemini-tts/${encodeURIComponent(cacheKey)}.wav`);
+}
+
+async function readGeminiSpeechCache(cacheKey) {
+  if (!("caches" in window)) return null;
+  try {
+    const cache = await caches.open(GEMINI_TTS_CACHE_NAME);
+    const response = await cache.match(getGeminiSpeechCacheRequest(cacheKey));
+    return response?.ok ? await response.blob() : null;
+  } catch (error) {
+    console.warn("Não foi possível ler o cache de voz Gemini.", error);
+    return null;
+  }
+}
+
+async function writeGeminiSpeechCache(cacheKey, blob) {
+  if (!("caches" in window)) return;
+  try {
+    const cache = await caches.open(GEMINI_TTS_CACHE_NAME);
+    await cache.put(getGeminiSpeechCacheRequest(cacheKey), new Response(blob, {
+      headers: { "Content-Type": "audio/wav", "Cache-Control": "private, max-age=604800" }
+    }));
+    const keys = await cache.keys();
+    if (keys.length > 30) {
+      await Promise.all(keys.slice(0, keys.length - 30).map((request) => cache.delete(request)));
+    }
+  } catch (error) {
+    console.warn("Não foi possível salvar a voz Gemini no cache.", error);
+  }
+}
+
+function formatStorageBytes(bytes) {
+  const value = Number(bytes) || 0;
+  if (value < 1024) return `${value} B`;
+  if (value < 1048576) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1048576).toFixed(1)} MB`;
+}
+
+async function updateProfileStorageUsage() {
+  if (!profileStorageStatus) return;
+  try {
+    const estimate = await navigator.storage?.estimate?.();
+    const usage = Number(estimate?.usage || 0);
+    const quota = Number(estimate?.quota || 0);
+    const percent = quota ? Math.min(100, usage / quota * 100) : 0;
+    profileStorageStatus.textContent = quota ? `${formatStorageBytes(usage)} usados de ${formatStorageBytes(quota)}` : `${formatStorageBytes(usage)} usados`;
+    if (profileStorageBar) profileStorageBar.style.width = `${percent ? Math.max(1, percent) : 0}%`;
+  } catch {
+    profileStorageStatus.textContent = "Uso indisponível neste navegador";
+  }
+}
+
+async function clearSavedGeminiAudio() {
+  if (!window.confirm("Apagar todos os áudios Gemini salvos neste aparelho?")) return;
+  stopSpeaking();
+  if ("caches" in window) await caches.delete(GEMINI_TTS_CACHE_NAME);
+  await updateProfileStorageUsage();
+  showToast("Áudios removidos", "As vozes salvas foram apagadas deste aparelho.");
+}
+
+function clearLocalConversationData() {
+  if (!window.confirm("Apagar as conversas locais com IA e os caches de conversa deste aparelho? As salas compartilhadas não serão excluídas.")) return;
+  rooms = rooms.filter((room) => room.type !== AI_ROOM_TYPE);
+  localStorage.removeItem(ROOMS_STORAGE_KEY);
+  localStorage.removeItem(REMOTE_CONVERSATION_CACHE_STORAGE_KEY);
+  closeProfileSettingsModal();
+  renderRoomList(searchInput.value);
+  showToast("Conversas locais apagadas", "Os chats locais e caches foram removidos.");
+}
+
+async function clearTemporaryAppStorage() {
+  if (!window.confirm("Limpar áudios, caches e filas temporárias do AstroChat neste aparelho?")) return;
+  stopSpeaking();
+  if ("caches" in window) {
+    const names = await caches.keys();
+    await Promise.all(names.filter((name) => name !== PUSH_SETTINGS_CACHE).map((name) => caches.delete(name)));
+  }
+  localStorage.removeItem(OFFLINE_MESSAGE_QUEUE_STORAGE_KEY);
+  localStorage.removeItem(PENDING_TRANSLATION_JOBS_STORAGE_KEY);
+  localStorage.removeItem(REMOTE_CONVERSATION_CACHE_STORAGE_KEY);
+  offlineMessageQueue = [];
+  pendingTranslationJobs = [];
+  await updateProfileStorageUsage();
+  showToast("Temporários limpos", "Áudios, caches e filas temporárias foram removidos.");
+}
+
+async function speakMessageWithBrowserVoice(message) {
+  const text = getMessageAudioText(message);
+  stopSpeaking();
   if (!("speechSynthesis" in window)) {
-    showToast("Áudio indisponível", "Este navegador não tem suporte ao sistema de voz.");
+    activeSpeechUtterance = null;
+    activeSpeechMessage = null;
+    activeSpeechMessageKey = "";
+    clearSpeechProgress();
+    showToast("Sintetizador indisponível", "Este navegador não oferece voz local.");
     return;
   }
 
-  clearSpeechProgress();
   window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
   utterance.lang = getSpeechLanguageForMessage(message);
-  utterance.rate = speechPlaybackRate;
+  utterance.rate = getActiveRoomVoiceSettings().rate;
   utterance.pitch = 1;
   activeSpeechUtterance = utterance;
   activeSpeechMessage = message;
   activeSpeechMessageKey = getSpeechMessageKey(message);
-  startSpeechProgress(message);
+  if (!activeSpeechAnimationTimer) startSpeechProgress(message);
   utterance.onend = () => {
     if (activeSpeechUtterance === utterance) {
       const finishedMessage = activeSpeechMessage;
@@ -9685,6 +9959,7 @@ function closeRoomSettingsModal() {
 
 function renderRoomSettings(room = getActiveRoom()) {
   if (!room) return;
+  renderRoomVoiceSettings(room);
 
   if (isAiRoom(room)) {
     const isTeacher = isAiTeacherRoom(room);

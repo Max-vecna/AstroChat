@@ -554,8 +554,8 @@
             <span class="room-menu-toggle-main">
               <i class="fa-solid fa-volume-high" aria-hidden="true"></i>
               <span>
-                <strong class="room-menu-toggle-title">Barras do simulador de voz</strong>
-                <small class="room-menu-toggle-status">Aparece no lugar do texto</small>
+                <strong class="room-menu-toggle-title">Botões de voz</strong>
+                <small class="room-menu-toggle-status">Gemini e sintetizador do navegador</small>
               </span>
             </span>
             <span class="room-menu-toggle-switch" aria-hidden="true"></span>
@@ -598,6 +598,15 @@
             <span class="sr-only">Salvar</span>
           </button>
         </div>
+      </div>
+
+      <div class="room-settings-section" id="roomVoiceSettingsSection">
+        <div class="modal-section-title compact-title"><span>Voz Gemini</span><small>Configuração exclusiva desta sala</small></div>
+        <div class="room-voice-settings-grid">
+          <label>Voz<select id="roomSettingsVoiceSelect"><option>Kore</option><option>Aoede</option><option>Leda</option><option>Puck</option><option>Charon</option><option>Fenrir</option><option>Zephyr</option><option>Orus</option><option>Achernar</option><option>Gacrux</option><option>Sulafat</option></select></label>
+          <label>Velocidade<select id="roomSettingsVoiceRateSelect"><option value="0.8">0,8×</option><option value="1">Normal</option><option value="1.2">1,2×</option><option value="1.4">1,4×</option></select></label>
+        </div>
+        <button class="small-action room-voice-save" id="saveRoomVoiceSettingsButton" type="button"><i class="fa-solid fa-check"></i><span>Salvar voz</span></button>
       </div>
 
       <div class="room-settings-section teacher-difficulty-section" id="teacherDifficultySettingsSection" hidden>
@@ -789,6 +798,16 @@
           <small id="internalPushToggleStatus">Mostra pop-ups dentro do app, som e vibracao.</small>
         </span>
       </button>
+
+      <section class="profile-storage-card" aria-label="Armazenamento do aplicativo">
+        <div class="profile-storage-head"><i class="fa-solid fa-hard-drive"></i><span><strong>Armazenamento no celular</strong><small id="profileStorageStatus">Calculando uso...</small></span></div>
+        <div class="profile-storage-bar" role="progressbar"><span id="profileStorageBar"></span></div>
+        <div class="profile-storage-actions">
+          <button type="button" id="clearSavedAudioButton"><i class="fa-solid fa-volume-xmark"></i><span>Limpar áudios</span></button>
+          <button type="button" id="clearLocalConversationsButton"><i class="fa-solid fa-comments"></i><span>Apagar conversas locais</span></button>
+          <button type="button" id="clearAppStorageButton"><i class="fa-solid fa-broom"></i><span>Limpar temporários</span></button>
+        </div>
+      </section>
 
       <footer class="modal-actions split-actions profile-panel-actions">
         <button class="ghost-button" id="cancelProfileSettingsButton" type="button">Cancelar</button>
