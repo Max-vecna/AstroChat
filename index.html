@@ -851,6 +851,17 @@
     </div>
   </section>
 
+  <section class="modal-backdrop" id="messageAiTranslationModal" hidden aria-hidden="true">
+    <div class="modal-card message-ai-translation-card">
+      <header class="modal-header">
+        <div><strong>Tradução pela IA</strong><span id="messageAiTranslationSubtitle">Traduzindo para seu idioma nativo.</span></div>
+        <button class="icon-button" id="closeMessageAiTranslationButton" type="button" aria-label="Fechar tradução"><i class="fa-solid fa-xmark"></i></button>
+      </header>
+      <section class="message-ai-translation-block"><small>Texto em inglês</small><p id="messageAiTranslationSource"></p></section>
+      <section class="message-ai-translation-block is-result"><small id="messageAiTranslationTargetLabel">Tradução</small><p id="messageAiTranslationResult" aria-live="polite"></p></section>
+    </div>
+  </section>
+
   <section class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="false"></section>
   <template id="roomItemTemplate">
     <button class="chat-item" type="button">

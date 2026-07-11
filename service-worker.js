@@ -1,5 +1,5 @@
-const CACHE_NAME = "astrochat-cache-v134";
-const SERVICE_WORKER_VERSION = "v134";
+const CACHE_NAME = "astrochat-cache-v138";
+const SERVICE_WORKER_VERSION = "v138";
 const PUSH_SETTINGS_CACHE = "astrochat-push-settings-v1";
 const PUSH_SETTINGS_REQUEST = "./__astrochat-system-push-settings";
 const FCM_TOKEN_REFRESH_REQUEST = "./__astrochat-fcm-token-refresh-request";

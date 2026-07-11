@@ -51,7 +51,7 @@ const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
 const STANDARD_WEB_PUSH_PUBLIC_VAPID_KEY = "BLE7nXv1JR25D7PSPJgHRXcAIQUhe1R0XOhFPGheglqfIpNIo9G95_lSTDtFUNx4GjWZHFaRkdlMylcItINrvAs";
-const CHAT_VERSION = "v134";
+const CHAT_VERSION = "v138";
 // Backend externo opcional para enviar push com o site fechado.
 // Depois de publicar o Cloudflare Worker, cole aqui a URL dele.
 // Exemplo: https://astrochat-push.seu-usuario.workers.dev/notify
@@ -479,6 +479,12 @@ const spellcheckButton = document.querySelector("#spellcheckButton");
 const learningTestButton = document.querySelector("#learningTestButton");
 const aiAssistModal = document.querySelector("#aiAssistModal");
 const closeAiAssistButton = document.querySelector("#closeAiAssistButton");
+const messageAiTranslationModal = document.querySelector("#messageAiTranslationModal");
+const closeMessageAiTranslationButton = document.querySelector("#closeMessageAiTranslationButton");
+const messageAiTranslationSubtitle = document.querySelector("#messageAiTranslationSubtitle");
+const messageAiTranslationSource = document.querySelector("#messageAiTranslationSource");
+const messageAiTranslationTargetLabel = document.querySelector("#messageAiTranslationTargetLabel");
+const messageAiTranslationResult = document.querySelector("#messageAiTranslationResult");
 const aiAssistTitle = document.querySelector("#aiAssistTitle");
 const aiAssistSubtitle = document.querySelector("#aiAssistSubtitle");
 const aiAssistOriginalText = document.querySelector("#aiAssistOriginalText");
@@ -839,6 +845,10 @@ learningTestButton?.addEventListener("click", toggleLearningTestMode);
 closeAiAssistButton?.addEventListener("click", closeAiAssistModal);
 aiAssistModal?.addEventListener("click", (event) => {
   if (event.target === aiAssistModal) closeAiAssistModal();
+});
+closeMessageAiTranslationButton?.addEventListener("click", closeMessageAiTranslationModal);
+messageAiTranslationModal?.addEventListener("click", (event) => {
+  if (event.target === messageAiTranslationModal) closeMessageAiTranslationModal();
 });
 window.addEventListener("beforeunload", clearCurrentTypingStatus);
 document.addEventListener("visibilitychange", markVisibleActiveRoomAsRead);
@@ -1216,6 +1226,7 @@ function closeUserSessionModals() {
   closeRoomModal();
   closeInviteModal();
   closeAiAssistModal();
+  closeMessageAiTranslationModal();
 }
 
 function clearStoredAstroChatData() {
@@ -6680,7 +6691,10 @@ function createMessageElement(message, animated = false, options = {}) {
 
   bubble.addEventListener("click", (event) => {
     if (event.target.closest("button, a, input, textarea, select, .reaction-picker, .message-menu")) return;
-    if (row.dataset.swipedRecently === "1") return;
+    if (row.dataset.swipedRecently === "1" || row.dataset.longPressedRecently === "1") {
+      event.stopPropagation();
+      return;
+    }
     event.stopPropagation();
     if (messageSelectionMode) {
       toggleMessageSelection(message);
@@ -7325,6 +7339,49 @@ function createLearningAnalysisMenuButton(message) {
   return button;
 }
 
+function getMessageEnglishAiText(message) {
+  const feedback = normalizeLearningFeedback(message?.learningFeedback);
+  if (feedback?.correctedText && String(getRoomLanguage(getActiveRoom())?.code || "").toLowerCase() === "en") {
+    return cleanMessageText(feedback.correctedText, 2000);
+  }
+  const explanations = (feedback?.errors || []).map((error) => error?.explanationEnglish || "").filter(Boolean);
+  if (explanations.length) return cleanMessageText(explanations.join("\n\n"), 2000);
+  if (String(message?.targetLanguageCode || "").toLowerCase() === "en") {
+    return cleanMessageText(message?.translatedText || message?.text || "", 2000);
+  }
+  return "";
+}
+
+function closeMessageAiTranslationModal() {
+  if (!messageAiTranslationModal) return;
+  messageAiTranslationModal.hidden = true;
+  messageAiTranslationModal.setAttribute("aria-hidden", "true");
+}
+
+async function openMessageAiTranslationModal(message) {
+  const sourceText = getMessageEnglishAiText(message);
+  if (!sourceText || !messageAiTranslationModal) return;
+  const nativeLanguage = getCurrentNativeLanguage();
+  messageAiTranslationSource.textContent = sourceText;
+  messageAiTranslationTargetLabel.textContent = `Tradução para ${nativeLanguage.label}`;
+  messageAiTranslationSubtitle.textContent = `Do inglês para ${nativeLanguage.label}, usando IA.`;
+  messageAiTranslationResult.textContent = "Traduzindo...";
+  messageAiTranslationModal.hidden = false;
+  messageAiTranslationModal.setAttribute("aria-hidden", "false");
+
+  try {
+    const result = await translateMessageTextResult(sourceText, nativeLanguage, {
+      onProgress: (partialText) => {
+        if (!messageAiTranslationModal.hidden) messageAiTranslationResult.textContent = partialText;
+      }
+    });
+    if (!messageAiTranslationModal.hidden) messageAiTranslationResult.textContent = result.text || "Tradução indisponível.";
+  } catch (error) {
+    console.warn("Não foi possível traduzir o conteúdo inglês do balão.", error);
+    if (!messageAiTranslationModal.hidden) messageAiTranslationResult.textContent = "Não foi possível traduzir este conteúdo agora.";
+  }
+}
+
 function openMessageMenu(message, row, bubble) {
   closeReactionPickers();
   closeMessageMenus();
@@ -7340,16 +7397,6 @@ function openMessageMenu(message, row, bubble) {
   menu.setAttribute("role", "menu");
   menu.dataset.messageId = message?.id || "";
 
-  const reactionAnchor = createMenuButton("fa-regular fa-face-smile", "Reagir", () => {
-    closeMessageMenus();
-    toggleReactionPicker(message, bubble, null);
-  });
-
-  const replyAction = createMenuButton("fa-solid fa-reply", "Responder", () => {
-    closeMessageMenus();
-    selectReplyTarget(message);
-  });
-
   const geminiVoiceAction = createMenuButton("fa-solid fa-wand-magic-sparkles", "Gerar voz (Gemini)", () => {
     closeMessageMenus();
     speakMessage(message);
@@ -7359,7 +7406,14 @@ function openMessageMenu(message, row, bubble) {
     speakMessageWithBrowserVoice(message);
   });
 
-  menu.append(reactionAnchor, replyAction, geminiVoiceAction, browserVoiceAction);
+  menu.append(geminiVoiceAction, browserVoiceAction);
+
+  if (getMessageEnglishAiText(message)) {
+    menu.appendChild(createMenuButton("fa-solid fa-language", "Traduzir pela IA", () => {
+      closeMessageMenus();
+      openMessageAiTranslationModal(message);
+    }));
+  }
 
   const analyzeAction = createLearningAnalysisMenuButton(message);
   if (analyzeAction) menu.appendChild(analyzeAction);
@@ -8754,8 +8808,8 @@ function toggleReactionPicker(message, bubble, anchorButton) {
     button.setAttribute("aria-label", `Reagir com ${emoji}`);
     button.addEventListener("click", async (event) => {
       event.stopPropagation();
-      await reactToMessage(message, emoji);
       closeReactionPickers();
+      await reactToMessage(message, emoji);
     });
     picker.appendChild(button);
   });
@@ -9069,6 +9123,12 @@ function setupSwipeReply(row, bubble, message) {
   let deltaX = 0;
   let dragging = false;
   let pointerId = null;
+  let longPressTimer = 0;
+
+  const cancelLongPress = () => {
+    window.clearTimeout(longPressTimer);
+    longPressTimer = 0;
+  };
 
   bubble.addEventListener("pointerdown", (event) => {
     if (event.target.closest("button, a, input, textarea, select")) return;
@@ -9078,6 +9138,14 @@ function setupSwipeReply(row, bubble, message) {
     deltaX = 0;
     dragging = false;
     pointerId = event.pointerId;
+    cancelLongPress();
+    longPressTimer = window.setTimeout(() => {
+      if (dragging || pointerId !== event.pointerId) return;
+      row.dataset.longPressedRecently = "1";
+      closeMessageMenus();
+      toggleReactionPicker(message, bubble, null);
+      if (navigator.vibrate) navigator.vibrate(25);
+    }, 550);
     if (bubble.setPointerCapture) bubble.setPointerCapture(event.pointerId);
   });
 
@@ -9085,6 +9153,7 @@ function setupSwipeReply(row, bubble, message) {
     if (pointerId !== event.pointerId) return;
     const moveX = event.clientX - startX;
     const moveY = event.clientY - startY;
+    if (Math.abs(moveX) > 10 || Math.abs(moveY) > 10) cancelLongPress();
     if (Math.abs(moveY) > 32 && Math.abs(moveY) > Math.abs(moveX)) return;
     if (Math.abs(moveX) < 8) return;
 
@@ -9100,8 +9169,20 @@ function setupSwipeReply(row, bubble, message) {
   bubble.addEventListener("pointerup", finishSwipe);
   bubble.addEventListener("pointercancel", finishSwipe);
   bubble.addEventListener("lostpointercapture", finishSwipe);
+  bubble.addEventListener("contextmenu", (event) => {
+    if (event.target.closest("button, a, input, textarea, select") || messageSelectionMode) return;
+    event.preventDefault();
+    if (row.dataset.longPressedRecently === "1") return;
+    row.dataset.longPressedRecently = "1";
+    closeMessageMenus();
+    toggleReactionPicker(message, bubble, null);
+  });
 
   function finishSwipe() {
+    cancelLongPress();
+    if (row.dataset.longPressedRecently === "1") {
+      window.setTimeout(() => delete row.dataset.longPressedRecently, 400);
+    }
     if (dragging && Math.abs(deltaX) > 58) {
       row.dataset.swipedRecently = "1";
       selectReplyTarget(message);
