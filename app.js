@@ -51,7 +51,7 @@ const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
 const STANDARD_WEB_PUSH_PUBLIC_VAPID_KEY = "BLE7nXv1JR25D7PSPJgHRXcAIQUhe1R0XOhFPGheglqfIpNIo9G95_lSTDtFUNx4GjWZHFaRkdlMylcItINrvAs";
-const CHAT_VERSION = "v146";
+const CHAT_VERSION = "v147";
 // Backend externo opcional para enviar push com o site fechado.
 // Depois de publicar o Cloudflare Worker, cole aqui a URL dele.
 // Exemplo: https://astrochat-push.seu-usuario.workers.dev/notify
@@ -603,7 +603,6 @@ const letterOpenChallengeDirectionSelect = document.querySelector("#letterOpenCh
 const letterProtectionStatus = document.querySelector("#letterProtectionStatus");
 const letterViewerModal = document.querySelector("#letterViewerModal");
 const closeLetterViewerButton = document.querySelector("#closeLetterViewerButton");
-const letterViewerIcon = document.querySelector("#letterViewerIcon");
 const letterViewerHeading = document.querySelector("#letterViewerHeading");
 const letterViewerStatus = document.querySelector("#letterViewerStatus");
 const letterViewerLockPanel = document.querySelector("#letterViewerLockPanel");
@@ -615,6 +614,8 @@ const letterViewerChallengeFeedback = document.querySelector("#letterViewerChall
 const letterViewerContentPanel = document.querySelector("#letterViewerContentPanel");
 const letterViewerContentLabel = document.querySelector("#letterViewerContentLabel");
 const letterViewerOriginalButton = document.querySelector("#letterViewerOriginalButton");
+const letterViewerListenButton = document.querySelector("#letterViewerListenButton");
+const letterViewerTranslateButton = document.querySelector("#letterViewerTranslateButton");
 const letterViewerTitle = document.querySelector("#letterViewerTitle");
 const letterViewerContent = document.querySelector("#letterViewerContent");
 const letterViewerDistance = document.querySelector("#letterViewerDistance");
@@ -1173,6 +1174,8 @@ closeLetterViewerButton?.addEventListener("click", closeLetterViewer);
 letterViewerModal?.addEventListener("click", (event) => { if (event.target === letterViewerModal) closeLetterViewer(); });
 letterViewerChallengeButton?.addEventListener("click", verifyLetterViewerChallenge);
 letterViewerOriginalButton?.addEventListener("click", toggleLetterViewerOriginalContent);
+letterViewerListenButton?.addEventListener("click", speakLetterViewerContent);
+letterViewerTranslateButton?.addEventListener("click", translateLetterViewerContent);
 letterViewerChallengeInput?.addEventListener("keydown", (event) => {
   if (event.key !== "Enter") return;
   event.preventDefault();
@@ -6892,6 +6895,8 @@ function normalizeLetterPayload(value) {
     content,
     originalTitle: sanitizeText(value.originalTitle || "", 60),
     originalContent: cleanMessageText(value.originalContent || "", 1500),
+    originalLanguageCode: sanitizeText(value.originalLanguageCode || "", 8).toLowerCase(),
+    deliveredLanguageCode: sanitizeText(value.deliveredLanguageCode || "", 8).toLowerCase(),
     transport,
     turbo: Boolean(value.turbo),
     status: value.status === "delivered" ? "delivered" : "transit",
@@ -7571,7 +7576,6 @@ async function openLetterViewer(letterValue, message = {}) {
   letterViewerModal.hidden = false;
   letterViewerModal.setAttribute("aria-hidden", "false");
   const transport = getLetterTransportOption(letter.transport);
-  if (letterViewerIcon) letterViewerIcon.innerHTML = `<i class="fa-solid ${escapeHtml(transport.icon)}" aria-hidden="true"></i>`;
   if (letterViewerHeading) letterViewerHeading.textContent = letter.protection ? "Carta protegida" : "Carta rastreável";
   if (letterViewerStatus) letterViewerStatus.textContent = `${transport.name}${letter.turbo ? " · turbina ativa" : ""}${letter.recipientBoosted ? " · acelerada pelo destinatário" : ""}`;
   if (letterViewerDistance) letterViewerDistance.textContent = letter.routeDistanceMeters ? formatLetterDistance(letter.routeDistanceMeters) : "Rota simulada";
@@ -7653,6 +7657,64 @@ function toggleLetterViewerOriginalContent() {
   if (!content.originalContent || content.originalContent === content.content) return;
   state.showingOriginal = !state.showingOriginal;
   renderLetterViewerContentVariant();
+}
+
+function getLetterViewerDisplayedText() {
+  const state = activeLetterViewerState;
+  const content = state?.unlockedContent;
+  if (!state || !content) return "";
+  return cleanMessageText(state.showingOriginal ? content.originalContent : content.content, 1500);
+}
+
+function getLetterViewerDisplayedLanguageCode() {
+  const state = activeLetterViewerState;
+  if (!state) return getRoomLanguage(getActiveRoom())?.code || "pt";
+  if (state.showingOriginal) {
+    return state.letter?.originalLanguageCode || getRoomLanguage(getActiveRoom())?.code || "pt";
+  }
+  return state.letter?.deliveredLanguageCode || getRoomLanguage(getActiveRoom())?.code || "pt";
+}
+
+function speakLetterViewerContent() {
+  const state = activeLetterViewerState;
+  const text = getLetterViewerDisplayedText();
+  if (!state?.unlockedContent || !text) return;
+  speakMessage({
+    id: `letter-viewer-${state.message?.id || state.letter?.sentAtMillis || Date.now()}`,
+    text,
+    targetLanguageCode: getLetterViewerDisplayedLanguageCode()
+  });
+}
+
+async function translateLetterViewerContent() {
+  const text = getLetterViewerDisplayedText();
+  if (!text || !messageAiTranslationModal) return;
+  const nativeLanguage = getCurrentNativeLanguage();
+  messageAiTranslationSource.textContent = text;
+  messageAiTranslationTargetLabel.textContent = `Tradução para ${nativeLanguage.label}`;
+  messageAiTranslationSubtitle.textContent = `Conteúdo da carta traduzido para ${nativeLanguage.label}.`;
+  messageAiTranslationResult.textContent = "Traduzindo...";
+  messageAiTranslationModal.hidden = false;
+  messageAiTranslationModal.setAttribute("aria-hidden", "false");
+
+  if (letterViewerTranslateButton) setButtonBusy(letterViewerTranslateButton, true, "Traduzindo...");
+  try {
+    const result = await translateMessageTextResult(text, nativeLanguage, {
+      onProgress: (partialText) => {
+        if (!messageAiTranslationModal.hidden) messageAiTranslationResult.textContent = partialText;
+      }
+    });
+    if (!messageAiTranslationModal.hidden) {
+      messageAiTranslationResult.textContent = result.text || "Tradução indisponível.";
+    }
+  } catch (error) {
+    console.warn("Não foi possível traduzir o conteúdo da carta.", error);
+    if (!messageAiTranslationModal.hidden) {
+      messageAiTranslationResult.textContent = "Não foi possível traduzir esta carta agora.";
+    }
+  } finally {
+    if (letterViewerTranslateButton) setButtonBusy(letterViewerTranslateButton, false);
+  }
 }
 
 async function verifyLetterViewerChallenge() {
@@ -7957,7 +8019,11 @@ function createMessageElement(message, animated = false, options = {}) {
       toggleMessageSelection(message);
       return;
     }
-    if (message.letter || message.letterLocationRequest) return;
+    if (message.letter) {
+      openLetterMessageMenu(message, bubble);
+      return;
+    }
+    if (message.letterLocationRequest) return;
     openMessageMenu(message, row, bubble);
   });
 
@@ -8660,30 +8726,105 @@ function openMessageMenu(message, row, bubble) {
   if (!message || message.letter || message.letterLocationRequest) return;
 
   const menu = document.createElement("div");
-  menu.className = "message-menu message-menu-compact";
+  const hasOriginal = Boolean(message?.originalText || message?.hydration?.sourceText);
+  const originalWrap = bubble.querySelector(".hydration-source-wrap, .message-original-wrap");
+  const originalButton = bubble.querySelector(".show-original-button");
+  const translationWrap = bubble.querySelector(".hydration-translation-wrap");
+  const translationButton = bubble.querySelector(".show-translation-button");
+
+  menu.className = "message-menu";
   menu.setAttribute("role", "menu");
   menu.dataset.messageId = message?.id || "";
 
-  const audioText = getMessageAudioText(message);
-  if (audioText) {
-    menu.appendChild(createMenuButton("fa-solid fa-volume-high", "Ouvir", () => {
-      closeMessageMenus();
-      speakMessage(message);
-    }));
-  }
+  const geminiVoiceAction = createMenuButton("fa-solid fa-wand-magic-sparkles", "Gerar voz (Gemini)", () => {
+    closeMessageMenus();
+    speakMessage(message);
+  });
+  const browserVoiceAction = createMenuButton("fa-solid fa-volume-high", "Ouvir (navegador)", () => {
+    closeMessageMenus();
+    speakMessageWithBrowserVoice(message);
+  });
 
-  const translationSource = getMessageManualTranslationSourceText(message);
-  if (translationSource) {
-    menu.appendChild(createMenuButton("fa-solid fa-language", "Traduzir", () => {
+  menu.append(geminiVoiceAction, browserVoiceAction);
+
+  if (getMessageEnglishAiText(message)) {
+    menu.appendChild(createMenuButton("fa-solid fa-language", "Traduzir pela IA", () => {
       closeMessageMenus();
       openMessageAiTranslationModal(message);
     }));
   }
 
+  const analyzeAction = createLearningAnalysisMenuButton(message);
+  if (analyzeAction) menu.appendChild(analyzeAction);
+
+  if (translationWrap) {
+    const label = translationWrap.hidden ? "Ver tradução" : "Ocultar tradução";
+    menu.appendChild(createMenuButton("fa-solid fa-language", label, () => {
+      closeMessageMenus();
+      toggleTranslationTextVisibility(message, translationWrap, translationButton);
+    }));
+  }
+
+  const activeRoom = getActiveRoom();
+  const hasGlobalHydration = !isLearningTestMessage(message) && Boolean(message?.hydration?.text || getCurrentUserHydration(message)?.text);
+  const canHydrate = !isLearningTestMessage(message) && !isMessageMine(message) && activeRoom && !isAiRoom(activeRoom) && Boolean(message?.id);
+  const hydrateActionKey = activeRoom && message?.id ? `${activeRoom.id}:${message.id}` : "";
+
+  if (hasGlobalHydration && activeRoom && !isAiRoom(activeRoom) && Boolean(message?.id)) {
+    const isDehydrating = hydrateActionKey && dehydratingMessageIds.has(hydrateActionKey);
+    const dehydrateAction = createMenuButton(
+      isDehydrating ? "fa-solid fa-spinner fa-spin" : "fa-solid fa-droplet-slash",
+      isDehydrating ? "Desidratando..." : "Desidratar",
+      () => dehydrateMessage(message)
+    );
+    dehydrateAction.disabled = isDehydrating;
+    menu.appendChild(dehydrateAction);
+  } else if (canHydrate) {
+    const isHydrating = hydratingMessageIds.has(hydrateActionKey);
+    const hydrateAction = createMenuButton(
+      isHydrating ? "fa-solid fa-spinner fa-spin" : "fa-solid fa-droplet",
+      isHydrating ? "Hidratando..." : "Hidratar",
+      () => hydrateReceivedMessage(message)
+    );
+    hydrateAction.disabled = isHydrating;
+    menu.appendChild(hydrateAction);
+  }
+
+  if (hasOriginal && originalWrap) {
+    const label = originalWrap.hidden ? "Ver original" : "Ocultar original";
+    const icon = originalWrap.hidden ? "fa-regular fa-eye" : "fa-solid fa-eye";
+    menu.appendChild(createMenuButton(icon, label, () => {
+      closeMessageMenus();
+      toggleOriginalTextVisibility(message, originalWrap, originalButton);
+    }));
+  }
+
+  const selectAction = createSelectMessageMenuButton(message);
+  if (selectAction) menu.appendChild(selectAction);
+
+  const editAction = createEditMessageMenuButton(message);
+  if (editAction) menu.appendChild(editAction);
+
   const deleteAction = createDeleteMessageMenuButton(message);
   if (deleteAction) menu.appendChild(deleteAction);
-  if (!menu.childElementCount) return;
 
+  document.body.appendChild(menu);
+  positionFloatingMenu(menu, bubble);
+}
+
+function openLetterMessageMenu(message, bubble) {
+  closeReactionPickers();
+  closeMessageMenus();
+  if (!message?.letter || !bubble) return;
+
+  const deleteAction = createDeleteMessageMenuButton(message);
+  if (!deleteAction) return;
+
+  const menu = document.createElement("div");
+  menu.className = "message-menu message-menu-compact letter-message-menu";
+  menu.setAttribute("role", "menu");
+  menu.dataset.messageId = message.id || "";
+  menu.appendChild(deleteAction);
   document.body.appendChild(menu);
   positionFloatingMenu(menu, bubble);
 }
@@ -13510,6 +13651,8 @@ async function sendPrivateLetter(event) {
         content: requireTranslation && encryptedPayload ? "" : deliveredContent,
         originalTitle: requireTranslation && encryptedPayload ? "" : title,
         originalContent: requireTranslation && encryptedPayload ? "" : content,
+        originalLanguageCode: currentUser?.nativeLanguageCode || "pt",
+        deliveredLanguageCode: language?.code || currentUser?.nativeLanguageCode || "pt",
         protection,
         encryptedPayload,
         transport: transport.id,

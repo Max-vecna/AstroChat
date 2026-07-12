@@ -1002,8 +1002,7 @@
   <section class="modal-backdrop letter-viewer-backdrop" id="letterViewerModal" hidden aria-hidden="true">
     <article class="modal-card letter-viewer-card">
       <header class="modal-header letter-viewer-header">
-        <div class="letter-modal-heading">
-          <span class="letter-modal-icon" id="letterViewerIcon" aria-hidden="true"><i class="fa-solid fa-envelope-open-text"></i></span>
+        <div class="letter-modal-heading letter-modal-heading-text-only">
           <span><strong id="letterViewerHeading">Carta rastreável</strong><small id="letterViewerStatus">Preparando rastreamento...</small></span>
         </div>
         <button class="icon-button" id="closeLetterViewerButton" type="button" aria-label="Fechar carta"><i class="fa-solid fa-xmark"></i></button>
@@ -1026,7 +1025,11 @@
       <section class="letter-viewer-content" id="letterViewerContentPanel" hidden>
         <div class="letter-viewer-content-head">
           <small id="letterViewerContentLabel">Conteúdo traduzido</small>
-          <button class="icon-button letter-viewer-original-button" id="letterViewerOriginalButton" type="button" hidden aria-label="Ver mensagem original" title="Ver mensagem original" aria-pressed="false"><i class="fa-solid fa-eye"></i></button>
+          <div class="letter-viewer-content-actions" aria-label="Ações da carta">
+            <button class="small-action letter-viewer-action-button" id="letterViewerListenButton" type="button" title="Ouvir carta"><i class="fa-solid fa-volume-high" aria-hidden="true"></i><span>Ouvir</span></button>
+            <button class="small-action letter-viewer-action-button" id="letterViewerTranslateButton" type="button" title="Traduzir carta"><i class="fa-solid fa-language" aria-hidden="true"></i><span>Traduzir</span></button>
+            <button class="icon-button letter-viewer-original-button" id="letterViewerOriginalButton" type="button" hidden aria-label="Ver mensagem original" title="Ver mensagem original" aria-pressed="false"><i class="fa-solid fa-eye"></i></button>
+          </div>
         </div>
         <h2 id="letterViewerTitle">Carta</h2>
         <p id="letterViewerContent"></p>

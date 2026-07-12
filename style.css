@@ -9305,7 +9305,7 @@ body[data-chat-theme]:not([data-chat-theme="padrao"]) .message-inline-audio-butt
 }
 
 
-/* AstroChat v146 - abertura na chegada, aceleração pelo destinatário e menu compacto */
+/* AstroChat v147 - menus separados e ações internas da carta */
 .message-letter-open-button:disabled {
   cursor: not-allowed;
   opacity: .58;
@@ -9423,4 +9423,43 @@ body[data-chat-theme]:not([data-chat-theme="padrao"]) .message-inline-audio-butt
 .message-menu-compact button:last-child i.fa-trash-can { color: #ff9ca4; }
 @media (max-width: 560px) {
   .message-letter-boost-answer-row { grid-template-columns: 1fr; }
+}
+
+
+/* AstroChat v147 - menu completo nas mensagens e ações da carta aberta */
+.letter-viewer-content-actions {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.letter-viewer-action-button {
+  min-height: 38px;
+  padding: 0 12px;
+  border: 1px solid rgba(16,180,134,.2);
+  color: #dffff5;
+  background: rgba(16,180,134,.11);
+}
+.letter-viewer-action-button:hover {
+  background: rgba(16,180,134,.18);
+}
+.letter-message-menu {
+  min-width: 176px;
+}
+.letter-message-menu button i.fa-trash-can {
+  color: #ff9ca4;
+}
+@media (max-width: 560px) {
+  .letter-viewer-content-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .letter-viewer-content-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+  .letter-viewer-action-button {
+    flex: 1 1 auto;
+  }
 }
