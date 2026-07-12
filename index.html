@@ -217,6 +217,10 @@
         <button class="icon-button" id="letterButton" hidden title="Enviar carta" aria-label="Enviar carta">
           <i class="fa-solid fa-envelope-open-text" aria-hidden="true"></i>
         </button>
+        <button class="icon-button" id="letterInboxButton" hidden title="Cartas recebidas" aria-label="Cartas recebidas">
+          <i class="fa-solid fa-box-archive" aria-hidden="true"></i>
+          <span class="notification-badge" id="letterInboxBadge" hidden>0</span>
+        </button>
         <button class="icon-button" id="roomMenuButton" title="Menu da sala" aria-label="Menu da sala">
           <i class="fa-solid fa-ellipsis-vertical" aria-hidden="true"></i>
         </button>
@@ -999,6 +1003,24 @@
   </section>
 
 
+  <section class="modal-backdrop letter-inbox-backdrop" id="letterInboxModal" hidden aria-hidden="true">
+    <article class="modal-card letter-inbox-card" role="dialog" aria-modal="true" aria-labelledby="letterInboxTitle">
+      <header class="modal-header letter-inbox-header">
+        <div>
+          <strong id="letterInboxTitle">Cartas recebidas</strong>
+          <span id="letterInboxSubtitle">Acompanhe as cartas a caminho e abra as que já chegaram.</span>
+        </div>
+        <button class="icon-button" id="closeLetterInboxButton" type="button" aria-label="Fechar lista de cartas"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+      </header>
+      <div class="letter-inbox-summary" aria-live="polite">
+        <span><small>A caminho</small><strong id="letterInboxTransitCount">0</strong></span>
+        <span><small>Recebidas</small><strong id="letterInboxDeliveredCount">0</strong></span>
+      </div>
+      <div class="letter-inbox-list" id="letterInboxList"></div>
+    </article>
+  </section>
+
+
   <section class="modal-backdrop letter-viewer-backdrop" id="letterViewerModal" hidden aria-hidden="true">
     <article class="modal-card letter-viewer-card">
       <header class="modal-header letter-viewer-header">
@@ -1027,8 +1049,8 @@
           <small id="letterViewerContentLabel">Conteúdo traduzido</small>
           <div class="letter-viewer-content-actions" aria-label="Ações da carta">
             <button class="small-action letter-viewer-action-button" id="letterViewerListenButton" type="button" title="Ouvir carta"><i class="fa-solid fa-volume-high" aria-hidden="true"></i><span>Ouvir</span></button>
-            <button class="small-action letter-viewer-action-button" id="letterViewerTranslateButton" type="button" title="Traduzir carta"><i class="fa-solid fa-language" aria-hidden="true"></i><span>Traduzir</span></button>
-            <button class="small-action letter-viewer-action-button letter-viewer-original-button" id="letterViewerOriginalButton" type="button" hidden aria-label="Mostrar mensagem original" title="Mostrar mensagem original" aria-pressed="false"><i class="fa-solid fa-eye" aria-hidden="true"></i><span>Mostrar original</span></button>
+            <button class="small-action letter-viewer-action-button" id="letterViewerTranslateButton" type="button" title="Traduzir carta pela IA"><i class="fa-solid fa-language" aria-hidden="true"></i><span>Traduzir pela IA</span></button>
+            <button class="small-action letter-viewer-action-button letter-viewer-original-button" id="letterViewerOriginalButton" type="button" aria-label="Mostrar mensagem original" title="Mostrar mensagem original" aria-pressed="false"><i class="fa-solid fa-eye" aria-hidden="true"></i><span>Mostrar original</span></button>
           </div>
         </div>
         <h2 id="letterViewerTitle">Carta</h2>
@@ -1054,7 +1076,7 @@
       <header class="modal-header letter-acceleration-header">
         <div>
           <strong id="letterAccelerationTitle">Acelerar entrega</strong>
-          <span>Traduza a frase para reduzir pela metade o tempo restante.</span>
+          <span id="letterAccelerationSubtitle">Cada tradução correta reduz pela metade o tempo que ainda falta.</span>
         </div>
         <button class="icon-button" id="closeLetterAccelerationButton" type="button" aria-label="Fechar aceleração"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
       </header>

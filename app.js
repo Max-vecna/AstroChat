@@ -51,7 +51,7 @@ const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
 const STANDARD_WEB_PUSH_PUBLIC_VAPID_KEY = "BLE7nXv1JR25D7PSPJgHRXcAIQUhe1R0XOhFPGheglqfIpNIo9G95_lSTDtFUNx4GjWZHFaRkdlMylcItINrvAs";
-const CHAT_VERSION = "v148";
+const CHAT_VERSION = "v149";
 // Backend externo opcional para enviar push com o site fechado.
 // Depois de publicar o Cloudflare Worker, cole aqui a URL dele.
 // Exemplo: https://astrochat-push.seu-usuario.workers.dev/notify
@@ -570,6 +570,8 @@ const cancelAiFriendButton = document.querySelector("#cancelAiFriendButton");
 
 const inviteButton = document.querySelector("#inviteButton");
 const letterButton = document.querySelector("#letterButton");
+const letterInboxButton = document.querySelector("#letterInboxButton");
+const letterInboxBadge = document.querySelector("#letterInboxBadge");
 const letterModal = document.querySelector("#letterModal");
 const letterForm = document.querySelector("#letterForm");
 const closeLetterButton = document.querySelector("#closeLetterButton");
@@ -601,6 +603,12 @@ const letterTurboStatus = document.querySelector("#letterTurboStatus");
 const letterRequireTranslationCheckbox = document.querySelector("#letterRequireTranslationCheckbox");
 const letterOpenChallengeDirectionSelect = document.querySelector("#letterOpenChallengeDirectionSelect");
 const letterProtectionStatus = document.querySelector("#letterProtectionStatus");
+const letterInboxModal = document.querySelector("#letterInboxModal");
+const closeLetterInboxButton = document.querySelector("#closeLetterInboxButton");
+const letterInboxSubtitle = document.querySelector("#letterInboxSubtitle");
+const letterInboxTransitCount = document.querySelector("#letterInboxTransitCount");
+const letterInboxDeliveredCount = document.querySelector("#letterInboxDeliveredCount");
+const letterInboxList = document.querySelector("#letterInboxList");
 const letterViewerModal = document.querySelector("#letterViewerModal");
 const closeLetterViewerButton = document.querySelector("#closeLetterViewerButton");
 const letterViewerHeading = document.querySelector("#letterViewerHeading");
@@ -628,6 +636,8 @@ const letterViewerMap = document.querySelector("#letterViewerMap");
 const letterViewerMapCaption = document.querySelector("#letterViewerMapCaption");
 const letterAccelerationModal = document.querySelector("#letterAccelerationModal");
 const closeLetterAccelerationButton = document.querySelector("#closeLetterAccelerationButton");
+const letterAccelerationTitle = document.querySelector("#letterAccelerationTitle");
+const letterAccelerationSubtitle = document.querySelector("#letterAccelerationSubtitle");
 const letterAccelerationDirection = document.querySelector("#letterAccelerationDirection");
 const letterAccelerationPrompt = document.querySelector("#letterAccelerationPrompt");
 const letterAccelerationInput = document.querySelector("#letterAccelerationInput");
@@ -651,6 +661,8 @@ let activeLetterViewerMap = null;
 let activeLetterViewerTimer = 0;
 let activeLetterViewerState = null;
 let activeLetterAccelerationState = null;
+let activeLetterInboxTimer = 0;
+const recentLetterChallengeKeys = [];
 let letterChallengeState = null;
 let letterRecipientNativeLanguage = null;
 let letterUnlockedTransportIds = new Set(LETTER_BASE_UNLOCKED_TRANSPORT_IDS);
@@ -1164,6 +1176,9 @@ async function handleClearActiveChat() {
 
 inviteButton.addEventListener("click", openInviteModal);
 letterButton?.addEventListener("click", openLetterModal);
+letterInboxButton?.addEventListener("click", openLetterInboxModal);
+closeLetterInboxButton?.addEventListener("click", closeLetterInboxModal);
+letterInboxModal?.addEventListener("click", (event) => { if (event.target === letterInboxModal) closeLetterInboxModal(); });
 closeLetterButton?.addEventListener("click", closeLetterModal);
 letterModal?.addEventListener("click", (event) => { if (event.target === letterModal) closeLetterModal(); });
 letterForm?.addEventListener("submit", sendPrivateLetter);
@@ -4236,6 +4251,10 @@ function renderActiveRoom(forceMessages = false) {
     messages.innerHTML = "";
     messages.dataset.roomId = "";
     updateConversationSearchButton(null);
+    if (letterButton) letterButton.hidden = true;
+    if (letterInboxButton) letterInboxButton.hidden = true;
+    updateLetterInboxBadge(null);
+    closeLetterInboxModal();
     closeMessageSearchPanel();
     updateLearningTestButtonState(null);
     setMessageSelectionMode(false, { keepRender: true });
@@ -4257,6 +4276,8 @@ function renderActiveRoom(forceMessages = false) {
   const isPrivate = isPrivateRoom(activeRoom);
   inviteButton.hidden = isAi || isPrivate;
   if (letterButton) letterButton.hidden = !isPrivate;
+  if (letterInboxButton) letterInboxButton.hidden = !isPrivate;
+  updateLetterInboxBadge(activeRoom);
   roomMenuButton.hidden = false;
   updateLiveTypingButtonState();
   subscribeToActiveRoomTyping();
@@ -4297,6 +4318,7 @@ async function closeMobileConversationToMenu() {
 
 function renderRoomMessages(room) {
   if (!room) return;
+  updateLetterInboxBadge(room);
 
   const roomMessages = (room.messages || []).slice().sort(compareMessagesBySendOrder);
   let renderedIds = renderedMessageIdsByRoom.get(room.id);
@@ -4315,6 +4337,7 @@ function renderRoomMessages(room) {
     renderTypingPreviewPanel();
     updateMessageSearchResults();
     scheduleReceiptSyncForActiveRoom();
+    updateLetterInboxBadge(room);
     return;
   }
 
@@ -4376,6 +4399,7 @@ function renderRoomMessages(room) {
   if ((changedCount || previousOrder !== nextOrder) && (isFirstBatch || wasNearBottom)) {
     scheduleMessagesScrollToBottom();
   }
+  updateLetterInboxBadge(room);
 }
 
 function addMessage(roomId, message) {
@@ -6926,7 +6950,8 @@ function normalizeLetterPayload(value) {
     routeProvider: sanitizeText(value.routeProvider || "", 32),
     routeDistanceMeters,
     speedKmh,
-    recipientBoosted: Boolean(value.recipientBoosted),
+    recipientBoosted: Boolean(value.recipientBoosted || Number(value.recipientBoostCount || 0) > 0),
+    recipientBoostCount: Math.max(0, Math.floor(Number(value.recipientBoostCount || (value.recipientBoosted ? 1 : 0)) || 0)),
     recipientBoostedAtMillis: Math.max(0, Number(value.recipientBoostedAtMillis || 0) || 0),
     recipientBoostStartProgress: Math.max(0, Math.min(1, Number(value.recipientBoostStartProgress || 0) || 0)),
     recipientBoostDurationMs: Math.max(0, Number(value.recipientBoostDurationMs || 0) || 0),
@@ -7105,6 +7130,143 @@ function getLetterRouteCaption(letter, mapRoute) {
   return "Rota simulada porque ainda não há duas localizações disponíveis.";
 }
 
+
+function getReceivedLetterMessages(room = getActiveRoom()) {
+  if (!room?.id) return [];
+  return (roomMessagesById.get(room.id) || room.messages || [])
+    .filter((message) => message?.letter && !isMessageMine(message))
+    .map((message) => ({ message, letter: normalizeLetterPayload(message.letter) }))
+    .filter((item) => item.letter)
+    .sort((a, b) => Number(b.letter.sentAtMillis || 0) - Number(a.letter.sentAtMillis || 0));
+}
+
+function updateLetterInboxBadge(room = getActiveRoom()) {
+  if (!letterInboxBadge) return;
+  if (!room || !isPrivateRoom(room)) {
+    letterInboxBadge.hidden = true;
+    letterInboxBadge.textContent = "0";
+    return;
+  }
+  const transitCount = getReceivedLetterMessages(room)
+    .filter(({ letter }) => !getLetterDeliveryTiming(letter).delivered)
+    .length;
+  letterInboxBadge.textContent = transitCount > 99 ? "99+" : String(transitCount);
+  letterInboxBadge.hidden = transitCount <= 0;
+}
+
+function closeLetterInboxModal() {
+  if (activeLetterInboxTimer) window.clearInterval(activeLetterInboxTimer);
+  activeLetterInboxTimer = 0;
+  if (letterInboxModal) {
+    letterInboxModal.hidden = true;
+    letterInboxModal.setAttribute("aria-hidden", "true");
+  }
+}
+
+function openLetterInboxModal() {
+  const room = getActiveRoom();
+  if (!room || !isPrivateRoom(room) || !letterInboxModal) return;
+  renderLetterInboxList(room);
+  letterInboxModal.hidden = false;
+  letterInboxModal.setAttribute("aria-hidden", "false");
+  if (activeLetterInboxTimer) window.clearInterval(activeLetterInboxTimer);
+  activeLetterInboxTimer = window.setInterval(() => {
+    if (letterInboxModal.hidden) {
+      closeLetterInboxModal();
+      return;
+    }
+    renderLetterInboxList(getActiveRoom());
+  }, 1000);
+}
+
+function createLetterInboxSection(title, icon, entries, delivered) {
+  const section = document.createElement("section");
+  section.className = "letter-inbox-section";
+  section.innerHTML = `
+    <header><span><i class="fa-solid ${escapeHtml(icon)}" aria-hidden="true"></i>${escapeHtml(title)}</span><strong>${entries.length}</strong></header>
+    <div class="letter-inbox-section-items"></div>
+  `;
+  const container = section.querySelector(".letter-inbox-section-items");
+  if (!entries.length) {
+    const empty = document.createElement("div");
+    empty.className = "letter-inbox-empty-section";
+    empty.textContent = delivered ? "Nenhuma carta recebida ainda." : "Nenhuma carta está a caminho.";
+    container.appendChild(empty);
+    return section;
+  }
+
+  entries.forEach(({ message, letter }) => {
+    const transport = getLetterTransportOption(letter.transport);
+    const timing = getLetterDeliveryTiming(letter);
+    const boostCount = Math.max(0, Number(letter.recipientBoostCount || 0));
+    const item = document.createElement("article");
+    item.className = `letter-inbox-item${timing.delivered ? " is-delivered" : " is-transit"}`;
+    item.innerHTML = `
+      <span class="letter-inbox-item-icon"><i class="fa-solid ${escapeHtml(transport.icon)}" aria-hidden="true"></i></span>
+      <span class="letter-inbox-item-copy">
+        <strong>${escapeHtml(letter.protection ? "Carta protegida" : (letter.title || "Carta rastreável"))}</strong>
+        <small>${escapeHtml(transport.name)}${boostCount ? ` · acelerada ${boostCount}x` : ""}</small>
+        <em>${timing.delivered ? "Entregue no local" : `${Math.round(timing.progress * 100)}% · ${formatLetterDuration(timing.remainingMs)} restantes`}</em>
+      </span>
+      <span class="letter-inbox-item-actions"></span>
+    `;
+    const actions = item.querySelector(".letter-inbox-item-actions");
+    const locateButton = document.createElement("button");
+    locateButton.type = "button";
+    locateButton.className = "icon-button letter-inbox-locate-button";
+    locateButton.title = "Mostrar no chat";
+    locateButton.setAttribute("aria-label", "Mostrar carta no chat");
+    locateButton.innerHTML = '<i class="fa-solid fa-location-crosshairs" aria-hidden="true"></i>';
+    locateButton.addEventListener("click", () => {
+      closeLetterInboxModal();
+      const row = messages?.querySelector(`.message-row[data-message-id="${CSS.escape(message.id || "")}"]`);
+      if (!row) {
+        showToast("Carta não localizada", "A carta ainda não está carregada na parte visível da conversa.");
+        return;
+      }
+      row.scrollIntoView({ behavior: "smooth", block: "center" });
+      row.classList.add("is-letter-located");
+      window.setTimeout(() => row.classList.remove("is-letter-located"), 1400);
+    });
+    actions.appendChild(locateButton);
+
+    if (timing.delivered) {
+      const openButton = document.createElement("button");
+      openButton.type = "button";
+      openButton.className = "small-action letter-inbox-open-button";
+      openButton.innerHTML = '<i class="fa-solid fa-envelope-open-text" aria-hidden="true"></i><span>Abrir</span>';
+      openButton.addEventListener("click", () => {
+        closeLetterInboxModal();
+        openLetterViewer(letter, message);
+      });
+      actions.appendChild(openButton);
+    }
+    container.appendChild(item);
+  });
+  return section;
+}
+
+function renderLetterInboxList(room = getActiveRoom()) {
+  if (!letterInboxList) return;
+  const entries = getReceivedLetterMessages(room);
+  const transit = [];
+  const delivered = [];
+  entries.forEach((entry) => {
+    (getLetterDeliveryTiming(entry.letter).delivered ? delivered : transit).push(entry);
+  });
+  if (letterInboxTransitCount) letterInboxTransitCount.textContent = String(transit.length);
+  if (letterInboxDeliveredCount) letterInboxDeliveredCount.textContent = String(delivered.length);
+  if (letterInboxSubtitle) {
+    letterInboxSubtitle.textContent = entries.length
+      ? `${entries.length} carta${entries.length === 1 ? "" : "s"} nesta conversa privada.`
+      : "As cartas recebidas desta conversa aparecerão aqui.";
+  }
+  letterInboxList.innerHTML = "";
+  letterInboxList.appendChild(createLetterInboxSection("A caminho", "fa-route", transit, false));
+  letterInboxList.appendChild(createLetterInboxSection("Recebidas", "fa-box-open", delivered, true));
+  updateLetterInboxBadge(room);
+}
+
 function createLetterMessageElement(letterValue, message = {}) {
   const letter = normalizeLetterPayload(letterValue);
   const card = document.createElement("article");
@@ -7114,7 +7276,8 @@ function createLetterMessageElement(letterValue, message = {}) {
   const isRecipient = !isMessageMine(message);
   const protectedLabel = letter?.protection ? " · protegida por tradução" : "";
   const turboLabel = letter?.turbo ? " · turbina ativa" : "";
-  const recipientBoostLabel = letter?.recipientBoosted ? " · acelerada pelo destinatário" : "";
+  const recipientBoostCount = Math.max(0, Number(letter?.recipientBoostCount || 0));
+  const recipientBoostLabel = recipientBoostCount ? ` · acelerada ${recipientBoostCount}x pelo destinatário` : "";
   const distanceLabel = letter?.routeDistanceMeters
     ? formatLetterDistance(letter.routeDistanceMeters)
     : "Calculando rota";
@@ -7139,8 +7302,8 @@ function createLetterMessageElement(letterValue, message = {}) {
       <small class="message-letter-map-caption"></small>
       <div class="message-letter-route" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progressPercent}"><span style="width:${progressPercent}%"></span></div>
     </section>
-    <button class="message-letter-accelerate-button" type="button" ${!isRecipient || timing.delivered || letter?.recipientBoosted ? "hidden" : ""}><i class="fa-solid fa-gauge-high" aria-hidden="true"></i><span>Acelerar entrega</span></button>
-    <small class="message-letter-boosted-note" ${letter?.recipientBoosted ? "" : "hidden"}><i class="fa-solid fa-bolt" aria-hidden="true"></i> Entrega acelerada pelo destinatário</small>
+    <button class="message-letter-accelerate-button" type="button" ${!isRecipient || timing.delivered ? "hidden" : ""}><i class="fa-solid fa-gauge-high" aria-hidden="true"></i><span>${recipientBoostCount ? "Acelerar novamente" : "Acelerar entrega"}</span></button>
+    <small class="message-letter-boosted-note" ${recipientBoostCount ? "" : "hidden"}><i class="fa-solid fa-bolt" aria-hidden="true"></i> Entrega acelerada <b>${recipientBoostCount}x</b> pelo destinatário</small>
     <button class="message-letter-open-button" type="button" ${!isRecipient ? "hidden" : ""} ${!timing.delivered ? "disabled" : ""}><i class="fa-solid ${timing.delivered ? "fa-envelope-open-text" : "fa-lock"}" aria-hidden="true"></i><span>${timing.delivered ? "Abrir carta" : "Disponível quando chegar"}</span></button>
     <small class="message-letter-open-note" ${isRecipient && timing.delivered ? "hidden" : ""}>${isRecipient ? "A carta será liberada quando chegar ao local de entrega." : "Somente o destinatário poderá abrir a carta após a entrega."}</small>
   `;
@@ -7175,7 +7338,41 @@ function createLetterMessageElement(letterValue, message = {}) {
   return card;
 }
 
-function createRecipientAccelerationChallenge() {
+function rememberRecentLetterChallenge(sourceText, targetText) {
+  const key = `${normalizeLetterChallengeAnswer(sourceText)}>${normalizeLetterChallengeAnswer(targetText)}`;
+  if (!key || key === ">") return;
+  const existingIndex = recentLetterChallengeKeys.indexOf(key);
+  if (existingIndex >= 0) recentLetterChallengeKeys.splice(existingIndex, 1);
+  recentLetterChallengeKeys.unshift(key);
+  recentLetterChallengeKeys.splice(12);
+}
+
+function createFallbackRecipientAccelerationChallenge(sourceLanguage, targetLanguage) {
+  const candidates = LETTER_CHALLENGE_PHRASES
+    .map((phrase) => ({
+      sourceText: phrase[sourceLanguage.code] || phrase.pt,
+      targetText: phrase[targetLanguage.code] || phrase.en
+    }))
+    .filter((item) => {
+      const key = `${normalizeLetterChallengeAnswer(item.sourceText)}>${normalizeLetterChallengeAnswer(item.targetText)}`;
+      return !recentLetterChallengeKeys.includes(key);
+    });
+  const pool = candidates.length ? candidates : LETTER_CHALLENGE_PHRASES.map((phrase) => ({
+    sourceText: phrase[sourceLanguage.code] || phrase.pt,
+    targetText: phrase[targetLanguage.code] || phrase.en
+  }));
+  const selected = pool[Math.floor(Math.random() * pool.length)];
+  rememberRecentLetterChallenge(selected.sourceText, selected.targetText);
+  return {
+    sourceText: selected.sourceText,
+    expectedText: normalizeLetterChallengeAnswer(selected.targetText),
+    sourceLanguage,
+    targetLanguage,
+    provider: "local"
+  };
+}
+
+async function createRecipientAccelerationChallenge() {
   const roomLanguage = getRoomLanguage(getActiveRoom());
   const nativeLanguage = getCurrentNativeLanguage();
   let sourceLanguage = roomLanguage?.code ? roomLanguage : getSelectedNativeLanguage("pt");
@@ -7184,13 +7381,39 @@ function createRecipientAccelerationChallenge() {
     targetLanguage = getSelectedNativeLanguage(sourceLanguage.code === "en" ? "pt" : "en");
   }
   if (Math.random() < 0.5) [sourceLanguage, targetLanguage] = [targetLanguage, sourceLanguage];
-  const phrase = LETTER_CHALLENGE_PHRASES[Math.floor(Math.random() * LETTER_CHALLENGE_PHRASES.length)];
-  return {
-    sourceText: phrase[sourceLanguage.code] || phrase.pt,
-    expectedText: normalizeLetterChallengeAnswer(phrase[targetLanguage.code] || phrase.en),
-    sourceLanguage,
-    targetLanguage
-  };
+
+  const themes = ["tempo", "viagem", "céu", "amizade", "café", "música", "cidade", "natureza", "tecnologia", "surpresa", "mapa", "entrega"];
+  const theme = themes[Math.floor(Math.random() * themes.length)];
+  const recent = recentLetterChallengeKeys.slice(0, 6).join(" | ") || "nenhuma";
+  const systemPrompt = `Você cria desafios curtos de tradução para um aplicativo de idiomas.
+Gere uma frase natural e inédita de 3 a 7 palavras em ${sourceLanguage.name} e sua tradução exata para ${targetLanguage.name}.
+A frase deve ser simples, apropriada para qualquer idade e relacionada livremente ao tema informado.
+Não use nomes próprios, aspas, explicações, emojis ou mais de uma frase.
+Responda somente em JSON válido: {"sourceText":"...","targetText":"..."}.`;
+  const userText = `Tema aleatório: ${theme}. Identificador de variedade: ${Date.now()}-${Math.random().toString(36).slice(2)}. Evite repetir estas chaves recentes: ${recent}.`;
+
+  try {
+    const { content, provider } = await askAiForJson("letter-acceleration-phrase", systemPrompt, userText, 0.95, 180);
+    const parsed = parseJsonFromAi(content);
+    const sourceText = cleanMessageText(parsed?.sourceText || "", 140);
+    const targetText = cleanMessageText(parsed?.targetText || "", 140);
+    const key = `${normalizeLetterChallengeAnswer(sourceText)}>${normalizeLetterChallengeAnswer(targetText)}`;
+    const wordCount = sourceText.trim().split(/\s+/).filter(Boolean).length;
+    if (!sourceText || !targetText || wordCount < 2 || wordCount > 10 || recentLetterChallengeKeys.includes(key)) {
+      throw new Error("A IA não gerou uma frase curta e inédita.");
+    }
+    rememberRecentLetterChallenge(sourceText, targetText);
+    return {
+      sourceText,
+      expectedText: normalizeLetterChallengeAnswer(targetText),
+      sourceLanguage,
+      targetLanguage,
+      provider: provider || "IA"
+    };
+  } catch (error) {
+    console.warn("Não foi possível gerar uma frase aleatória pela IA; usando frase local.", error);
+    return createFallbackRecipientAccelerationChallenge(sourceLanguage, targetLanguage);
+  }
 }
 
 function setupLetterRecipientAcceleration(card, letter, message, isRecipient) {
@@ -7211,12 +7434,17 @@ function closeLetterAccelerationModal() {
   }
   if (letterAccelerationInput) {
     letterAccelerationInput.value = "";
+    letterAccelerationInput.disabled = false;
     letterAccelerationInput.classList.remove("is-error");
+  }
+  if (letterAccelerationConfirmButton) {
+    setButtonBusy(letterAccelerationConfirmButton, false);
+    letterAccelerationConfirmButton.disabled = false;
   }
   activeLetterAccelerationState = null;
 }
 
-function openLetterAccelerationModal(letterValue, message = {}, card = null) {
+async function openLetterAccelerationModal(letterValue, message = {}, card = null) {
   const sourceLetter = letterValue && typeof letterValue === "object" ? letterValue : null;
   const letter = normalizeLetterPayload(letterValue);
   if (!letter || !letterAccelerationModal) return;
@@ -7229,29 +7457,65 @@ function openLetterAccelerationModal(letterValue, message = {}, card = null) {
     showToast("Carta entregue", "A carta já chegou ao local de entrega.");
     return;
   }
-  if (letter.recipientBoosted) {
-    showToast("Entrega já acelerada", "Esta entrega já recebeu a aceleração do destinatário.");
-    return;
-  }
 
-  const challenge = createRecipientAccelerationChallenge();
-  activeLetterAccelerationState = { letter, sourceLetter, message, card, challenge };
-  if (letterAccelerationDirection) {
-    letterAccelerationDirection.textContent = `Traduza de ${challenge.sourceLanguage.label} para ${challenge.targetLanguage.label}`;
+  const boostCount = Math.max(0, Number(letter.recipientBoostCount || 0));
+  const generationToken = `${Date.now()}-${Math.random()}`;
+  activeLetterAccelerationState = { letter, sourceLetter, message, card, challenge: null, generationToken };
+  if (letterAccelerationTitle) letterAccelerationTitle.textContent = boostCount ? "Acelerar novamente" : "Acelerar entrega";
+  if (letterAccelerationSubtitle) {
+    letterAccelerationSubtitle.textContent = boostCount
+      ? `Esta será a ${boostCount + 1}ª aceleração. Cada acerto reduz pela metade o tempo que ainda falta.`
+      : "Cada tradução correta reduz pela metade o tempo que ainda falta.";
   }
-  if (letterAccelerationPrompt) letterAccelerationPrompt.textContent = challenge.sourceText;
+  if (letterAccelerationDirection) letterAccelerationDirection.textContent = "Gerando uma frase curta pela IA...";
+  if (letterAccelerationPrompt) letterAccelerationPrompt.textContent = "Preparando um novo desafio aleatório...";
   if (letterAccelerationInput) {
     letterAccelerationInput.value = "";
-    letterAccelerationInput.placeholder = `Digite em ${challenge.targetLanguage.label}`;
+    letterAccelerationInput.disabled = true;
+    letterAccelerationInput.placeholder = "Aguarde a frase";
     letterAccelerationInput.classList.remove("is-error");
   }
+  if (letterAccelerationConfirmButton) {
+    letterAccelerationConfirmButton.disabled = true;
+    setButtonBusy(letterAccelerationConfirmButton, true, "Gerando frase...");
+  }
   if (letterAccelerationFeedback) {
-    letterAccelerationFeedback.textContent = "A resposta correta reduzirá pela metade somente o tempo restante.";
+    letterAccelerationFeedback.textContent = "A IA está criando uma frase curta e diferente das anteriores.";
     letterAccelerationFeedback.className = "letter-acceleration-feedback";
   }
   letterAccelerationModal.hidden = false;
   letterAccelerationModal.setAttribute("aria-hidden", "false");
-  window.setTimeout(() => letterAccelerationInput?.focus(), 80);
+
+  try {
+    const challenge = await createRecipientAccelerationChallenge();
+    if (!activeLetterAccelerationState || activeLetterAccelerationState.generationToken !== generationToken || letterAccelerationModal.hidden) return;
+    activeLetterAccelerationState.challenge = challenge;
+    if (letterAccelerationDirection) {
+      letterAccelerationDirection.textContent = `Traduza de ${challenge.sourceLanguage.label} para ${challenge.targetLanguage.label}`;
+    }
+    if (letterAccelerationPrompt) letterAccelerationPrompt.textContent = challenge.sourceText;
+    if (letterAccelerationInput) {
+      letterAccelerationInput.disabled = false;
+      letterAccelerationInput.placeholder = `Digite em ${challenge.targetLanguage.label}`;
+    }
+    if (letterAccelerationFeedback) {
+      letterAccelerationFeedback.textContent = challenge.provider === "local"
+        ? "A IA não respondeu; uma frase aleatória local foi usada. O acerto reduz pela metade o tempo restante."
+        : `Frase gerada por ${challenge.provider}. O acerto reduz pela metade o tempo restante.`;
+    }
+    window.setTimeout(() => letterAccelerationInput?.focus(), 80);
+  } catch (error) {
+    console.warn("Não foi possível preparar o desafio de aceleração.", error);
+    if (letterAccelerationFeedback) {
+      letterAccelerationFeedback.textContent = "Não foi possível criar o desafio agora. Feche e tente novamente.";
+      letterAccelerationFeedback.className = "letter-acceleration-feedback is-error";
+    }
+  } finally {
+    if (activeLetterAccelerationState?.generationToken === generationToken && letterAccelerationConfirmButton) {
+      setButtonBusy(letterAccelerationConfirmButton, false);
+      letterAccelerationConfirmButton.disabled = !activeLetterAccelerationState.challenge;
+    }
+  }
 }
 
 async function verifyLetterAccelerationChallenge() {
@@ -7281,8 +7545,16 @@ async function verifyLetterAccelerationChallenge() {
     if (state.sourceLetter && state.sourceLetter !== state.letter) Object.assign(state.sourceLetter, updatedLetter);
     const button = state.card?.querySelector(".message-letter-accelerate-button");
     const boostedNote = state.card?.querySelector(".message-letter-boosted-note");
-    if (button) button.hidden = true;
-    if (boostedNote) boostedNote.hidden = false;
+    const boostCount = Math.max(0, Number(updatedLetter.recipientBoostCount || 0));
+    if (button) {
+      button.hidden = getLetterDeliveryTiming(updatedLetter).delivered;
+      const label = button.querySelector("span");
+      if (label) label.textContent = "Acelerar novamente";
+    }
+    if (boostedNote) {
+      boostedNote.hidden = false;
+      boostedNote.innerHTML = `<i class="fa-solid fa-bolt" aria-hidden="true"></i> Entrega acelerada <b>${boostCount}x</b> pelo destinatário`;
+    }
     closeLetterAccelerationModal();
     showToast("Entrega acelerada", `O tempo restante foi reduzido para ${formatLetterDuration(getLetterDeliveryTiming(updatedLetter).remainingMs)}.`);
   } catch (error) {
@@ -7305,26 +7577,26 @@ async function accelerateLetterDeliveryForRecipient(message, localLetter) {
   const now = Date.now();
   const letterRef = ref(db, `rooms/${room.id}/messages/${message.id}/letter`);
   const result = await runTransaction(letterRef, (currentValue) => {
-    if (!currentValue || currentValue.recipientBoosted) return;
-    const sentAtMillis = Number(currentValue.sentAtMillis || localLetter?.sentAtMillis || now);
-    const durationMs = Math.max(LETTER_MIN_DURATION_MS, Number(currentValue.durationMs || localLetter?.durationMs || 0));
-    const elapsedMs = Math.max(0, now - sentAtMillis);
-    const remainingMs = Math.max(0, durationMs - elapsedMs);
-    if (remainingMs <= 0) return;
-    const startProgress = Math.max(0, Math.min(1, elapsedMs / durationMs));
-    const acceleratedRemainingMs = Math.max(1000, Math.round(remainingMs * LETTER_RECIPIENT_BOOST_MULTIPLIER));
+    if (!currentValue) return;
+    const normalizedCurrent = normalizeLetterPayload(currentValue);
+    if (!normalizedCurrent) return;
+    const timing = getLetterDeliveryTiming(normalizedCurrent, now);
+    if (timing.delivered || timing.remainingMs <= 0) return;
+    const boostCount = Math.max(0, Math.floor(Number(currentValue.recipientBoostCount || (currentValue.recipientBoosted ? 1 : 0)) || 0));
+    const acceleratedRemainingMs = Math.max(1000, Math.round(timing.remainingMs * LETTER_RECIPIENT_BOOST_MULTIPLIER));
     return {
       ...currentValue,
       recipientBoosted: true,
+      recipientBoostCount: boostCount + 1,
       recipientBoostedAtMillis: now,
-      recipientBoostStartProgress: startProgress,
+      recipientBoostStartProgress: timing.progress,
       recipientBoostDurationMs: acceleratedRemainingMs,
       arrivalAtMillis: now + acceleratedRemainingMs,
-      speedKmh: Math.max(1, Number(currentValue.speedKmh || localLetter?.speedKmh || 1) * 2)
+      speedKmh: Math.min(1000000, Math.max(1, Number(currentValue.speedKmh || localLetter?.speedKmh || 1) * 2))
     };
   });
   if (!result.committed) {
-    throw new Error(getLetterDeliveryTiming(localLetter).delivered ? "A carta já chegou ao destino." : "Esta entrega já foi acelerada.");
+    throw new Error("A carta já chegou ao destino ou não pôde ser acelerada agora.");
   }
   return normalizeLetterPayload(result.snapshot.val());
 }
@@ -7462,7 +7734,8 @@ function initializeLetterTrackingCard(card, letter, transportInfo, message = {})
     const slices = getLetterRouteProgressSlices(mapRoute.coordinates, timing.progress);
     const protectedLabel = letter?.protection ? " · protegida por tradução" : "";
     const turboLabel = letter?.turbo ? " · turbina ativa" : "";
-    const recipientBoostLabel = letter?.recipientBoosted ? " · acelerada pelo destinatário" : "";
+    const recipientBoostCount = Math.max(0, Number(letter?.recipientBoostCount || 0));
+    const recipientBoostLabel = recipientBoostCount ? ` · acelerada ${recipientBoostCount}x pelo destinatário` : "";
 
     if (statusElement) {
       statusElement.textContent = `${transportInfo.name}${turboLabel}${recipientBoostLabel}${protectedLabel} · ${timing.delivered ? "entregue" : `${formatLetterDuration(timing.remainingMs)} restantes`}`;
@@ -7478,12 +7751,20 @@ function initializeLetterTrackingCard(card, letter, transportInfo, message = {})
       if (openButtonLabel) openButtonLabel.textContent = timing.delivered ? "Abrir carta" : "Disponível quando chegar";
     }
     if (openNote) openNote.hidden = Boolean(isRecipient && timing.delivered);
-    if (accelerateButton) accelerateButton.hidden = Boolean(!isRecipient || timing.delivered || letter?.recipientBoosted);
-    if (boostedNote) boostedNote.hidden = !letter?.recipientBoosted;
+    if (accelerateButton) {
+      accelerateButton.hidden = Boolean(!isRecipient || timing.delivered);
+      const accelerateLabel = accelerateButton.querySelector("span");
+      if (accelerateLabel) accelerateLabel.textContent = recipientBoostCount ? "Acelerar novamente" : "Acelerar entrega";
+    }
+    if (boostedNote) {
+      boostedNote.hidden = recipientBoostCount <= 0;
+      boostedNote.innerHTML = `<i class="fa-solid fa-bolt" aria-hidden="true"></i> Entrega acelerada <b>${recipientBoostCount}x</b> pelo destinatário`;
+    }
 
     if (vehicleMarker) vehicleMarker.setLatLng(slices.position);
     if (traveledLine) traveledLine.setLatLngs(slices.traveled);
     if (remainingLine) remainingLine.setLatLngs(slices.remaining);
+    updateLetterInboxBadge(getActiveRoom());
     return !timing.delivered;
   };
 
@@ -7615,7 +7896,7 @@ async function openLetterViewer(letterValue, message = {}) {
   letterViewerModal.setAttribute("aria-hidden", "false");
   const transport = getLetterTransportOption(letter.transport);
   if (letterViewerHeading) letterViewerHeading.textContent = letter.protection ? "Carta protegida" : "Carta rastreável";
-  if (letterViewerStatus) letterViewerStatus.textContent = `${transport.name}${letter.turbo ? " · turbina ativa" : ""}${letter.recipientBoosted ? " · acelerada pelo destinatário" : ""}`;
+  if (letterViewerStatus) letterViewerStatus.textContent = `${transport.name}${letter.turbo ? " · turbina ativa" : ""}${Number(letter.recipientBoostCount || 0) ? ` · acelerada ${Number(letter.recipientBoostCount || 0)}x pelo destinatário` : ""}`;
   if (letterViewerDistance) letterViewerDistance.textContent = letter.routeDistanceMeters ? formatLetterDistance(letter.routeDistanceMeters) : "Rota simulada";
   if (letterViewerSpeed) letterViewerSpeed.textContent = `${Math.round(letter.speedKmh || transport.speedKmh)} km/h`;
   if (letterViewerChallengeFeedback) {
@@ -7680,8 +7961,11 @@ function renderLetterViewerContentVariant() {
   if (letterViewerContent) letterViewerContent.textContent = showingOriginal ? content.originalContent : content.content;
   if (letterViewerContentLabel) letterViewerContentLabel.textContent = showingOriginal ? "Mensagem original" : "Conteúdo traduzido";
   if (letterViewerOriginalButton) {
-    letterViewerOriginalButton.hidden = !hasOriginal;
-    letterViewerOriginalButton.title = showingOriginal ? "Mostrar tradução" : "Mostrar mensagem original";
+    letterViewerOriginalButton.hidden = false;
+    letterViewerOriginalButton.disabled = !hasOriginal;
+    letterViewerOriginalButton.title = !hasOriginal
+      ? "Esta carta já está no idioma original"
+      : showingOriginal ? "Mostrar tradução" : "Mostrar mensagem original";
     letterViewerOriginalButton.setAttribute("aria-label", letterViewerOriginalButton.title);
     letterViewerOriginalButton.setAttribute("aria-pressed", String(showingOriginal));
     letterViewerOriginalButton.innerHTML = `<i class="fa-solid ${showingOriginal ? "fa-language" : "fa-eye"}" aria-hidden="true"></i><span>${showingOriginal ? "Mostrar tradução" : "Mostrar original"}</span>`;
@@ -7692,7 +7976,10 @@ function toggleLetterViewerOriginalContent() {
   const state = activeLetterViewerState;
   if (!state?.unlockedContent) return;
   const content = state.unlockedContent;
-  if (!content.originalContent || content.originalContent === content.content) return;
+  if (!content.originalContent || content.originalContent === content.content) {
+    showToast("Mensagem original", "Esta carta já está sendo exibida no idioma original.");
+    return;
+  }
   state.showingOriginal = !state.showingOriginal;
   renderLetterViewerContentVariant();
 }
@@ -7844,7 +8131,7 @@ function initializeLetterViewerTracking(letter, transportInfo) {
     if (letterViewerProgressLabel) letterViewerProgressLabel.textContent = `${percent}%`;
     if (letterViewerProgressFill) letterViewerProgressFill.style.width = `${percent}%`;
     if (letterViewerProgress) letterViewerProgress.setAttribute("aria-valuenow", String(percent));
-    if (letterViewerStatus) letterViewerStatus.textContent = `${transportInfo.name}${letter.turbo ? " · turbina ativa" : ""}${letter.recipientBoosted ? " · acelerada pelo destinatário" : ""} · ${timing.delivered ? "entregue" : "em trânsito"}`;
+    if (letterViewerStatus) letterViewerStatus.textContent = `${transportInfo.name}${letter.turbo ? " · turbina ativa" : ""}${Number(letter.recipientBoostCount || 0) ? ` · acelerada ${Number(letter.recipientBoostCount || 0)}x pelo destinatário` : ""} · ${timing.delivered ? "entregue" : "em trânsito"}`;
     if (vehicleMarker) vehicleMarker.setLatLng(slices.position);
     if (traveledLine) traveledLine.setLatLngs(slices.traveled);
     if (remainingLine) remainingLine.setLatLngs(slices.remaining);
