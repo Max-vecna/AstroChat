@@ -861,7 +861,7 @@
         <div><strong>Tradução pela IA</strong><span id="messageAiTranslationSubtitle">Traduzindo para seu idioma nativo.</span></div>
         <button class="icon-button" id="closeMessageAiTranslationButton" type="button" aria-label="Fechar tradução"><i class="fa-solid fa-xmark"></i></button>
       </header>
-      <section class="message-ai-translation-block"><small>Texto em inglês</small><p id="messageAiTranslationSource"></p></section>
+      <section class="message-ai-translation-block"><small>Mensagem selecionada</small><p id="messageAiTranslationSource"></p></section>
       <section class="message-ai-translation-block is-result"><small id="messageAiTranslationTargetLabel">Tradução</small><p id="messageAiTranslationResult" aria-live="polite"></p></section>
     </div>
   </section>
@@ -1024,7 +1024,10 @@
       </section>
 
       <section class="letter-viewer-content" id="letterViewerContentPanel" hidden>
-        <small>Conteúdo da carta</small>
+        <div class="letter-viewer-content-head">
+          <small id="letterViewerContentLabel">Conteúdo traduzido</small>
+          <button class="icon-button letter-viewer-original-button" id="letterViewerOriginalButton" type="button" hidden aria-label="Ver mensagem original" title="Ver mensagem original" aria-pressed="false"><i class="fa-solid fa-eye"></i></button>
+        </div>
         <h2 id="letterViewerTitle">Carta</h2>
         <p id="letterViewerContent"></p>
       </section>

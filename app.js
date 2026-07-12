@@ -51,7 +51,7 @@ const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
 const STANDARD_WEB_PUSH_PUBLIC_VAPID_KEY = "BLE7nXv1JR25D7PSPJgHRXcAIQUhe1R0XOhFPGheglqfIpNIo9G95_lSTDtFUNx4GjWZHFaRkdlMylcItINrvAs";
-const CHAT_VERSION = "v145";
+const CHAT_VERSION = "v146";
 // Backend externo opcional para enviar push com o site fechado.
 // Depois de publicar o Cloudflare Worker, cole aqui a URL dele.
 // Exemplo: https://astrochat-push.seu-usuario.workers.dev/notify
@@ -161,6 +161,7 @@ const NATIVE_LANGUAGE_OPTIONS = [
 
 const LETTER_TURBO_MULTIPLIER = 0.5;
 const LETTER_TURBO_SPEED_MULTIPLIER = 2;
+const LETTER_RECIPIENT_BOOST_MULTIPLIER = 0.5;
 const LETTER_MIN_DURATION_MS = 5000;
 const LETTER_MAX_DURATION_MS = 365 * 24 * 60 * 60 * 1000;
 const LETTER_DEFAULT_TRANSPORT_ID = "droid";
@@ -612,6 +613,8 @@ const letterViewerChallengeInput = document.querySelector("#letterViewerChalleng
 const letterViewerChallengeButton = document.querySelector("#letterViewerChallengeButton");
 const letterViewerChallengeFeedback = document.querySelector("#letterViewerChallengeFeedback");
 const letterViewerContentPanel = document.querySelector("#letterViewerContentPanel");
+const letterViewerContentLabel = document.querySelector("#letterViewerContentLabel");
+const letterViewerOriginalButton = document.querySelector("#letterViewerOriginalButton");
 const letterViewerTitle = document.querySelector("#letterViewerTitle");
 const letterViewerContent = document.querySelector("#letterViewerContent");
 const letterViewerDistance = document.querySelector("#letterViewerDistance");
@@ -1169,6 +1172,7 @@ letterChallengeInput?.addEventListener("keydown", (event) => {
 closeLetterViewerButton?.addEventListener("click", closeLetterViewer);
 letterViewerModal?.addEventListener("click", (event) => { if (event.target === letterViewerModal) closeLetterViewer(); });
 letterViewerChallengeButton?.addEventListener("click", verifyLetterViewerChallenge);
+letterViewerOriginalButton?.addEventListener("click", toggleLetterViewerOriginalContent);
 letterViewerChallengeInput?.addEventListener("keydown", (event) => {
   if (event.key !== "Enter") return;
   event.preventDefault();
@@ -6886,6 +6890,7 @@ function normalizeLetterPayload(value) {
   return {
     title: title || "Carta protegida",
     content,
+    originalTitle: sanitizeText(value.originalTitle || "", 60),
     originalContent: cleanMessageText(value.originalContent || "", 1500),
     transport,
     turbo: Boolean(value.turbo),
@@ -6898,6 +6903,10 @@ function normalizeLetterPayload(value) {
     routeProvider: sanitizeText(value.routeProvider || "", 32),
     routeDistanceMeters,
     speedKmh,
+    recipientBoosted: Boolean(value.recipientBoosted),
+    recipientBoostedAtMillis: Math.max(0, Number(value.recipientBoostedAtMillis || 0) || 0),
+    recipientBoostStartProgress: Math.max(0, Math.min(1, Number(value.recipientBoostStartProgress || 0) || 0)),
+    recipientBoostDurationMs: Math.max(0, Number(value.recipientBoostDurationMs || 0) || 0),
     routeCoordinates,
     originMode: sanitizeText(value.originMode || "", 24),
     protection,
@@ -6922,8 +6931,27 @@ function getLetterDeliveryTiming(letter, now = Date.now()) {
   const sentAtMillis = Number(letter?.sentAtMillis || now);
   const fallbackDuration = Number(getLetterTransportOption(letter?.transport).fallbackDurationMs || 35000);
   const durationMs = Math.max(LETTER_MIN_DURATION_MS, Number(letter?.durationMs || 0) || fallbackDuration);
-  const elapsedMs = Math.max(0, now - sentAtMillis);
   const forcedDelivered = letter?.status === "delivered";
+  const boostedAtMillis = Math.max(0, Number(letter?.recipientBoostedAtMillis || 0) || 0);
+  const boostStartProgress = Math.max(0, Math.min(1, Number(letter?.recipientBoostStartProgress || 0) || 0));
+  const boostDurationMs = Math.max(0, Number(letter?.recipientBoostDurationMs || 0) || 0);
+
+  if (letter?.recipientBoosted && boostedAtMillis > 0 && boostDurationMs > 0) {
+    const boostElapsedMs = Math.max(0, now - boostedAtMillis);
+    const boostPhaseProgress = Math.max(0, Math.min(1, boostElapsedMs / boostDurationMs));
+    const progress = forcedDelivered ? 1 : Math.max(0, Math.min(1, boostStartProgress + (1 - boostStartProgress) * boostPhaseProgress));
+    const remainingMs = forcedDelivered ? 0 : Math.max(0, boostDurationMs - boostElapsedMs);
+    return {
+      sentAtMillis,
+      durationMs,
+      elapsedMs: Math.max(0, now - sentAtMillis),
+      progress,
+      remainingMs,
+      delivered: progress >= 1 || remainingMs <= 0
+    };
+  }
+
+  const elapsedMs = Math.max(0, now - sentAtMillis);
   const progress = forcedDelivered ? 1 : Math.max(0, Math.min(1, elapsedMs / durationMs));
   const remainingMs = forcedDelivered ? 0 : Math.max(0, durationMs - elapsedMs);
   return { sentAtMillis, durationMs, elapsedMs, progress, remainingMs, delivered: progress >= 1 };
@@ -7060,8 +7088,10 @@ function createLetterMessageElement(letterValue, message = {}) {
   const transportInfo = getLetterTransportOption(letter?.transport);
   const timing = getLetterDeliveryTiming(letter);
   const progressPercent = Math.round(timing.progress * 100);
+  const isRecipient = !isMessageMine(message);
   const protectedLabel = letter?.protection ? " · protegida por tradução" : "";
   const turboLabel = letter?.turbo ? " · turbina ativa" : "";
+  const recipientBoostLabel = letter?.recipientBoosted ? " · acelerada pelo destinatário" : "";
   const distanceLabel = letter?.routeDistanceMeters
     ? formatLetterDistance(letter.routeDistanceMeters)
     : "Calculando rota";
@@ -7073,28 +7103,51 @@ function createLetterMessageElement(letterValue, message = {}) {
       <span class="message-letter-transport-icon"><i class="fa-solid ${escapeHtml(transportInfo.icon)}" aria-hidden="true"></i></span>
       <span class="message-letter-title-wrap">
         <strong>${letter?.protection ? "Carta protegida" : "Carta rastreável"}</strong>
-        <small class="message-letter-status">${escapeHtml(transportInfo.name)}${escapeHtml(turboLabel)}${escapeHtml(protectedLabel)} · ${timing.delivered ? "entregue" : `${formatLetterDuration(timing.remainingMs)} restantes`}</small>
+        <small class="message-letter-status">${escapeHtml(transportInfo.name)}${escapeHtml(turboLabel)}${escapeHtml(recipientBoostLabel)}${escapeHtml(protectedLabel)} · ${timing.delivered ? "entregue" : `${formatLetterDuration(timing.remainingMs)} restantes`}</small>
       </span>
       <span class="message-letter-percent">${progressPercent}%</span>
     </header>
     <section class="message-letter-tracking" aria-label="Rastreamento da carta">
       <div class="message-letter-tracking-meta">
         <span class="message-letter-distance"><i class="fa-solid fa-route" aria-hidden="true"></i>${escapeHtml(distanceLabel)}</span>
-        <strong class="message-letter-eta">${timing.delivered ? "Chegou ao destino" : `Chegada em ${formatLetterDuration(timing.remainingMs)}`}</strong>
+        <strong class="message-letter-eta">${timing.delivered ? "Chegou ao local de entrega" : `Chegada em ${formatLetterDuration(timing.remainingMs)}`}</strong>
       </div>
       <div class="message-letter-map" aria-label="Mapa com a rota e a posição atual da carta"></div>
       <small class="message-letter-map-caption"></small>
       <div class="message-letter-route" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progressPercent}"><span style="width:${progressPercent}%"></span></div>
     </section>
-    <button class="message-letter-open-button" type="button"><i class="fa-solid fa-envelope-open-text" aria-hidden="true"></i><span>Abrir carta</span></button>
+    <section class="message-letter-boost-panel" hidden aria-live="polite">
+      <small class="message-letter-boost-direction"></small>
+      <blockquote class="message-letter-boost-prompt"></blockquote>
+      <div class="message-letter-boost-answer-row">
+        <input class="message-letter-boost-input" type="text" maxlength="220" autocomplete="off" placeholder="Digite a tradução">
+        <button class="small-action message-letter-boost-confirm" type="button"><i class="fa-solid fa-bolt" aria-hidden="true"></i><span>Acelerar</span></button>
+      </div>
+      <small class="message-letter-boost-feedback"></small>
+    </section>
+    <button class="message-letter-accelerate-button" type="button" ${!isRecipient || timing.delivered || letter?.recipientBoosted ? "hidden" : ""}><i class="fa-solid fa-gauge-high" aria-hidden="true"></i><span>Acelerar entrega</span></button>
+    <small class="message-letter-boosted-note" ${letter?.recipientBoosted ? "" : "hidden"}><i class="fa-solid fa-bolt" aria-hidden="true"></i> Entrega acelerada pelo destinatário</small>
+    <button class="message-letter-open-button" type="button" ${!isRecipient ? "hidden" : ""} ${!timing.delivered ? "disabled" : ""}><i class="fa-solid ${timing.delivered ? "fa-envelope-open-text" : "fa-lock"}" aria-hidden="true"></i><span>${timing.delivered ? "Abrir carta" : "Disponível quando chegar"}</span></button>
+    <small class="message-letter-open-note" ${isRecipient && timing.delivered ? "hidden" : ""}>${isRecipient ? "A carta será liberada quando chegar ao local de entrega." : "Somente o destinatário poderá abrir a carta após a entrega."}</small>
   `;
 
-  const button = card.querySelector(".message-letter-open-button");
-  button?.addEventListener("click", (event) => {
+  const openButton = card.querySelector(".message-letter-open-button");
+  openButton?.addEventListener("click", (event) => {
     event.preventDefault();
     event.stopPropagation();
+    const currentTiming = getLetterDeliveryTiming(letter);
+    if (!isRecipient) {
+      showToast("Abertura restrita", "Somente o destinatário pode abrir esta carta.");
+      return;
+    }
+    if (!currentTiming.delivered) {
+      showToast("Carta em trânsito", `A carta poderá ser aberta quando chegar. Restam ${formatLetterDuration(currentTiming.remainingMs)}.`);
+      return;
+    }
     openLetterViewer(letter, message);
   });
+
+  setupLetterRecipientAcceleration(card, letter, message, isRecipient);
 
   const mapElement = card.querySelector(".message-letter-map");
   ["click", "pointerdown", "pointermove", "pointerup", "touchstart", "touchmove", "touchend", "wheel", "dblclick"].forEach((eventName) => {
@@ -7102,13 +7155,138 @@ function createLetterMessageElement(letterValue, message = {}) {
   });
 
   window.requestAnimationFrame(() => {
-    window.requestAnimationFrame(() => initializeLetterTrackingCard(card, letter, transportInfo));
+    window.requestAnimationFrame(() => initializeLetterTrackingCard(card, letter, transportInfo, message));
   });
 
   return card;
 }
 
-function initializeLetterTrackingCard(card, letter, transportInfo) {
+function createRecipientAccelerationChallenge() {
+  const roomLanguage = getRoomLanguage(getActiveRoom());
+  const nativeLanguage = getCurrentNativeLanguage();
+  let sourceLanguage = roomLanguage?.code ? roomLanguage : getSelectedNativeLanguage("pt");
+  let targetLanguage = nativeLanguage?.code ? nativeLanguage : getSelectedNativeLanguage("en");
+  if (sourceLanguage.code === targetLanguage.code) {
+    targetLanguage = getSelectedNativeLanguage(sourceLanguage.code === "en" ? "pt" : "en");
+  }
+  if (Math.random() < 0.5) [sourceLanguage, targetLanguage] = [targetLanguage, sourceLanguage];
+  const phrase = LETTER_CHALLENGE_PHRASES[Math.floor(Math.random() * LETTER_CHALLENGE_PHRASES.length)];
+  return {
+    sourceText: phrase[sourceLanguage.code] || phrase.pt,
+    expectedText: normalizeLetterChallengeAnswer(phrase[targetLanguage.code] || phrase.en),
+    sourceLanguage,
+    targetLanguage
+  };
+}
+
+function setupLetterRecipientAcceleration(card, letter, message, isRecipient) {
+  const button = card.querySelector(".message-letter-accelerate-button");
+  const panel = card.querySelector(".message-letter-boost-panel");
+  const direction = card.querySelector(".message-letter-boost-direction");
+  const prompt = card.querySelector(".message-letter-boost-prompt");
+  const input = card.querySelector(".message-letter-boost-input");
+  const confirmButton = card.querySelector(".message-letter-boost-confirm");
+  const feedback = card.querySelector(".message-letter-boost-feedback");
+  if (!button || !panel || !isRecipient) return;
+  let challenge = null;
+
+  const showChallenge = () => {
+    if (getLetterDeliveryTiming(letter).delivered || letter.recipientBoosted) return;
+    challenge = createRecipientAccelerationChallenge();
+    panel.hidden = false;
+    direction.textContent = `Traduza de ${challenge.sourceLanguage.label} para ${challenge.targetLanguage.label}`;
+    prompt.textContent = challenge.sourceText;
+    input.value = "";
+    input.placeholder = `Digite em ${challenge.targetLanguage.label}`;
+    feedback.textContent = "A resposta correta reduzirá pela metade o tempo restante.";
+    feedback.className = "message-letter-boost-feedback";
+    window.setTimeout(() => input.focus(), 60);
+  };
+
+  button.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    showChallenge();
+  });
+
+  const verify = async () => {
+    if (!challenge) return;
+    const answer = normalizeLetterChallengeAnswer(input.value || "");
+    if (!answer) return;
+    const similarity = getLetterAnswerSimilarity(answer, challenge.expectedText);
+    if (answer !== challenge.expectedText && similarity < 0.92) {
+      feedback.textContent = "Tradução incorreta. Revise a frase e tente novamente.";
+      feedback.className = "message-letter-boost-feedback is-error";
+      input.classList.add("is-error");
+      window.setTimeout(() => input.classList.remove("is-error"), 420);
+      return;
+    }
+    setButtonBusy(confirmButton, true, "Acelerando...");
+    try {
+      const updatedLetter = await accelerateLetterDeliveryForRecipient(message, letter);
+      if (!updatedLetter) return;
+      Object.assign(letter, updatedLetter);
+      panel.hidden = true;
+      button.hidden = true;
+      const boostedNote = card.querySelector(".message-letter-boosted-note");
+      if (boostedNote) boostedNote.hidden = false;
+      showToast("Entrega acelerada", `O tempo restante foi reduzido para ${formatLetterDuration(getLetterDeliveryTiming(letter).remainingMs)}.`);
+    } catch (error) {
+      console.warn("Não foi possível acelerar a carta.", error);
+      feedback.textContent = error?.message || "Não foi possível acelerar a entrega agora.";
+      feedback.className = "message-letter-boost-feedback is-error";
+    } finally {
+      setButtonBusy(confirmButton, false);
+    }
+  };
+
+  confirmButton.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    verify();
+  });
+  input.addEventListener("keydown", (event) => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    event.stopPropagation();
+    verify();
+  });
+}
+
+async function accelerateLetterDeliveryForRecipient(message, localLetter) {
+  const room = getActiveRoom();
+  if (!room?.id || !message?.id || isMessageMine(message)) {
+    throw new Error("Somente o destinatário pode acelerar esta entrega.");
+  }
+  if (!requireFirebaseConnection("acelerar a entrega")) return null;
+  const now = Date.now();
+  const letterRef = ref(db, `rooms/${room.id}/messages/${message.id}/letter`);
+  const result = await runTransaction(letterRef, (currentValue) => {
+    if (!currentValue || currentValue.recipientBoosted) return;
+    const sentAtMillis = Number(currentValue.sentAtMillis || localLetter?.sentAtMillis || now);
+    const durationMs = Math.max(LETTER_MIN_DURATION_MS, Number(currentValue.durationMs || localLetter?.durationMs || 0));
+    const elapsedMs = Math.max(0, now - sentAtMillis);
+    const remainingMs = Math.max(0, durationMs - elapsedMs);
+    if (remainingMs <= 0) return;
+    const startProgress = Math.max(0, Math.min(1, elapsedMs / durationMs));
+    const acceleratedRemainingMs = Math.max(1000, Math.round(remainingMs * LETTER_RECIPIENT_BOOST_MULTIPLIER));
+    return {
+      ...currentValue,
+      recipientBoosted: true,
+      recipientBoostedAtMillis: now,
+      recipientBoostStartProgress: startProgress,
+      recipientBoostDurationMs: acceleratedRemainingMs,
+      arrivalAtMillis: now + acceleratedRemainingMs,
+      speedKmh: Math.max(1, Number(currentValue.speedKmh || localLetter?.speedKmh || 1) * 2)
+    };
+  });
+  if (!result.committed) {
+    throw new Error(getLetterDeliveryTiming(localLetter).delivered ? "A carta já chegou ao destino." : "Esta entrega já foi acelerada.");
+  }
+  return normalizeLetterPayload(result.snapshot.val());
+}
+
+function initializeLetterTrackingCard(card, letter, transportInfo, message = {}) {
   if (!card?.isConnected) return;
 
   const statusElement = card.querySelector(".message-letter-status");
@@ -7119,6 +7297,13 @@ function initializeLetterTrackingCard(card, letter, transportInfo) {
   const routeFill = routeElement?.querySelector("span");
   const mapElement = card.querySelector(".message-letter-map");
   const captionElement = card.querySelector(".message-letter-map-caption");
+  const openButton = card.querySelector(".message-letter-open-button");
+  const openButtonIcon = openButton?.querySelector("i");
+  const openButtonLabel = openButton?.querySelector("span");
+  const openNote = card.querySelector(".message-letter-open-note");
+  const accelerateButton = card.querySelector(".message-letter-accelerate-button");
+  const boostedNote = card.querySelector(".message-letter-boosted-note");
+  const isRecipient = !isMessageMine(message);
   const mapRoute = getLetterMapRoute(letter);
   let map = null;
   let vehicleMarker = null;
@@ -7234,15 +7419,24 @@ function initializeLetterTrackingCard(card, letter, transportInfo) {
     const slices = getLetterRouteProgressSlices(mapRoute.coordinates, timing.progress);
     const protectedLabel = letter?.protection ? " · protegida por tradução" : "";
     const turboLabel = letter?.turbo ? " · turbina ativa" : "";
+    const recipientBoostLabel = letter?.recipientBoosted ? " · acelerada pelo destinatário" : "";
 
     if (statusElement) {
-      statusElement.textContent = `${transportInfo.name}${turboLabel}${protectedLabel} · ${timing.delivered ? "entregue" : `${formatLetterDuration(timing.remainingMs)} restantes`}`;
+      statusElement.textContent = `${transportInfo.name}${turboLabel}${recipientBoostLabel}${protectedLabel} · ${timing.delivered ? "entregue" : `${formatLetterDuration(timing.remainingMs)} restantes`}`;
     }
     if (percentageElement) percentageElement.textContent = `${progressPercent}%`;
-    if (etaElement) etaElement.textContent = timing.delivered ? "Chegou ao destino" : `Chegada em ${formatLetterDuration(timing.remainingMs)}`;
+    if (etaElement) etaElement.textContent = timing.delivered ? "Chegou ao local de entrega" : `Chegada em ${formatLetterDuration(timing.remainingMs)}`;
     if (routeFill) routeFill.style.width = `${progressPercent}%`;
     if (routeElement) routeElement.setAttribute("aria-valuenow", String(progressPercent));
     card.classList.toggle("is-delivered", timing.delivered);
+    if (openButton && isRecipient) {
+      openButton.disabled = !timing.delivered;
+      if (openButtonIcon) openButtonIcon.className = `fa-solid ${timing.delivered ? "fa-envelope-open-text" : "fa-lock"}`;
+      if (openButtonLabel) openButtonLabel.textContent = timing.delivered ? "Abrir carta" : "Disponível quando chegar";
+    }
+    if (openNote) openNote.hidden = Boolean(isRecipient && timing.delivered);
+    if (accelerateButton) accelerateButton.hidden = Boolean(!isRecipient || timing.delivered || letter?.recipientBoosted);
+    if (boostedNote) boostedNote.hidden = !letter?.recipientBoosted;
 
     if (vehicleMarker) vehicleMarker.setLatLng(slices.position);
     if (traveledLine) traveledLine.setLatLngs(slices.traveled);
@@ -7343,6 +7537,7 @@ async function decryptLetterContent(encryptedPayload, secret) {
   return {
     title: sanitizeText(value?.title || "Carta", 60),
     content: cleanMessageText(value?.content || "", 1500),
+    originalTitle: sanitizeText(value?.originalTitle || "", 60),
     originalContent: cleanMessageText(value?.originalContent || "", 1500)
   };
 }
@@ -7362,14 +7557,23 @@ function closeLetterViewer() {
 async function openLetterViewer(letterValue, message = {}) {
   const letter = normalizeLetterPayload(letterValue);
   if (!letter || !letterViewerModal) return;
+  if (isMessageMine(message)) {
+    showToast("Abertura restrita", "Somente o destinatário pode abrir esta carta.");
+    return;
+  }
+  const timing = getLetterDeliveryTiming(letter);
+  if (!timing.delivered) {
+    showToast("Carta em trânsito", `A carta poderá ser aberta ao chegar ao local de entrega. Restam ${formatLetterDuration(timing.remainingMs)}.`);
+    return;
+  }
   closeLetterViewer();
-  activeLetterViewerState = { letter, message, roomId: activeRoomId, unlockedContent: null };
+  activeLetterViewerState = { letter, message, roomId: activeRoomId, unlockedContent: null, showingOriginal: false };
   letterViewerModal.hidden = false;
   letterViewerModal.setAttribute("aria-hidden", "false");
   const transport = getLetterTransportOption(letter.transport);
   if (letterViewerIcon) letterViewerIcon.innerHTML = `<i class="fa-solid ${escapeHtml(transport.icon)}" aria-hidden="true"></i>`;
   if (letterViewerHeading) letterViewerHeading.textContent = letter.protection ? "Carta protegida" : "Carta rastreável";
-  if (letterViewerStatus) letterViewerStatus.textContent = `${transport.name}${letter.turbo ? " · turbina ativa" : ""}`;
+  if (letterViewerStatus) letterViewerStatus.textContent = `${transport.name}${letter.turbo ? " · turbina ativa" : ""}${letter.recipientBoosted ? " · acelerada pelo destinatário" : ""}`;
   if (letterViewerDistance) letterViewerDistance.textContent = letter.routeDistanceMeters ? formatLetterDistance(letter.routeDistanceMeters) : "Rota simulada";
   if (letterViewerSpeed) letterViewerSpeed.textContent = `${Math.round(letter.speedKmh || transport.speedKmh)} km/h`;
   if (letterViewerChallengeFeedback) {
@@ -7380,7 +7584,7 @@ async function openLetterViewer(letterValue, message = {}) {
   initializeLetterViewerTracking(letter, transport);
 
   if (!letter.protection) {
-    showLetterViewerContent({ title: letter.title, content: letter.content, originalContent: letter.originalContent });
+    showLetterViewerContent({ title: letter.title, content: letter.content, originalTitle: letter.originalTitle, originalContent: letter.originalContent });
     return;
   }
 
@@ -7410,12 +7614,45 @@ function showLetterViewerChallenge(challenge) {
 
 function showLetterViewerContent(content) {
   if (!activeLetterViewerState) return;
-  activeLetterViewerState.unlockedContent = content;
+  activeLetterViewerState.unlockedContent = {
+    title: sanitizeText(content?.title || "Carta", 60),
+    content: cleanMessageText(content?.content || "", 1500),
+    originalTitle: sanitizeText(content?.originalTitle || "", 60),
+    originalContent: cleanMessageText(content?.originalContent || "", 1500)
+  };
+  activeLetterViewerState.showingOriginal = false;
   if (letterViewerLockPanel) letterViewerLockPanel.hidden = true;
   if (letterViewerContentPanel) letterViewerContentPanel.hidden = false;
-  if (letterViewerHeading) letterViewerHeading.textContent = content.title || "Carta";
-  if (letterViewerTitle) letterViewerTitle.textContent = content.title || "Carta";
-  if (letterViewerContent) letterViewerContent.textContent = content.content || "";
+  renderLetterViewerContentVariant();
+}
+
+function renderLetterViewerContentVariant() {
+  const state = activeLetterViewerState;
+  const content = state?.unlockedContent;
+  if (!state || !content) return;
+  const hasOriginal = Boolean(content.originalContent && content.originalContent !== content.content);
+  if (!hasOriginal) state.showingOriginal = false;
+  const showingOriginal = Boolean(hasOriginal && state.showingOriginal);
+  if (letterViewerHeading) letterViewerHeading.textContent = showingOriginal ? (content.originalTitle || content.title || "Carta") : (content.title || "Carta");
+  if (letterViewerTitle) letterViewerTitle.textContent = showingOriginal ? (content.originalTitle || content.title || "Carta") : (content.title || "Carta");
+  if (letterViewerContent) letterViewerContent.textContent = showingOriginal ? content.originalContent : content.content;
+  if (letterViewerContentLabel) letterViewerContentLabel.textContent = showingOriginal ? "Mensagem original" : "Conteúdo traduzido";
+  if (letterViewerOriginalButton) {
+    letterViewerOriginalButton.hidden = !hasOriginal;
+    letterViewerOriginalButton.title = showingOriginal ? "Voltar para a tradução" : "Ver mensagem original";
+    letterViewerOriginalButton.setAttribute("aria-label", letterViewerOriginalButton.title);
+    letterViewerOriginalButton.setAttribute("aria-pressed", String(showingOriginal));
+    letterViewerOriginalButton.innerHTML = `<i class="fa-solid ${showingOriginal ? "fa-language" : "fa-eye"}" aria-hidden="true"></i>`;
+  }
+}
+
+function toggleLetterViewerOriginalContent() {
+  const state = activeLetterViewerState;
+  if (!state?.unlockedContent) return;
+  const content = state.unlockedContent;
+  if (!content.originalContent || content.originalContent === content.content) return;
+  state.showingOriginal = !state.showingOriginal;
+  renderLetterViewerContentVariant();
 }
 
 async function verifyLetterViewerChallenge() {
@@ -7437,7 +7674,7 @@ async function verifyLetterViewerChallenge() {
     }
     let decrypted = null;
     if (state.letter.encryptedPayload) decrypted = await decryptLetterContent(state.letter.encryptedPayload, answer);
-    if (!decrypted) decrypted = { title: state.letter.title, content: state.letter.content, originalContent: state.letter.originalContent };
+    if (!decrypted) decrypted = { title: state.letter.title, content: state.letter.content, originalTitle: state.letter.originalTitle, originalContent: state.letter.originalContent };
     rememberLetterOpenSecret(state.roomId, state.message?.id || "", answer);
     showLetterViewerContent(decrypted);
     showToast("Carta liberada", "A tradução está correta. A carta foi aberta.");
@@ -7506,7 +7743,7 @@ function initializeLetterViewerTracking(letter, transportInfo) {
     if (letterViewerProgressLabel) letterViewerProgressLabel.textContent = `${percent}%`;
     if (letterViewerProgressFill) letterViewerProgressFill.style.width = `${percent}%`;
     if (letterViewerProgress) letterViewerProgress.setAttribute("aria-valuenow", String(percent));
-    if (letterViewerStatus) letterViewerStatus.textContent = `${transportInfo.name}${letter.turbo ? " · turbina ativa" : ""} · ${timing.delivered ? "entregue" : "em trânsito"}`;
+    if (letterViewerStatus) letterViewerStatus.textContent = `${transportInfo.name}${letter.turbo ? " · turbina ativa" : ""}${letter.recipientBoosted ? " · acelerada pelo destinatário" : ""} · ${timing.delivered ? "entregue" : "em trânsito"}`;
     if (vehicleMarker) vehicleMarker.setLatLng(slices.position);
     if (traveledLine) traveledLine.setLatLngs(slices.traveled);
     if (remainingLine) remainingLine.setLatLngs(slices.remaining);
@@ -7720,6 +7957,7 @@ function createMessageElement(message, animated = false, options = {}) {
       toggleMessageSelection(message);
       return;
     }
+    if (message.letter || message.letterLocationRequest) return;
     openMessageMenu(message, row, bubble);
   });
 
@@ -8379,12 +8617,12 @@ function closeMessageAiTranslationModal() {
 }
 
 async function openMessageAiTranslationModal(message) {
-  const sourceText = getMessageEnglishAiText(message);
+  const sourceText = getMessageManualTranslationSourceText(message) || getMessageEnglishAiText(message);
   if (!sourceText || !messageAiTranslationModal) return;
   const nativeLanguage = getCurrentNativeLanguage();
   messageAiTranslationSource.textContent = sourceText;
   messageAiTranslationTargetLabel.textContent = `Tradução para ${nativeLanguage.label}`;
-  messageAiTranslationSubtitle.textContent = `Do inglês para ${nativeLanguage.label}, usando IA.`;
+  messageAiTranslationSubtitle.textContent = `Mensagem selecionada traduzida para ${nativeLanguage.label}.`;
   messageAiTranslationResult.textContent = "Traduzindo...";
   messageAiTranslationModal.hidden = false;
   messageAiTranslationModal.setAttribute("aria-hidden", "false");
@@ -8397,97 +8635,54 @@ async function openMessageAiTranslationModal(message) {
     });
     if (!messageAiTranslationModal.hidden) messageAiTranslationResult.textContent = result.text || "Tradução indisponível.";
   } catch (error) {
-    console.warn("Não foi possível traduzir o conteúdo inglês do balão.", error);
+    console.warn("Não foi possível traduzir a mensagem selecionada.", error);
     if (!messageAiTranslationModal.hidden) messageAiTranslationResult.textContent = "Não foi possível traduzir este conteúdo agora.";
   }
+}
+
+function getMessageManualTranslationSourceText(message) {
+  if (!message || message.letter || message.letterLocationRequest) return "";
+  return cleanMessageText(
+    message.originalText ||
+    message.text ||
+    message.translatedText ||
+    message.hydration?.sourceText ||
+    message.hydration?.text ||
+    getMessageAudioText(message) ||
+    "",
+    2000
+  );
 }
 
 function openMessageMenu(message, row, bubble) {
   closeReactionPickers();
   closeMessageMenus();
+  if (!message || message.letter || message.letterLocationRequest) return;
 
   const menu = document.createElement("div");
-  const hasOriginal = Boolean(message?.originalText || message?.hydration?.sourceText);
-  const originalWrap = bubble.querySelector(".hydration-source-wrap, .message-original-wrap");
-  const originalButton = bubble.querySelector(".show-original-button");
-  const translationWrap = bubble.querySelector(".hydration-translation-wrap");
-  const translationButton = bubble.querySelector(".show-translation-button");
-
-  menu.className = "message-menu";
+  menu.className = "message-menu message-menu-compact";
   menu.setAttribute("role", "menu");
   menu.dataset.messageId = message?.id || "";
 
-  const geminiVoiceAction = createMenuButton("fa-solid fa-wand-magic-sparkles", "Gerar voz (Gemini)", () => {
-    closeMessageMenus();
-    speakMessage(message);
-  });
-  const browserVoiceAction = createMenuButton("fa-solid fa-volume-high", "Ouvir (navegador)", () => {
-    closeMessageMenus();
-    speakMessageWithBrowserVoice(message);
-  });
+  const audioText = getMessageAudioText(message);
+  if (audioText) {
+    menu.appendChild(createMenuButton("fa-solid fa-volume-high", "Ouvir", () => {
+      closeMessageMenus();
+      speakMessage(message);
+    }));
+  }
 
-  menu.append(geminiVoiceAction, browserVoiceAction);
-
-  if (getMessageEnglishAiText(message)) {
-    menu.appendChild(createMenuButton("fa-solid fa-language", "Traduzir pela IA", () => {
+  const translationSource = getMessageManualTranslationSourceText(message);
+  if (translationSource) {
+    menu.appendChild(createMenuButton("fa-solid fa-language", "Traduzir", () => {
       closeMessageMenus();
       openMessageAiTranslationModal(message);
     }));
   }
 
-  const analyzeAction = createLearningAnalysisMenuButton(message);
-  if (analyzeAction) menu.appendChild(analyzeAction);
-
-  if (translationWrap) {
-    const label = translationWrap.hidden ? "Ver tradução" : "Ocultar tradução";
-    menu.appendChild(createMenuButton("fa-solid fa-language", label, () => {
-      closeMessageMenus();
-      toggleTranslationTextVisibility(message, translationWrap, translationButton);
-    }));
-  }
-
-  const activeRoom = getActiveRoom();
-  const hasGlobalHydration = !isLearningTestMessage(message) && Boolean(message?.hydration?.text || getCurrentUserHydration(message)?.text);
-  const canHydrate = !isLearningTestMessage(message) && !isMessageMine(message) && activeRoom && !isAiRoom(activeRoom) && Boolean(message?.id);
-  const hydrateActionKey = activeRoom && message?.id ? `${activeRoom.id}:${message.id}` : "";
-
-  if (hasGlobalHydration && activeRoom && !isAiRoom(activeRoom) && Boolean(message?.id)) {
-    const isDehydrating = hydrateActionKey && dehydratingMessageIds.has(hydrateActionKey);
-    const dehydrateAction = createMenuButton(
-      isDehydrating ? "fa-solid fa-spinner fa-spin" : "fa-solid fa-droplet-slash",
-      isDehydrating ? "Desidratando..." : "Desidratar",
-      () => dehydrateMessage(message)
-    );
-    dehydrateAction.disabled = isDehydrating;
-    menu.appendChild(dehydrateAction);
-  } else if (canHydrate) {
-    const isHydrating = hydratingMessageIds.has(hydrateActionKey);
-    const hydrateAction = createMenuButton(
-      isHydrating ? "fa-solid fa-spinner fa-spin" : "fa-solid fa-droplet",
-      isHydrating ? "Hidratando..." : "Hidratar",
-      () => hydrateReceivedMessage(message)
-    );
-    hydrateAction.disabled = isHydrating;
-    menu.appendChild(hydrateAction);
-  }
-
-  if (hasOriginal && originalWrap) {
-    const label = originalWrap.hidden ? "Ver original" : "Ocultar original";
-    const icon = originalWrap.hidden ? "fa-regular fa-eye" : "fa-solid fa-eye";
-    menu.appendChild(createMenuButton(icon, label, () => {
-      closeMessageMenus();
-      toggleOriginalTextVisibility(message, originalWrap, originalButton);
-    }));
-  }
-
-  const selectAction = createSelectMessageMenuButton(message);
-  if (selectAction) menu.appendChild(selectAction);
-
-  const editAction = createEditMessageMenuButton(message);
-  if (editAction) menu.appendChild(editAction);
-
   const deleteAction = createDeleteMessageMenuButton(message);
   if (deleteAction) menu.appendChild(deleteAction);
+  if (!menu.childElementCount) return;
 
   document.body.appendChild(menu);
   positionFloatingMenu(menu, bubble);
@@ -13300,7 +13495,7 @@ async function sendPrivateLetter(event) {
       const protectionResult = await createLetterOpenProtection(
         room,
         letterOpenChallengeDirectionSelect?.value || "random",
-        { title: deliveredTitle, content: deliveredContent, originalContent: content }
+        { title: deliveredTitle, content: deliveredContent, originalTitle: title, originalContent: content }
       );
       protection = protectionResult.protection;
       encryptedPayload = protectionResult.encryptedPayload;
@@ -13313,6 +13508,7 @@ async function sendPrivateLetter(event) {
       letter: {
         title: requireTranslation && encryptedPayload ? "Carta protegida" : deliveredTitle,
         content: requireTranslation && encryptedPayload ? "" : deliveredContent,
+        originalTitle: requireTranslation && encryptedPayload ? "" : title,
         originalContent: requireTranslation && encryptedPayload ? "" : content,
         protection,
         encryptedPayload,

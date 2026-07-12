@@ -182,6 +182,7 @@ body.is-authenticated .login-screen {
 .login-card label,
 .modal-card label,
 .mini-form label {
+  display: block;
   margin-bottom: 8px;
   color: var(--text);
   font-size: 0.9rem;
@@ -8225,6 +8226,12 @@ body[data-chat-theme]:not([data-chat-theme="padrao"]) .message-inline-audio-butt
   margin-top: 0;
 }
 
+.letter-compose-card button,
+.letter-compose-card input,
+.letter-compose-card textarea {
+  min-width: 0;
+}
+
 .letter-compose-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.18fr) minmax(300px, 0.82fr);
@@ -8290,11 +8297,6 @@ body[data-chat-theme]:not([data-chat-theme="padrao"]) .message-inline-audio-butt
 
 .letter-field textarea {
   min-height: 176px;
-}
-
-.letter-field span
-{
-  margin-bottom: 5px;
 }
 
 .letter-field input:focus,
@@ -9300,4 +9302,125 @@ body[data-chat-theme]:not([data-chat-theme="padrao"]) .message-inline-audio-butt
     height: 150px;
     min-height: 150px;
   }
+}
+
+
+/* AstroChat v146 - abertura na chegada, aceleração pelo destinatário e menu compacto */
+.message-letter-open-button:disabled {
+  cursor: not-allowed;
+  opacity: .58;
+  filter: grayscale(.18);
+  box-shadow: none;
+  transform: none;
+}
+.message-letter-open-note {
+  display: block;
+  color: rgba(236,250,246,.62);
+  font-size: .68rem;
+  line-height: 1.4;
+  text-align: center;
+}
+.message-letter-accelerate-button {
+  width: 100%;
+  min-height: 40px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 1px solid rgba(255,209,102,.38);
+  border-radius: 13px;
+  color: #fff1ca;
+  background: linear-gradient(135deg,rgba(245,158,11,.20),rgba(190,18,60,.15));
+  font-weight: 900;
+}
+.message-letter-accelerate-button:hover,
+.message-letter-accelerate-button:focus-visible {
+  border-color: rgba(255,209,102,.7);
+  background: linear-gradient(135deg,rgba(245,158,11,.30),rgba(190,18,60,.23));
+}
+.message-letter-boost-panel {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid rgba(255,209,102,.34);
+  border-radius: 14px;
+  background: linear-gradient(135deg,rgba(245,158,11,.10),rgba(91,44,255,.08));
+}
+.message-letter-boost-panel[hidden] { display: none !important; }
+.message-letter-boost-direction {
+  color: #ffd9a1;
+  font-weight: 900;
+}
+.message-letter-boost-prompt {
+  margin: 0;
+  padding: 10px 11px;
+  border-left: 3px solid #ffd166;
+  border-radius: 0 11px 11px 0;
+  background: rgba(0,0,0,.15);
+  font-size: .82rem;
+  font-weight: 800;
+  line-height: 1.42;
+}
+.message-letter-boost-answer-row {
+  display: grid;
+  grid-template-columns: minmax(0,1fr) auto;
+  gap: 8px;
+}
+.message-letter-boost-input {
+  min-width: 0;
+  width: 100%;
+  border: 1px solid transparent;
+  outline: none;
+  border-radius: 12px;
+  padding: 10px 11px;
+  color: var(--text);
+  background: rgba(255,255,255,.08);
+}
+.message-letter-boost-input:focus {
+  border-color: rgba(255,209,102,.58);
+  box-shadow: 0 0 0 4px rgba(245,158,11,.12);
+}
+.message-letter-boost-input.is-error { border-color: rgba(239,107,115,.86); }
+.message-letter-boost-feedback {
+  min-height: 17px;
+  color: rgba(236,250,246,.65);
+  font-size: .68rem;
+}
+.message-letter-boost-feedback.is-error { color: #ffb4ba; }
+.message-letter-boosted-note {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  padding: 8px 10px;
+  border-radius: 11px;
+  color: #fff1ca;
+  background: rgba(245,158,11,.12);
+  font-size: .7rem;
+  font-weight: 850;
+}
+.letter-viewer-content-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.letter-viewer-content-head > small {
+  color: var(--accent-2);
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: .07em;
+}
+.letter-viewer-original-button {
+  min-width: 38px;
+  width: 38px;
+  height: 38px;
+  border-radius: 12px;
+  color: #9dffe0;
+  background: rgba(16,180,134,.12);
+}
+.message-menu-compact { min-width: 164px; }
+.message-menu-compact button:last-child i.fa-trash-can { color: #ff9ca4; }
+@media (max-width: 560px) {
+  .message-letter-boost-answer-row { grid-template-columns: 1fr; }
 }
