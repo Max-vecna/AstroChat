@@ -1028,7 +1028,7 @@
           <div class="letter-viewer-content-actions" aria-label="Ações da carta">
             <button class="small-action letter-viewer-action-button" id="letterViewerListenButton" type="button" title="Ouvir carta"><i class="fa-solid fa-volume-high" aria-hidden="true"></i><span>Ouvir</span></button>
             <button class="small-action letter-viewer-action-button" id="letterViewerTranslateButton" type="button" title="Traduzir carta"><i class="fa-solid fa-language" aria-hidden="true"></i><span>Traduzir</span></button>
-            <button class="icon-button letter-viewer-original-button" id="letterViewerOriginalButton" type="button" hidden aria-label="Ver mensagem original" title="Ver mensagem original" aria-pressed="false"><i class="fa-solid fa-eye"></i></button>
+            <button class="small-action letter-viewer-action-button letter-viewer-original-button" id="letterViewerOriginalButton" type="button" hidden aria-label="Mostrar mensagem original" title="Mostrar mensagem original" aria-pressed="false"><i class="fa-solid fa-eye" aria-hidden="true"></i><span>Mostrar original</span></button>
           </div>
         </div>
         <h2 id="letterViewerTitle">Carta</h2>
@@ -1048,6 +1048,31 @@
       </section>
     </article>
   </section>
+
+  <section class="modal-backdrop letter-acceleration-backdrop" id="letterAccelerationModal" hidden aria-hidden="true">
+    <article class="modal-card letter-acceleration-card" role="dialog" aria-modal="true" aria-labelledby="letterAccelerationTitle">
+      <header class="modal-header letter-acceleration-header">
+        <div>
+          <strong id="letterAccelerationTitle">Acelerar entrega</strong>
+          <span>Traduza a frase para reduzir pela metade o tempo restante.</span>
+        </div>
+        <button class="icon-button" id="closeLetterAccelerationButton" type="button" aria-label="Fechar aceleração"><i class="fa-solid fa-xmark" aria-hidden="true"></i></button>
+      </header>
+      <section class="letter-acceleration-challenge">
+        <small class="letter-acceleration-direction" id="letterAccelerationDirection">Traduza a frase</small>
+        <blockquote id="letterAccelerationPrompt"></blockquote>
+        <label class="letter-acceleration-field" for="letterAccelerationInput">
+          <span>Sua tradução</span>
+          <input id="letterAccelerationInput" type="text" maxlength="220" autocomplete="off" placeholder="Digite a tradução">
+        </label>
+        <small class="letter-acceleration-feedback" id="letterAccelerationFeedback" aria-live="polite">A resposta correta acelera somente o trecho restante da rota.</small>
+      </section>
+      <footer class="letter-acceleration-footer">
+        <button class="small-action letter-acceleration-confirm" id="letterAccelerationConfirmButton" type="button"><i class="fa-solid fa-bolt" aria-hidden="true"></i><span>Acelerar entrega</span></button>
+      </footer>
+    </article>
+  </section>
+
   <section class="toast-region" id="toastRegion" aria-live="polite" aria-atomic="false"></section>
   <template id="roomItemTemplate">
     <button class="chat-item" type="button">
