@@ -51,7 +51,7 @@ const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
 const STANDARD_WEB_PUSH_PUBLIC_VAPID_KEY = "BLE7nXv1JR25D7PSPJgHRXcAIQUhe1R0XOhFPGheglqfIpNIo9G95_lSTDtFUNx4GjWZHFaRkdlMylcItINrvAs";
-const CHAT_VERSION = "v140";
+const CHAT_VERSION = "v145";
 // Backend externo opcional para enviar push com o site fechado.
 // Depois de publicar o Cloudflare Worker, cole aqui a URL dele.
 // Exemplo: https://astrochat-push.seu-usuario.workers.dev/notify
@@ -157,6 +157,159 @@ const NATIVE_LANGUAGE_OPTIONS = [
   { code: "ko", name: "coreano", label: "Coreano" },
   { code: "zh", name: "chinês", label: "Chinês" }
 ];
+
+
+const LETTER_TURBO_MULTIPLIER = 0.5;
+const LETTER_TURBO_SPEED_MULTIPLIER = 2;
+const LETTER_MIN_DURATION_MS = 5000;
+const LETTER_MAX_DURATION_MS = 365 * 24 * 60 * 60 * 1000;
+const LETTER_DEFAULT_TRANSPORT_ID = "droid";
+const LETTER_ROUTE_ENDPOINT = "https://router.project-osrm.org/route/v1/driving";
+const LETTER_ROUTE_TIMEOUT_MS = 15000;
+const LETTER_ROUTE_MAX_POINTS = 220;
+const LETTER_OPEN_SECRET_STORAGE_KEY = "astrochat-letter-open-secrets-v1";
+const LETTER_TRANSPORT_OPTIONS = Object.freeze({
+  postal: {
+    id: "postal",
+    name: "Correio Lunar",
+    icon: "fa-person-walking",
+    speedKmh: 5,
+    speedLabel: "Caminhada · 5 km/h",
+    trajectoryMode: "ground",
+    trajectoryLabel: "Percurso pelas vias em velocidade de caminhada",
+    fallbackDurationMs: 75000,
+    requiresChallenge: false
+  },
+  rover: {
+    id: "rover",
+    name: "Rover Postal",
+    icon: "fa-truck",
+    speedKmh: 45,
+    speedLabel: "Terrestre · 45 km/h",
+    trajectoryMode: "ground",
+    trajectoryLabel: "Rota terrestre pelas ruas e vias disponíveis",
+    fallbackDurationMs: 55000,
+    requiresChallenge: false
+  },
+  droid: {
+    id: "droid",
+    name: "Droid-X",
+    icon: "fa-robot",
+    speedKmh: 18,
+    speedLabel: "Seguro · 18 km/h",
+    trajectoryMode: "ground",
+    trajectoryLabel: "Rota terrestre segura pelas vias do mapa",
+    fallbackDurationMs: 35000,
+    requiresChallenge: false
+  },
+  drone: {
+    id: "drone",
+    name: "Sky-Drone",
+    icon: "fa-helicopter",
+    speedKmh: 90,
+    speedLabel: "Aéreo · 90 km/h",
+    trajectoryMode: "air",
+    trajectoryLabel: "Trajeto aéreo direto entre origem e destino",
+    fallbackDurationMs: 20000,
+    requiresChallenge: true
+  },
+  shuttle: {
+    id: "shuttle",
+    name: "Nave Courier",
+    icon: "fa-shuttle-space",
+    speedKmh: 250,
+    speedLabel: "Orbital · 250 km/h",
+    trajectoryMode: "orbital",
+    trajectoryLabel: "Arco orbital acima da rota terrestre",
+    fallbackDurationMs: 14000,
+    requiresChallenge: true
+  },
+  rocket: {
+    id: "rocket",
+    name: "Astro-Rocket",
+    icon: "fa-rocket",
+    speedKmh: 500,
+    speedLabel: "Expresso · 500 km/h",
+    trajectoryMode: "express",
+    trajectoryLabel: "Corredor expresso em arco de alta altitude",
+    fallbackDurationMs: 9000,
+    requiresChallenge: true
+  }
+});
+const LETTER_BASE_UNLOCKED_TRANSPORT_IDS = Object.freeze(
+  Object.values(LETTER_TRANSPORT_OPTIONS)
+    .filter((transport) => !transport.requiresChallenge)
+    .map((transport) => transport.id)
+);
+const LETTER_CHALLENGE_PHRASES = Object.freeze([
+  {
+    pt: "A carta está a caminho.",
+    en: "The letter is on its way.",
+    es: "La carta está en camino.",
+    fr: "La lettre est en route.",
+    it: "La lettera è in viaggio.",
+    de: "Der Brief ist unterwegs.",
+    ja: "手紙は配送中です。",
+    ko: "편지가 배송 중입니다.",
+    zh: "信件正在路上。"
+  },
+  {
+    pt: "O mapa mostra a rota.",
+    en: "The map shows the route.",
+    es: "El mapa muestra la ruta.",
+    fr: "La carte montre l’itinéraire.",
+    it: "La mappa mostra il percorso.",
+    de: "Die Karte zeigt die Route.",
+    ja: "地図にルートが表示されます。",
+    ko: "지도에 경로가 표시됩니다.",
+    zh: "地图显示路线。"
+  },
+  {
+    pt: "A entrega chegará em breve.",
+    en: "The delivery will arrive soon.",
+    es: "La entrega llegará pronto.",
+    fr: "La livraison arrivera bientôt.",
+    it: "La consegna arriverà presto.",
+    de: "Die Lieferung kommt bald an.",
+    ja: "配達はまもなく到着します。",
+    ko: "배송이 곧 도착합니다.",
+    zh: "快递很快就会到达。"
+  },
+  {
+    pt: "Ative a turbina para acelerar.",
+    en: "Activate the turbine to speed up.",
+    es: "Activa la turbina para acelerar.",
+    fr: "Activez la turbine pour accélérer.",
+    it: "Attiva la turbina per accelerare.",
+    de: "Aktiviere die Turbine, um zu beschleunigen.",
+    ja: "加速するためにタービンを起動してください。",
+    ko: "속도를 높이려면 터빈을 활성화하세요.",
+    zh: "启动涡轮以加速。"
+  },
+  {
+    pt: "O destino foi confirmado.",
+    en: "The destination has been confirmed.",
+    es: "El destino ha sido confirmado.",
+    fr: "La destination a été confirmée.",
+    it: "La destinazione è stata confermata.",
+    de: "Das Ziel wurde bestätigt.",
+    ja: "目的地が確認されました。",
+    ko: "목적지가 확인되었습니다.",
+    zh: "目的地已确认。"
+  },
+  {
+    pt: "A mensagem viaja com segurança.",
+    en: "The message travels safely.",
+    es: "El mensaje viaja de forma segura.",
+    fr: "Le message voyage en toute sécurité.",
+    it: "Il messaggio viaggia in sicurezza.",
+    de: "Die Nachricht reist sicher.",
+    ja: "メッセージは安全に運ばれます。",
+    ko: "메시지가 안전하게 전달됩니다.",
+    zh: "消息正在安全传送。"
+  }
+]);
+
 const SPACE_AVATAR_OPTIONS = [
   "fa-solid fa-user-astronaut",
   "fa-solid fa-rocket",
@@ -424,7 +577,73 @@ const letterMessageInput = document.querySelector("#letterMessageInput");
 const requestLetterLocationButton = document.querySelector("#requestLetterLocationButton");
 const letterLocationStatus = document.querySelector("#letterLocationStatus");
 const letterMap = document.querySelector("#letterMap");
+const letterRouteNote = document.querySelector("#letterRouteNote");
+const letterRoutePreview = document.querySelector("#letterRoutePreview");
+const letterRoutePreviewTransport = document.querySelector("#letterRoutePreviewTransport");
+const letterRoutePreviewTrajectory = document.querySelector("#letterRoutePreviewTrajectory");
+const letterRoutePreviewDistance = document.querySelector("#letterRoutePreviewDistance");
+const letterRoutePreviewSpeed = document.querySelector("#letterRoutePreviewSpeed");
+const letterRoutePreviewEta = document.querySelector("#letterRoutePreviewEta");
+const letterRoutePreviewStatus = document.querySelector("#letterRoutePreviewStatus");
+const letterTransportPicker = document.querySelector("#letterTransportPicker");
+const letterDeliverySummary = document.querySelector("#letterDeliverySummary");
+const letterChallengePanel = document.querySelector("#letterChallengePanel");
+const letterChallengeEyebrow = document.querySelector("#letterChallengeEyebrow");
+const letterChallengeDirection = document.querySelector("#letterChallengeDirection");
+const letterChallengePrompt = document.querySelector("#letterChallengePrompt");
+const letterChallengeInput = document.querySelector("#letterChallengeInput");
+const letterChallengeSubmitButton = document.querySelector("#letterChallengeSubmitButton");
+const letterChallengeRefreshButton = document.querySelector("#letterChallengeRefreshButton");
+const letterChallengeFeedback = document.querySelector("#letterChallengeFeedback");
+const letterTurboButton = document.querySelector("#letterTurboButton");
+const letterTurboStatus = document.querySelector("#letterTurboStatus");
+const letterRequireTranslationCheckbox = document.querySelector("#letterRequireTranslationCheckbox");
+const letterOpenChallengeDirectionSelect = document.querySelector("#letterOpenChallengeDirectionSelect");
+const letterProtectionStatus = document.querySelector("#letterProtectionStatus");
+const letterViewerModal = document.querySelector("#letterViewerModal");
+const closeLetterViewerButton = document.querySelector("#closeLetterViewerButton");
+const letterViewerIcon = document.querySelector("#letterViewerIcon");
+const letterViewerHeading = document.querySelector("#letterViewerHeading");
+const letterViewerStatus = document.querySelector("#letterViewerStatus");
+const letterViewerLockPanel = document.querySelector("#letterViewerLockPanel");
+const letterViewerChallengeDirection = document.querySelector("#letterViewerChallengeDirection");
+const letterViewerChallengePrompt = document.querySelector("#letterViewerChallengePrompt");
+const letterViewerChallengeInput = document.querySelector("#letterViewerChallengeInput");
+const letterViewerChallengeButton = document.querySelector("#letterViewerChallengeButton");
+const letterViewerChallengeFeedback = document.querySelector("#letterViewerChallengeFeedback");
+const letterViewerContentPanel = document.querySelector("#letterViewerContentPanel");
+const letterViewerTitle = document.querySelector("#letterViewerTitle");
+const letterViewerContent = document.querySelector("#letterViewerContent");
+const letterViewerDistance = document.querySelector("#letterViewerDistance");
+const letterViewerSpeed = document.querySelector("#letterViewerSpeed");
+const letterViewerEta = document.querySelector("#letterViewerEta");
+const letterViewerProgress = document.querySelector("#letterViewerProgress");
+const letterViewerProgressFill = document.querySelector("#letterViewerProgressFill");
+const letterViewerProgressLabel = document.querySelector("#letterViewerProgressLabel");
+const letterViewerMap = document.querySelector("#letterViewerMap");
+const letterViewerMapCaption = document.querySelector("#letterViewerMapCaption");
 let activeLetterMap = null;
+let activeLetterMapRouteLayer = null;
+let activeLetterMapEndpointLayer = null;
+let letterComposerRouteState = {
+  requestId: 0,
+  destinationKey: "",
+  destination: null,
+  originResult: null,
+  groundRoute: null,
+  activeRoute: null,
+  activeTransportId: "",
+  loading: false,
+  error: ""
+};
+let activeLetterViewerMap = null;
+let activeLetterViewerTimer = 0;
+let activeLetterViewerState = null;
+let letterChallengeState = null;
+let letterRecipientNativeLanguage = null;
+let letterUnlockedTransportIds = new Set(LETTER_BASE_UNLOCKED_TRANSPORT_IDS);
+let letterTurboUnlocked = false;
+let letterTurboEnabled = false;
 const inviteModal = document.querySelector("#inviteModal");
 const inviteForm = document.querySelector("#inviteForm");
 const inviteFriendsList = document.querySelector("#inviteFriendsList");
@@ -936,6 +1155,25 @@ letterButton?.addEventListener("click", openLetterModal);
 closeLetterButton?.addEventListener("click", closeLetterModal);
 letterModal?.addEventListener("click", (event) => { if (event.target === letterModal) closeLetterModal(); });
 letterForm?.addEventListener("submit", sendPrivateLetter);
+letterTransportPicker?.addEventListener("change", handleLetterTransportChange);
+letterChallengeSubmitButton?.addEventListener("click", verifyLetterTranslationChallenge);
+letterChallengeRefreshButton?.addEventListener("click", refreshLetterTranslationChallenge);
+letterTurboButton?.addEventListener("click", handleLetterTurboButtonClick);
+letterRequireTranslationCheckbox?.addEventListener("change", syncLetterProtectionComposerState);
+letterOpenChallengeDirectionSelect?.addEventListener("change", syncLetterProtectionComposerState);
+letterChallengeInput?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  verifyLetterTranslationChallenge();
+});
+closeLetterViewerButton?.addEventListener("click", closeLetterViewer);
+letterViewerModal?.addEventListener("click", (event) => { if (event.target === letterViewerModal) closeLetterViewer(); });
+letterViewerChallengeButton?.addEventListener("click", verifyLetterViewerChallenge);
+letterViewerChallengeInput?.addEventListener("keydown", (event) => {
+  if (event.key !== "Enter") return;
+  event.preventDefault();
+  verifyLetterViewerChallenge();
+});
 requestLetterLocationButton?.addEventListener("click", requestPrivateLetterLocation);
 closeInviteModalButton.addEventListener("click", closeInviteModal);
 cancelInviteButton.addEventListener("click", closeInviteModal);
@@ -5802,6 +6040,8 @@ function createLocalMessageFromOfflineQueueItem(room, item) {
 function stripMessageForCache(message) {
   return {
     id: message.id || "",
+    letter: normalizeLetterPayload(message.letter),
+    letterLocationRequest: normalizeLetterLocationRequest(message.letterLocationRequest),
     text: message.text || "",
     originalText: message.originalText || "",
     translatedText: message.translatedText || "",
@@ -6569,15 +6809,102 @@ async function retryLocalAiTranslationMessage(room, messageId, button = null) {
   await translateLocalAiMessage(room.id, message.id, sourceText, language);
 }
 
+function getLetterTransportOption(transportId) {
+  return LETTER_TRANSPORT_OPTIONS[transportId] || LETTER_TRANSPORT_OPTIONS[LETTER_DEFAULT_TRANSPORT_ID];
+}
+
+function normalizeLetterRouteCoordinates(value) {
+  if (!Array.isArray(value)) return [];
+  return value.slice(0, LETTER_ROUTE_MAX_POINTS).map((point) => {
+    if (!Array.isArray(point) || point.length < 2) return null;
+    const latitude = Number(point[0]);
+    const longitude = Number(point[1]);
+    return Number.isFinite(latitude) && Number.isFinite(longitude) ? [latitude, longitude] : null;
+  }).filter(Boolean);
+}
+
+function normalizeLetterProtection(value) {
+  if (!value || typeof value !== "object" || value.enabled !== true) return null;
+  const challenge = value.challenge && typeof value.challenge === "object" ? value.challenge : {};
+  const answerHash = sanitizeText(challenge.answerHash || "", 128);
+  const sourceText = cleanMessageText(challenge.sourceText || "", 260);
+  if (!answerHash || !sourceText) return null;
+  return {
+    enabled: true,
+    challenge: {
+      sourceText,
+      sourceLanguageCode: sanitizeText(challenge.sourceLanguageCode || "", 16),
+      sourceLanguageLabel: sanitizeText(challenge.sourceLanguageLabel || "Idioma de origem", 48),
+      targetLanguageCode: sanitizeText(challenge.targetLanguageCode || "", 16),
+      targetLanguageLabel: sanitizeText(challenge.targetLanguageLabel || "Idioma de destino", 48),
+      direction: sanitizeText(challenge.direction || "", 32),
+      answerHash
+    }
+  };
+}
+
+function normalizeLetterEncryptedPayload(value) {
+  if (!value || typeof value !== "object") return null;
+  const salt = sanitizeText(value.salt || "", 128);
+  const iv = sanitizeText(value.iv || "", 128);
+  const ciphertext = String(value.ciphertext || "").slice(0, 12000);
+  if (!salt || !iv || !ciphertext) return null;
+  return { version: 1, salt, iv, ciphertext };
+}
+
 function normalizeLetterPayload(value) {
   if (!value || typeof value !== "object") return null;
+  const protection = normalizeLetterProtection(value.protection);
+  const encryptedPayload = normalizeLetterEncryptedPayload(value.encryptedPayload);
   const title = sanitizeText(value.title || "", 60);
   const content = cleanMessageText(value.content || "", 1500);
-  if (!title || !content) return null;
-  const transport = ["droid", "drone", "rocket"].includes(value.transport) ? value.transport : "droid";
+  if (!protection && (!title || !content)) return null;
+  if (protection && !encryptedPayload && (!title || !content)) return null;
+
+  const transport = getLetterTransportOption(value.transport).id;
+  const transportInfo = getLetterTransportOption(transport);
   const latitude = Number(value.latitude);
   const longitude = Number(value.longitude);
-  return { title, content, originalContent: cleanMessageText(value.originalContent || "", 1500), transport, status: value.status === "delivered" ? "delivered" : "transit", sentAtMillis: Number(value.sentAtMillis || Date.now()), ...(Number.isFinite(latitude) && Number.isFinite(longitude) ? { latitude, longitude } : {}) };
+  const originLatitude = Number(value.originLatitude);
+  const originLongitude = Number(value.originLongitude);
+  const sentAtMillis = Number(value.sentAtMillis || Date.now());
+  const requestedDuration = Number(value.durationMs || 0);
+  const fallbackDuration = Number(transportInfo.fallbackDurationMs || 35000);
+  const durationMs = Math.max(
+    LETTER_MIN_DURATION_MS,
+    Math.min(LETTER_MAX_DURATION_MS, Number.isFinite(requestedDuration) && requestedDuration > 0 ? requestedDuration : fallbackDuration)
+  );
+  const arrivalAtMillis = Number(value.arrivalAtMillis || sentAtMillis + durationMs);
+  const routeMode = ["gps", "direct", "location", "approximate", "simulated"].includes(value.routeMode) ? value.routeMode : "simulated";
+  const trajectoryMode = ["ground", "air", "orbital", "express"].includes(value.trajectoryMode)
+    ? value.trajectoryMode
+    : (transportInfo.trajectoryMode || "ground");
+  const routeCoordinates = normalizeLetterRouteCoordinates(value.routeCoordinates);
+  const routeDistanceMeters = Math.max(0, Number(value.routeDistanceMeters || 0) || 0);
+  const speedKmh = Math.max(1, Number(value.speedKmh || transportInfo.speedKmh || 1));
+
+  return {
+    title: title || "Carta protegida",
+    content,
+    originalContent: cleanMessageText(value.originalContent || "", 1500),
+    transport,
+    turbo: Boolean(value.turbo),
+    status: value.status === "delivered" ? "delivered" : "transit",
+    sentAtMillis,
+    durationMs,
+    arrivalAtMillis: Number.isFinite(arrivalAtMillis) ? arrivalAtMillis : sentAtMillis + durationMs,
+    routeMode,
+    trajectoryMode,
+    routeProvider: sanitizeText(value.routeProvider || "", 32),
+    routeDistanceMeters,
+    speedKmh,
+    routeCoordinates,
+    originMode: sanitizeText(value.originMode || "", 24),
+    protection,
+    encryptedPayload,
+    ...(Number.isFinite(latitude) && Number.isFinite(longitude) ? { latitude, longitude } : {}),
+    ...(Number.isFinite(originLatitude) && Number.isFinite(originLongitude) ? { originLatitude, originLongitude } : {})
+  };
 }
 
 function normalizeLetterLocationRequest(value) {
@@ -6591,32 +6918,603 @@ function normalizeLetterLocationRequest(value) {
   };
 }
 
-function createLetterMessageElement(letterValue) {
+function getLetterDeliveryTiming(letter, now = Date.now()) {
+  const sentAtMillis = Number(letter?.sentAtMillis || now);
+  const fallbackDuration = Number(getLetterTransportOption(letter?.transport).fallbackDurationMs || 35000);
+  const durationMs = Math.max(LETTER_MIN_DURATION_MS, Number(letter?.durationMs || 0) || fallbackDuration);
+  const elapsedMs = Math.max(0, now - sentAtMillis);
+  const forcedDelivered = letter?.status === "delivered";
+  const progress = forcedDelivered ? 1 : Math.max(0, Math.min(1, elapsedMs / durationMs));
+  const remainingMs = forcedDelivered ? 0 : Math.max(0, durationMs - elapsedMs);
+  return { sentAtMillis, durationMs, elapsedMs, progress, remainingMs, delivered: progress >= 1 };
+}
+
+function formatLetterDuration(durationMs, options = {}) {
+  const totalSeconds = Math.max(0, Math.ceil(Number(durationMs || 0) / 1000));
+  if (totalSeconds < 60) return `${totalSeconds}s`;
+  const days = Math.floor(totalSeconds / 86400);
+  const hours = Math.floor((totalSeconds % 86400) / 3600);
+  const minutes = Math.floor((totalSeconds % 3600) / 60);
+  const seconds = totalSeconds % 60;
+  if (days) return `${days}d${hours ? ` ${hours}h` : ""}`;
+  if (hours) return `${hours}h${minutes ? ` ${minutes}min` : ""}`;
+  if (!seconds || options.compact) return `${minutes} min`;
+  return `${minutes} min ${seconds}s`;
+}
+
+function formatLetterDistance(distanceMeters) {
+  const meters = Math.max(0, Number(distanceMeters || 0));
+  if (meters < 1000) return `${Math.round(meters)} m`;
+  const kilometers = meters / 1000;
+  return `${kilometers < 10 ? kilometers.toFixed(1) : kilometers.toFixed(0)} km`;
+}
+
+function getLetterMapRoute(letter) {
+  const storedCoordinates = normalizeLetterRouteCoordinates(letter?.routeCoordinates);
+  if (storedCoordinates.length >= 2) {
+    return {
+      origin: storedCoordinates[0],
+      destination: storedCoordinates.at(-1),
+      coordinates: storedCoordinates,
+      mode: letter.routeMode === "gps" ? "gps" : "direct"
+    };
+  }
+
+  const destinationLatitude = Number(letter?.latitude);
+  const destinationLongitude = Number(letter?.longitude);
+  const originLatitude = Number(letter?.originLatitude);
+  const originLongitude = Number(letter?.originLongitude);
+
+  if (
+    Number.isFinite(destinationLatitude) && Number.isFinite(destinationLongitude) &&
+    Number.isFinite(originLatitude) && Number.isFinite(originLongitude)
+  ) {
+    const coordinates = [[originLatitude, originLongitude], [destinationLatitude, destinationLongitude]];
+    return { origin: coordinates[0], destination: coordinates[1], coordinates, mode: "direct" };
+  }
+
+  if (Number.isFinite(destinationLatitude) && Number.isFinite(destinationLongitude)) {
+    const approximateOrigin = createApproximateLetterOrigin(
+      { latitude: destinationLatitude, longitude: destinationLongitude },
+      Number(letter?.sentAtMillis || Date.now())
+    );
+    const coordinates = [[approximateOrigin.latitude, approximateOrigin.longitude], [destinationLatitude, destinationLongitude]];
+    return { origin: coordinates[0], destination: coordinates[1], coordinates, mode: "approximate" };
+  }
+
+  const seed = Number(letter?.sentAtMillis || Date.now());
+  const latitude = ((seed % 18) - 9) * 0.7;
+  const longitudeOffset = 24 + (seed % 12);
+  const coordinates = [[latitude - 5, -longitudeOffset], [latitude + 5, longitudeOffset]];
+  return { origin: coordinates[0], destination: coordinates[1], coordinates, mode: "simulated" };
+}
+
+function calculateLetterPointDistanceMeters(pointA, pointB) {
+  if (!pointA || !pointB) return 0;
+  const earthRadius = 6371000;
+  const lat1 = Number(pointA[0]) * Math.PI / 180;
+  const lat2 = Number(pointB[0]) * Math.PI / 180;
+  const deltaLat = (Number(pointB[0]) - Number(pointA[0])) * Math.PI / 180;
+  const deltaLng = (Number(pointB[1]) - Number(pointA[1])) * Math.PI / 180;
+  const value = Math.sin(deltaLat / 2) ** 2 + Math.cos(lat1) * Math.cos(lat2) * Math.sin(deltaLng / 2) ** 2;
+  return earthRadius * 2 * Math.atan2(Math.sqrt(value), Math.sqrt(1 - value));
+}
+
+function getLetterRouteProgressSlices(coordinates, progress) {
+  const points = normalizeLetterRouteCoordinates(coordinates);
+  if (points.length < 2) {
+    const point = points[0] || [0, 0];
+    return { position: point, traveled: [point], remaining: [point] };
+  }
+  const segments = [];
+  let totalDistance = 0;
+  for (let index = 1; index < points.length; index += 1) {
+    const distance = calculateLetterPointDistanceMeters(points[index - 1], points[index]);
+    segments.push(distance);
+    totalDistance += distance;
+  }
+  const targetDistance = totalDistance * Math.max(0, Math.min(1, Number(progress || 0)));
+  const traveled = [points[0]];
+  let accumulated = 0;
+  let position = points[0];
+  let splitIndex = 1;
+  for (let index = 1; index < points.length; index += 1) {
+    const segmentDistance = segments[index - 1];
+    if (accumulated + segmentDistance >= targetDistance) {
+      const ratio = segmentDistance > 0 ? (targetDistance - accumulated) / segmentDistance : 0;
+      position = [
+        points[index - 1][0] + (points[index][0] - points[index - 1][0]) * ratio,
+        points[index - 1][1] + (points[index][1] - points[index - 1][1]) * ratio
+      ];
+      traveled.push(position);
+      splitIndex = index;
+      break;
+    }
+    traveled.push(points[index]);
+    accumulated += segmentDistance;
+    position = points[index];
+    splitIndex = index + 1;
+  }
+  if (targetDistance >= totalDistance) {
+    position = points.at(-1);
+    return { position, traveled: points, remaining: [position] };
+  }
+  return { position, traveled, remaining: [position, ...points.slice(splitIndex)] };
+}
+
+function getLetterRouteCaption(letter, mapRoute) {
+  const transport = getLetterTransportOption(letter?.transport);
+  const trajectoryMode = letter?.trajectoryMode || transport.trajectoryMode || "ground";
+  if (trajectoryMode === "air") return "Trajeto aéreo direto entre a origem e o destino.";
+  if (trajectoryMode === "orbital") return "Trajetória em arco orbital calculada para a Nave Courier.";
+  if (trajectoryMode === "express") return "Corredor expresso em arco de alta altitude para o Astro-Rocket.";
+  if (mapRoute.mode === "gps") return "Rota GPS calculada pelas vias entre a origem e o destino.";
+  if (mapRoute.mode === "direct") return "Rota terrestre direta usada porque o serviço de navegação não respondeu.";
+  if (mapRoute.mode === "approximate") return "Origem aproximada; o destino compartilhado permanece exato.";
+  return "Rota simulada porque ainda não há duas localizações disponíveis.";
+}
+
+function createLetterMessageElement(letterValue, message = {}) {
   const letter = normalizeLetterPayload(letterValue);
   const card = document.createElement("article");
-  const transportInfo = {
-    droid: { icon: "fa-robot", name: "Droid-X" },
-    drone: { icon: "fa-helicopter", name: "Sky-Drone" },
-    rocket: { icon: "fa-rocket", name: "Astro-Rocket" }
-  }[letter?.transport || "droid"];
-  card.className = "message-letter";
-  const delivered = Date.now() - Number(letter?.sentAtMillis || 0) >= 8000;
-  card.innerHTML = `<div class="message-letter-head"><i class="fa-solid ${transportInfo.icon}" aria-hidden="true"></i><span><strong>${escapeHtml(letter?.title || "Carta")}</strong><small class="message-letter-status">${escapeHtml(transportInfo.name)} · ${delivered ? "entregue" : "em trânsito"}</small></span></div><p class="message-letter-text">${escapeHtml(letter?.content || "")}</p><div class="message-letter-route" aria-hidden="true"><span></span></div>`;
-  if (!delivered) {
-    window.setTimeout(() => {
-      const status = card.querySelector(".message-letter-status");
-      if (status) status.textContent = `${transportInfo.name} · entregue`;
-    }, Math.max(0, 8000 - (Date.now() - Number(letter?.sentAtMillis || 0))));
-  }
-  if (Number.isFinite(letter?.latitude) && Number.isFinite(letter?.longitude)) {
-    const mapButton = document.createElement("button");
-    mapButton.type = "button";
-    mapButton.className = "small-action";
-    mapButton.innerHTML = '<i class="fa-solid fa-map-location-dot"></i><span>Ver rota no mapa</span>';
-    mapButton.addEventListener("click", (event) => { event.stopPropagation(); openLetterModal(); });
-    card.appendChild(mapButton);
-  }
+  const transportInfo = getLetterTransportOption(letter?.transport);
+  const timing = getLetterDeliveryTiming(letter);
+  const progressPercent = Math.round(timing.progress * 100);
+  const protectedLabel = letter?.protection ? " · protegida por tradução" : "";
+  const turboLabel = letter?.turbo ? " · turbina ativa" : "";
+  const distanceLabel = letter?.routeDistanceMeters
+    ? formatLetterDistance(letter.routeDistanceMeters)
+    : "Calculando rota";
+
+  card.className = "message-letter message-letter-compact message-letter-with-map";
+  card.dataset.messageId = message?.id || "";
+  card.innerHTML = `
+    <header class="message-letter-head">
+      <span class="message-letter-transport-icon"><i class="fa-solid ${escapeHtml(transportInfo.icon)}" aria-hidden="true"></i></span>
+      <span class="message-letter-title-wrap">
+        <strong>${letter?.protection ? "Carta protegida" : "Carta rastreável"}</strong>
+        <small class="message-letter-status">${escapeHtml(transportInfo.name)}${escapeHtml(turboLabel)}${escapeHtml(protectedLabel)} · ${timing.delivered ? "entregue" : `${formatLetterDuration(timing.remainingMs)} restantes`}</small>
+      </span>
+      <span class="message-letter-percent">${progressPercent}%</span>
+    </header>
+    <section class="message-letter-tracking" aria-label="Rastreamento da carta">
+      <div class="message-letter-tracking-meta">
+        <span class="message-letter-distance"><i class="fa-solid fa-route" aria-hidden="true"></i>${escapeHtml(distanceLabel)}</span>
+        <strong class="message-letter-eta">${timing.delivered ? "Chegou ao destino" : `Chegada em ${formatLetterDuration(timing.remainingMs)}`}</strong>
+      </div>
+      <div class="message-letter-map" aria-label="Mapa com a rota e a posição atual da carta"></div>
+      <small class="message-letter-map-caption"></small>
+      <div class="message-letter-route" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${progressPercent}"><span style="width:${progressPercent}%"></span></div>
+    </section>
+    <button class="message-letter-open-button" type="button"><i class="fa-solid fa-envelope-open-text" aria-hidden="true"></i><span>Abrir carta</span></button>
+  `;
+
+  const button = card.querySelector(".message-letter-open-button");
+  button?.addEventListener("click", (event) => {
+    event.preventDefault();
+    event.stopPropagation();
+    openLetterViewer(letter, message);
+  });
+
+  const mapElement = card.querySelector(".message-letter-map");
+  ["click", "pointerdown", "pointermove", "pointerup", "touchstart", "touchmove", "touchend", "wheel", "dblclick"].forEach((eventName) => {
+    mapElement?.addEventListener(eventName, (event) => event.stopPropagation(), { passive: eventName.startsWith("touch") });
+  });
+
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(() => initializeLetterTrackingCard(card, letter, transportInfo));
+  });
+
   return card;
+}
+
+function initializeLetterTrackingCard(card, letter, transportInfo) {
+  if (!card?.isConnected) return;
+
+  const statusElement = card.querySelector(".message-letter-status");
+  const percentageElement = card.querySelector(".message-letter-percent");
+  const etaElement = card.querySelector(".message-letter-eta");
+  const distanceElement = card.querySelector(".message-letter-distance");
+  const routeElement = card.querySelector(".message-letter-route");
+  const routeFill = routeElement?.querySelector("span");
+  const mapElement = card.querySelector(".message-letter-map");
+  const captionElement = card.querySelector(".message-letter-map-caption");
+  const mapRoute = getLetterMapRoute(letter);
+  let map = null;
+  let vehicleMarker = null;
+  let traveledLine = null;
+  let remainingLine = null;
+  let timer = 0;
+
+  if (distanceElement) {
+    const calculatedDistance = Number(letter?.routeDistanceMeters || 0) || mapRoute.coordinates.reduce((total, point, index) => {
+      if (!index) return total;
+      return total + calculateLetterPointDistanceMeters(mapRoute.coordinates[index - 1], point);
+    }, 0);
+    distanceElement.innerHTML = `<i class="fa-solid fa-route" aria-hidden="true"></i>${escapeHtml(formatLetterDistance(calculatedDistance))}`;
+  }
+
+  if (captionElement) {
+    captionElement.textContent = getLetterRouteCaption(letter, mapRoute);
+  }
+
+  if (mapElement && window.L) {
+    try {
+      map = window.L.map(mapElement, {
+        zoomControl: false,
+        attributionControl: false,
+        dragging: false,
+        touchZoom: false,
+        scrollWheelZoom: false,
+        doubleClickZoom: false,
+        boxZoom: false,
+        keyboard: false,
+        tap: false,
+        preferCanvas: true
+      });
+      window.L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", {
+        maxZoom: 19,
+        crossOrigin: true
+      }).addTo(map);
+      window.L.circleMarker(mapRoute.origin, {
+        radius: 4,
+        color: "#8aa7b1",
+        weight: 2,
+        fillColor: "#101b20",
+        fillOpacity: 1,
+        interactive: false
+      }).addTo(map);
+      window.L.circleMarker(mapRoute.destination, {
+        radius: 5,
+        color: "#9dffe0",
+        weight: 2,
+        fillColor: "#0b8f6f",
+        fillOpacity: 1,
+        interactive: false
+      }).addTo(map);
+      traveledLine = window.L.polyline([mapRoute.origin], {
+        color: "#10b486",
+        weight: 5,
+        opacity: 0.96,
+        lineCap: "round",
+        lineJoin: "round",
+        interactive: false
+      }).addTo(map);
+      remainingLine = window.L.polyline(mapRoute.coordinates, {
+        color: "#72c5ff",
+        weight: 4,
+        opacity: 0.72,
+        dashArray: "9 8",
+        lineCap: "round",
+        lineJoin: "round",
+        interactive: false
+      }).addTo(map);
+      vehicleMarker = window.L.marker(mapRoute.origin, {
+        icon: window.L.divIcon({
+          className: "letter-map-vehicle-marker",
+          html: `<span><i class="fa-solid ${escapeHtml(transportInfo.icon)}" aria-hidden="true"></i></span>`,
+          iconSize: [34, 34],
+          iconAnchor: [17, 17]
+        }),
+        keyboard: false,
+        interactive: false,
+        zIndexOffset: 100
+      }).addTo(map);
+      map.fitBounds(window.L.latLngBounds(mapRoute.coordinates), {
+        padding: [22, 22],
+        maxZoom: mapRoute.mode === "simulated" ? 3 : 15,
+        animate: false
+      });
+      window.setTimeout(() => map?.invalidateSize({ animate: false }), 100);
+    } catch (error) {
+      console.warn("Não foi possível montar o mapa de rastreamento na bolha da carta.", error);
+      if (map) map.remove();
+      map = null;
+      mapElement.innerHTML = '<span class="letter-map-unavailable"><i class="fa-solid fa-map"></i> Mapa indisponível</span>';
+    }
+  } else if (mapElement) {
+    mapElement.innerHTML = '<span class="letter-map-unavailable"><i class="fa-solid fa-map"></i> Mapa indisponível</span>';
+  }
+
+  const dispose = () => {
+    if (timer) window.clearInterval(timer);
+    timer = 0;
+    if (map) map.remove();
+    map = null;
+  };
+
+  const updateTracking = () => {
+    if (!card.isConnected) {
+      dispose();
+      return false;
+    }
+
+    const timing = getLetterDeliveryTiming(letter);
+    const progressPercent = Math.round(timing.progress * 100);
+    const slices = getLetterRouteProgressSlices(mapRoute.coordinates, timing.progress);
+    const protectedLabel = letter?.protection ? " · protegida por tradução" : "";
+    const turboLabel = letter?.turbo ? " · turbina ativa" : "";
+
+    if (statusElement) {
+      statusElement.textContent = `${transportInfo.name}${turboLabel}${protectedLabel} · ${timing.delivered ? "entregue" : `${formatLetterDuration(timing.remainingMs)} restantes`}`;
+    }
+    if (percentageElement) percentageElement.textContent = `${progressPercent}%`;
+    if (etaElement) etaElement.textContent = timing.delivered ? "Chegou ao destino" : `Chegada em ${formatLetterDuration(timing.remainingMs)}`;
+    if (routeFill) routeFill.style.width = `${progressPercent}%`;
+    if (routeElement) routeElement.setAttribute("aria-valuenow", String(progressPercent));
+    card.classList.toggle("is-delivered", timing.delivered);
+
+    if (vehicleMarker) vehicleMarker.setLatLng(slices.position);
+    if (traveledLine) traveledLine.setLatLngs(slices.traveled);
+    if (remainingLine) remainingLine.setLatLngs(slices.remaining);
+    return !timing.delivered;
+  };
+
+  if (updateTracking()) {
+    timer = window.setInterval(() => {
+      if (!updateTracking()) {
+        window.clearInterval(timer);
+        timer = 0;
+      }
+    }, 1000);
+  }
+}
+
+function getLetterSecretStore() {
+  try { return JSON.parse(localStorage.getItem(LETTER_OPEN_SECRET_STORAGE_KEY) || "{}"); }
+  catch { return {}; }
+}
+
+function getLetterSecretKey(roomId, messageId) {
+  return `${sanitizeText(roomId || "", 180)}:${sanitizeText(messageId || "", 180)}`;
+}
+
+function rememberLetterOpenSecret(roomId, messageId, secret) {
+  if (!roomId || !messageId || !secret) return;
+  const store = getLetterSecretStore();
+  store[getLetterSecretKey(roomId, messageId)] = secret;
+  try { localStorage.setItem(LETTER_OPEN_SECRET_STORAGE_KEY, JSON.stringify(store)); } catch {}
+}
+
+function getRememberedLetterOpenSecret(roomId, messageId) {
+  return getLetterSecretStore()[getLetterSecretKey(roomId, messageId)] || "";
+}
+
+function bytesToLetterBase64(bytes) {
+  let binary = "";
+  bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+  return btoa(binary);
+}
+
+function letterBase64ToBytes(value) {
+  const binary = atob(String(value || ""));
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
+}
+
+async function hashLetterSecret(secret) {
+  const normalizedSecret = normalizeLetterChallengeAnswer(secret);
+  if (!normalizedSecret || !window.crypto?.subtle) return normalizedSecret;
+  const digest = await window.crypto.subtle.digest("SHA-256", new TextEncoder().encode(normalizedSecret));
+  return bytesToLetterBase64(new Uint8Array(digest));
+}
+
+async function deriveLetterEncryptionKey(secret, salt) {
+  const material = await window.crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(normalizeLetterChallengeAnswer(secret)),
+    "PBKDF2",
+    false,
+    ["deriveKey"]
+  );
+  return window.crypto.subtle.deriveKey(
+    { name: "PBKDF2", salt, iterations: 120000, hash: "SHA-256" },
+    material,
+    { name: "AES-GCM", length: 256 },
+    false,
+    ["encrypt", "decrypt"]
+  );
+}
+
+async function encryptLetterContent(payload, secret) {
+  if (!window.crypto?.subtle) return null;
+  const salt = window.crypto.getRandomValues(new Uint8Array(16));
+  const iv = window.crypto.getRandomValues(new Uint8Array(12));
+  const key = await deriveLetterEncryptionKey(secret, salt);
+  const ciphertext = await window.crypto.subtle.encrypt(
+    { name: "AES-GCM", iv },
+    key,
+    new TextEncoder().encode(JSON.stringify(payload))
+  );
+  return { version: 1, salt: bytesToLetterBase64(salt), iv: bytesToLetterBase64(iv), ciphertext: bytesToLetterBase64(new Uint8Array(ciphertext)) };
+}
+
+async function decryptLetterContent(encryptedPayload, secret) {
+  const encrypted = normalizeLetterEncryptedPayload(encryptedPayload);
+  if (!encrypted || !window.crypto?.subtle) return null;
+  const salt = letterBase64ToBytes(encrypted.salt);
+  const iv = letterBase64ToBytes(encrypted.iv);
+  const key = await deriveLetterEncryptionKey(secret, salt);
+  const plaintext = await window.crypto.subtle.decrypt(
+    { name: "AES-GCM", iv },
+    key,
+    letterBase64ToBytes(encrypted.ciphertext)
+  );
+  const value = JSON.parse(new TextDecoder().decode(plaintext));
+  return {
+    title: sanitizeText(value?.title || "Carta", 60),
+    content: cleanMessageText(value?.content || "", 1500),
+    originalContent: cleanMessageText(value?.originalContent || "", 1500)
+  };
+}
+
+function closeLetterViewer() {
+  if (letterViewerModal) {
+    letterViewerModal.hidden = true;
+    letterViewerModal.setAttribute("aria-hidden", "true");
+  }
+  if (activeLetterViewerTimer) window.clearInterval(activeLetterViewerTimer);
+  activeLetterViewerTimer = 0;
+  if (activeLetterViewerMap) activeLetterViewerMap.remove();
+  activeLetterViewerMap = null;
+  activeLetterViewerState = null;
+}
+
+async function openLetterViewer(letterValue, message = {}) {
+  const letter = normalizeLetterPayload(letterValue);
+  if (!letter || !letterViewerModal) return;
+  closeLetterViewer();
+  activeLetterViewerState = { letter, message, roomId: activeRoomId, unlockedContent: null };
+  letterViewerModal.hidden = false;
+  letterViewerModal.setAttribute("aria-hidden", "false");
+  const transport = getLetterTransportOption(letter.transport);
+  if (letterViewerIcon) letterViewerIcon.innerHTML = `<i class="fa-solid ${escapeHtml(transport.icon)}" aria-hidden="true"></i>`;
+  if (letterViewerHeading) letterViewerHeading.textContent = letter.protection ? "Carta protegida" : "Carta rastreável";
+  if (letterViewerStatus) letterViewerStatus.textContent = `${transport.name}${letter.turbo ? " · turbina ativa" : ""}`;
+  if (letterViewerDistance) letterViewerDistance.textContent = letter.routeDistanceMeters ? formatLetterDistance(letter.routeDistanceMeters) : "Rota simulada";
+  if (letterViewerSpeed) letterViewerSpeed.textContent = `${Math.round(letter.speedKmh || transport.speedKmh)} km/h`;
+  if (letterViewerChallengeFeedback) {
+    letterViewerChallengeFeedback.textContent = "";
+    letterViewerChallengeFeedback.className = "letter-viewer-challenge-feedback";
+  }
+  if (letterViewerChallengeInput) letterViewerChallengeInput.value = "";
+  initializeLetterViewerTracking(letter, transport);
+
+  if (!letter.protection) {
+    showLetterViewerContent({ title: letter.title, content: letter.content, originalContent: letter.originalContent });
+    return;
+  }
+
+  const storedSecret = getRememberedLetterOpenSecret(activeLetterViewerState.roomId, message?.id || "");
+  if (storedSecret) {
+    try {
+      const decrypted = await decryptLetterContent(letter.encryptedPayload, storedSecret);
+      if (decrypted) {
+        showLetterViewerContent(decrypted);
+        return;
+      }
+    } catch {}
+  }
+  showLetterViewerChallenge(letter.protection.challenge);
+}
+
+function showLetterViewerChallenge(challenge) {
+  if (letterViewerLockPanel) letterViewerLockPanel.hidden = false;
+  if (letterViewerContentPanel) letterViewerContentPanel.hidden = true;
+  if (letterViewerChallengeDirection) letterViewerChallengeDirection.textContent = `Traduza de ${challenge.sourceLanguageLabel} para ${challenge.targetLanguageLabel}`;
+  if (letterViewerChallengePrompt) letterViewerChallengePrompt.textContent = challenge.sourceText;
+  if (letterViewerChallengeInput) {
+    letterViewerChallengeInput.placeholder = `Digite em ${challenge.targetLanguageLabel}`;
+    window.setTimeout(() => letterViewerChallengeInput?.focus(), 80);
+  }
+}
+
+function showLetterViewerContent(content) {
+  if (!activeLetterViewerState) return;
+  activeLetterViewerState.unlockedContent = content;
+  if (letterViewerLockPanel) letterViewerLockPanel.hidden = true;
+  if (letterViewerContentPanel) letterViewerContentPanel.hidden = false;
+  if (letterViewerHeading) letterViewerHeading.textContent = content.title || "Carta";
+  if (letterViewerTitle) letterViewerTitle.textContent = content.title || "Carta";
+  if (letterViewerContent) letterViewerContent.textContent = content.content || "";
+}
+
+async function verifyLetterViewerChallenge() {
+  const state = activeLetterViewerState;
+  const answer = normalizeLetterChallengeAnswer(letterViewerChallengeInput?.value || "");
+  const challenge = state?.letter?.protection?.challenge;
+  if (!state || !answer || !challenge) return;
+  if (letterViewerChallengeButton) setButtonBusy(letterViewerChallengeButton, true, "Verificando...");
+  try {
+    const answerHash = await hashLetterSecret(answer);
+    if (answerHash !== challenge.answerHash) {
+      if (letterViewerChallengeFeedback) {
+        letterViewerChallengeFeedback.textContent = "Tradução incorreta. Revise a frase e tente novamente.";
+        letterViewerChallengeFeedback.className = "letter-viewer-challenge-feedback is-error";
+      }
+      letterViewerChallengeInput?.classList.add("is-error");
+      window.setTimeout(() => letterViewerChallengeInput?.classList.remove("is-error"), 420);
+      return;
+    }
+    let decrypted = null;
+    if (state.letter.encryptedPayload) decrypted = await decryptLetterContent(state.letter.encryptedPayload, answer);
+    if (!decrypted) decrypted = { title: state.letter.title, content: state.letter.content, originalContent: state.letter.originalContent };
+    rememberLetterOpenSecret(state.roomId, state.message?.id || "", answer);
+    showLetterViewerContent(decrypted);
+    showToast("Carta liberada", "A tradução está correta. A carta foi aberta.");
+  } catch (error) {
+    console.warn("Não foi possível abrir a carta protegida.", error);
+    if (letterViewerChallengeFeedback) {
+      letterViewerChallengeFeedback.textContent = "Não foi possível abrir a carta. Confira a tradução e tente novamente.";
+      letterViewerChallengeFeedback.className = "letter-viewer-challenge-feedback is-error";
+    }
+  } finally {
+    if (letterViewerChallengeButton) setButtonBusy(letterViewerChallengeButton, false);
+  }
+}
+
+function initializeLetterViewerTracking(letter, transportInfo) {
+  const mapRoute = getLetterMapRoute(letter);
+  let vehicleMarker = null;
+  let traveledLine = null;
+  let remainingLine = null;
+  if (activeLetterViewerMap) activeLetterViewerMap.remove();
+  activeLetterViewerMap = null;
+  if (letterViewerMap) letterViewerMap.replaceChildren();
+
+  if (letterViewerMapCaption) {
+    letterViewerMapCaption.textContent = getLetterRouteCaption(letter, mapRoute);
+  }
+
+  if (letterViewerMap && window.L) {
+    try {
+      activeLetterViewerMap = window.L.map(letterViewerMap, {
+        zoomControl: true,
+        attributionControl: false,
+        dragging: true,
+        scrollWheelZoom: false,
+        doubleClickZoom: false,
+        boxZoom: false,
+        keyboard: false,
+        tap: false
+      });
+      window.L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", { maxZoom: 19 }).addTo(activeLetterViewerMap);
+      window.L.circleMarker(mapRoute.origin, { radius: 5, color: "#8aa7b1", weight: 2, fillColor: "#101b20", fillOpacity: 1 }).addTo(activeLetterViewerMap).bindTooltip("Origem");
+      window.L.circleMarker(mapRoute.destination, { radius: 6, color: "#9dffe0", weight: 2, fillColor: "#0b8f6f", fillOpacity: 1 }).addTo(activeLetterViewerMap).bindTooltip("Destino");
+      traveledLine = window.L.polyline([mapRoute.origin], { color: "#10b486", weight: 5, opacity: 0.95 }).addTo(activeLetterViewerMap);
+      remainingLine = window.L.polyline(mapRoute.coordinates, { color: "#72c5ff", weight: 4, opacity: 0.72, dashArray: "9 8" }).addTo(activeLetterViewerMap);
+      vehicleMarker = window.L.marker(mapRoute.origin, {
+        icon: window.L.divIcon({
+          className: "letter-map-vehicle-marker",
+          html: `<span><i class="fa-solid ${escapeHtml(transportInfo.icon)}" aria-hidden="true"></i></span>`,
+          iconSize: [38, 38], iconAnchor: [19, 19]
+        }), keyboard: false
+      }).addTo(activeLetterViewerMap);
+      activeLetterViewerMap.fitBounds(window.L.latLngBounds(mapRoute.coordinates), { padding: [28, 28], maxZoom: mapRoute.mode === "simulated" ? 3 : 15 });
+      window.setTimeout(() => activeLetterViewerMap?.invalidateSize(), 100);
+    } catch (error) {
+      console.warn("Não foi possível montar o mapa da carta.", error);
+      if (letterViewerMap) letterViewerMap.innerHTML = '<span class="letter-map-unavailable"><i class="fa-solid fa-map"></i> Mapa indisponível</span>';
+    }
+  }
+
+  const update = () => {
+    if (!activeLetterViewerState || activeLetterViewerState.letter !== letter) return false;
+    const timing = getLetterDeliveryTiming(letter);
+    const percent = Math.round(timing.progress * 100);
+    const slices = getLetterRouteProgressSlices(mapRoute.coordinates, timing.progress);
+    if (letterViewerEta) letterViewerEta.textContent = timing.delivered ? "Entregue" : formatLetterDuration(timing.remainingMs);
+    if (letterViewerProgressLabel) letterViewerProgressLabel.textContent = `${percent}%`;
+    if (letterViewerProgressFill) letterViewerProgressFill.style.width = `${percent}%`;
+    if (letterViewerProgress) letterViewerProgress.setAttribute("aria-valuenow", String(percent));
+    if (letterViewerStatus) letterViewerStatus.textContent = `${transportInfo.name}${letter.turbo ? " · turbina ativa" : ""} · ${timing.delivered ? "entregue" : "em trânsito"}`;
+    if (vehicleMarker) vehicleMarker.setLatLng(slices.position);
+    if (traveledLine) traveledLine.setLatLngs(slices.traveled);
+    if (remainingLine) remainingLine.setLatLngs(slices.remaining);
+    return !timing.delivered;
+  };
+  if (activeLetterViewerTimer) window.clearInterval(activeLetterViewerTimer);
+  activeLetterViewerTimer = 0;
+  if (update()) activeLetterViewerTimer = window.setInterval(() => { if (!update()) { window.clearInterval(activeLetterViewerTimer); activeLetterViewerTimer = 0; } }, 1000);
 }
 
 function createLetterLocationRequestElement(message) {
@@ -6726,7 +7624,8 @@ function createMessageElement(message, animated = false, options = {}) {
   if (message.letterLocationRequest) {
     bubble.appendChild(createLetterLocationRequestElement(message));
   } else if (message.letter) {
-    bubble.appendChild(createLetterMessageElement(message.letter));
+    bubble.classList.add("has-letter-message");
+    bubble.appendChild(createLetterMessageElement(message.letter, message));
   } else if (hasHydration) {
     bubble.classList.add("is-hydrated-message");
     const hydrationActionKey = messageRoomId && message?.id ? `${messageRoomId}:${message.id}` : "";
@@ -11541,15 +12440,37 @@ function openInviteModal() {
   inviteModal.setAttribute("aria-hidden", "false");
 }
 
+function resetLetterUnlockState() {
+  // Transportes rápidos e turbina são liberados somente para a carta atual.
+  // Ao fechar ou reabrir o modal, um novo desafio de tradução será obrigatório.
+  letterUnlockedTransportIds = new Set(LETTER_BASE_UNLOCKED_TRANSPORT_IDS);
+  letterTurboUnlocked = false;
+  letterTurboEnabled = false;
+}
+
 function openLetterModal() {
   const room = getActiveRoom();
   if (!room || !isPrivateRoom(room) || !letterModal) return;
   letterForm?.reset();
-  const defaultTransport = letterForm?.querySelector('input[name="letterTransport"][value="droid"]');
+  resetLetterUnlockState();
+  letterChallengeState = null;
+  letterRecipientNativeLanguage = null;
+  const defaultTransport = letterForm?.querySelector(`input[name="letterTransport"][value="${LETTER_DEFAULT_TRANSPORT_ID}"]`);
   if (defaultTransport) defaultTransport.checked = true;
+  if (letterChallengePanel) letterChallengePanel.hidden = true;
+  if (letterChallengeInput) letterChallengeInput.value = "";
+  if (letterChallengeFeedback) {
+    letterChallengeFeedback.textContent = "";
+    letterChallengeFeedback.className = "letter-challenge-feedback";
+  }
+  if (letterRequireTranslationCheckbox) letterRequireTranslationCheckbox.checked = false;
+  if (letterOpenChallengeDirectionSelect) letterOpenChallengeDirectionSelect.value = "random";
   letterModal.hidden = false;
   letterModal.setAttribute("aria-hidden", "false");
+  syncLetterComposerState();
+  syncLetterProtectionComposerState();
   renderLatestLetterDestination(room);
+  prepareLetterRecipientNativeLanguage(room);
   window.setTimeout(() => letterTitleInput?.focus(), 50);
 }
 
@@ -11557,37 +12478,742 @@ function closeLetterModal() {
   if (!letterModal) return;
   letterModal.hidden = true;
   letterModal.setAttribute("aria-hidden", "true");
-  if (activeLetterMap) { activeLetterMap.remove(); activeLetterMap = null; }
+  letterChallengeState = null;
+  letterRecipientNativeLanguage = null;
+  resetLetterUnlockState();
+  resetLetterComposerRouteState();
+  if (activeLetterMap) {
+    activeLetterMap.remove();
+    activeLetterMap = null;
+  }
+  activeLetterMapRouteLayer = null;
+  activeLetterMapEndpointLayer = null;
+}
+
+async function prepareLetterRecipientNativeLanguage(room) {
+  const otherMember = getPrivateOtherMember(room);
+  if (!otherMember?.uid) {
+    syncLetterProtectionComposerState();
+    return null;
+  }
+  try {
+    const snapshot = await get(ref(db, `users/${otherMember.uid}`));
+    const profile = snapshot.val() || {};
+    letterRecipientNativeLanguage = getSelectedNativeLanguage(profile.nativeLanguageCode || "pt");
+  } catch (error) {
+    console.warn("Não foi possível consultar o idioma nativo do destinatário.", error);
+    letterRecipientNativeLanguage = null;
+  }
+  syncLetterProtectionComposerState();
+  return letterRecipientNativeLanguage;
+}
+
+function syncLetterProtectionComposerState() {
+  const room = getActiveRoom();
+  const roomLanguage = getRoomLanguage(room);
+  const nativeLanguage = letterRecipientNativeLanguage;
+  const available = Boolean(roomLanguage?.code && nativeLanguage?.code && roomLanguage.code !== nativeLanguage.code);
+  const enabled = Boolean(letterRequireTranslationCheckbox?.checked && available);
+  if (letterRequireTranslationCheckbox) letterRequireTranslationCheckbox.disabled = !available;
+  if (letterOpenChallengeDirectionSelect) letterOpenChallengeDirectionSelect.disabled = !enabled;
+  if (letterProtectionStatus) {
+    letterProtectionStatus.textContent = !nativeLanguage
+      ? "Consultando o idioma nativo do destinatário..."
+      : !available
+        ? "A proteção exige que o idioma da sala seja diferente do idioma nativo do destinatário."
+        : enabled
+          ? `O destinatário terá que traduzir entre ${roomLanguage.label} e ${nativeLanguage.label} para abrir.`
+          : `Opcional: proteja a abertura com tradução entre ${roomLanguage.label} e ${nativeLanguage.label}.`;
+  }
+}
+
+function getLetterLocationMessages(room) {
+  return roomMessagesById.get(room?.id) || room?.messages || [];
+}
+
+function getLatestLetterLocationRequest(room, status = "") {
+  return [...getLetterLocationMessages(room)]
+    .reverse()
+    .map((message) => message?.letterLocationRequest)
+    .find((request) => request && (!status || request.status === status)) || null;
 }
 
 function getLatestSharedLetterLocation(room) {
-  return [...(room?.messages || [])].reverse().map((message) => message?.letterLocationRequest).find((request) => request?.status === "shared" && Number.isFinite(Number(request.latitude)) && Number.isFinite(Number(request.longitude))) || null;
+  return [...getLetterLocationMessages(room)]
+    .reverse()
+    .map((message) => message?.letterLocationRequest)
+    .find((request) => request?.status === "shared" && Number.isFinite(Number(request.latitude)) && Number.isFinite(Number(request.longitude))) || null;
+}
+
+function resetLetterComposerRouteState() {
+  const nextRequestId = Number(letterComposerRouteState?.requestId || 0) + 1;
+  letterComposerRouteState = {
+    requestId: nextRequestId,
+    destinationKey: "",
+    destination: null,
+    originResult: null,
+    groundRoute: null,
+    activeRoute: null,
+    activeTransportId: "",
+    loading: false,
+    error: ""
+  };
+  if (letterRoutePreview) letterRoutePreview.hidden = true;
+  if (letterMap) letterMap.hidden = true;
+}
+
+function getLetterDestinationKey(destination) {
+  if (!destination) return "";
+  return `${Number(destination.latitude).toFixed(6)}:${Number(destination.longitude).toFixed(6)}`;
+}
+
+function getLetterTrajectoryLabel(transport) {
+  return sanitizeText(
+    transport?.trajectoryLabel || "Rota calculada entre origem e destino",
+    120
+  );
+}
+
+function createCurvedLetterRoute(origin, destination, mode = "air") {
+  if (!origin || !destination) return null;
+  const originLatitude = Number(origin.latitude);
+  const originLongitude = Number(origin.longitude);
+  const destinationLatitude = Number(destination.latitude);
+  const destinationLongitude = Number(destination.longitude);
+  if (![originLatitude, originLongitude, destinationLatitude, destinationLongitude].every(Number.isFinite)) return null;
+
+  const deltaLatitude = destinationLatitude - originLatitude;
+  const deltaLongitude = destinationLongitude - originLongitude;
+  const linearMagnitude = Math.hypot(deltaLatitude, deltaLongitude) || 1;
+  const curveFactor = mode === "orbital" ? 0.20 : mode === "express" ? -0.28 : 0.015;
+  const pointCount = mode === "air" ? 32 : 56;
+  const curveMagnitude = linearMagnitude * curveFactor;
+  const perpendicularLatitude = -deltaLongitude / linearMagnitude;
+  const perpendicularLongitude = deltaLatitude / linearMagnitude;
+  const routeCoordinates = [];
+
+  for (let index = 0; index < pointCount; index += 1) {
+    const progress = index / (pointCount - 1);
+    const curve = Math.sin(Math.PI * progress) * curveMagnitude;
+    routeCoordinates.push([
+      originLatitude + deltaLatitude * progress + perpendicularLatitude * curve,
+      originLongitude + deltaLongitude * progress + perpendicularLongitude * curve
+    ]);
+  }
+
+  const distanceMeters = routeCoordinates.reduce((total, point, index) => {
+    if (!index) return total;
+    return total + calculateLetterPointDistanceMeters(routeCoordinates[index - 1], point);
+  }, 0);
+
+  return {
+    routeCoordinates,
+    distanceMeters: Math.max(1, distanceMeters),
+    mode: "direct",
+    provider: mode === "air" ? "AstroChat Air" : mode === "orbital" ? "AstroChat Orbital" : "AstroChat Express",
+    trajectoryMode: mode
+  };
+}
+
+function getPreparedLetterRouteForTransport(transport) {
+  const state = letterComposerRouteState;
+  if (!state?.originResult?.origin || !state?.destination) return null;
+  const mode = transport?.trajectoryMode || "ground";
+  if (mode === "ground") {
+    return state.groundRoute ? { ...state.groundRoute, trajectoryMode: "ground" } : null;
+  }
+  return createCurvedLetterRoute(state.originResult.origin, state.destination, mode);
+}
+
+async function resolveLetterRouteForTransport(originResult, destination, transport, groundRoute = null) {
+  const mode = transport?.trajectoryMode || "ground";
+  if (mode === "ground") {
+    const route = groundRoute || await buildLetterRoute(originResult, destination);
+    return route ? { ...route, trajectoryMode: "ground" } : null;
+  }
+  return createCurvedLetterRoute(originResult?.origin, destination, mode);
+}
+
+function getLetterRouteLineStyle(transport) {
+  const mode = transport?.trajectoryMode || "ground";
+  if (mode === "air") return { color: "#72c5ff", weight: 4, opacity: 0.9, dashArray: "9 8" };
+  if (mode === "orbital") return { color: "#c084fc", weight: 4, opacity: 0.92, dashArray: "13 7" };
+  if (mode === "express") return { color: "#fbbf24", weight: 5, opacity: 0.95, dashArray: "18 7" };
+  return { color: "#10b486", weight: 5, opacity: 0.92 };
+}
+
+function ensureLetterComposerMap(route) {
+  if (!letterMap || !window.L || !route?.routeCoordinates?.length) return null;
+  letterMap.hidden = false;
+  if (!activeLetterMap) {
+    activeLetterMap = window.L.map(letterMap, {
+      zoomControl: true,
+      attributionControl: false,
+      scrollWheelZoom: false,
+      doubleClickZoom: false,
+      boxZoom: false,
+      keyboard: false
+    });
+    window.L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", { maxZoom: 19 }).addTo(activeLetterMap);
+  }
+  return activeLetterMap;
+}
+
+function renderLetterComposerRouteMap(route, transport) {
+  const map = ensureLetterComposerMap(route);
+  if (!map) return;
+  if (activeLetterMapRouteLayer) map.removeLayer(activeLetterMapRouteLayer);
+  if (activeLetterMapEndpointLayer) map.removeLayer(activeLetterMapEndpointLayer);
+
+  const coordinates = normalizeLetterRouteCoordinates(route.routeCoordinates);
+  if (coordinates.length < 2) return;
+  const routeLine = window.L.polyline(coordinates, getLetterRouteLineStyle(transport));
+  const origin = coordinates[0];
+  const destination = coordinates.at(-1);
+  const vehicleIcon = window.L.divIcon({
+    className: "letter-composer-vehicle-icon",
+    html: `<span><i class="fa-solid ${escapeHtml(transport.icon)}" aria-hidden="true"></i></span>`,
+    iconSize: [38, 38],
+    iconAnchor: [19, 19]
+  });
+  const vehicleMarker = window.L.marker(origin, { icon: vehicleIcon, interactive: false });
+  activeLetterMapRouteLayer = window.L.layerGroup([routeLine, vehicleMarker]).addTo(map);
+  activeLetterMapEndpointLayer = window.L.layerGroup([
+    window.L.circleMarker(origin, { radius: 5, color: "#d7fff1", weight: 2, fillColor: "#0b8f6f", fillOpacity: 1 }).bindTooltip("Origem"),
+    window.L.circleMarker(destination, { radius: 7, color: "#ffffff", weight: 2, fillColor: "#ef6b73", fillOpacity: 1 }).bindTooltip("Destino")
+  ]).addTo(map);
+  map.fitBounds(routeLine.getBounds(), { padding: [26, 26], maxZoom: 15 });
+  window.setTimeout(() => map.invalidateSize(), 80);
+}
+
+function refreshLetterComposerRoutePreview() {
+  const transport = getSelectedLetterTransport();
+  const selectedLocked = transport.requiresChallenge && !letterUnlockedTransportIds.has(transport.id);
+  const state = letterComposerRouteState;
+  const route = getPreparedLetterRouteForTransport(transport);
+  const speedKmh = getEffectiveLetterSpeed(transport);
+  const distanceMeters = Number(route?.distanceMeters || 0);
+  const durationMs = getEffectiveLetterDuration(transport, letterTurboEnabled, distanceMeters);
+
+  if (letterRoutePreviewTransport) letterRoutePreviewTransport.textContent = `${transport.name}${letterTurboEnabled ? " + turbina" : ""}`;
+  if (letterRoutePreviewTrajectory) letterRoutePreviewTrajectory.textContent = getLetterTrajectoryLabel(transport);
+  if (letterRoutePreviewSpeed) letterRoutePreviewSpeed.textContent = `${speedKmh} km/h`;
+  if (letterRoutePreviewDistance) {
+    letterRoutePreviewDistance.textContent = state.loading
+      ? "Calculando..."
+      : distanceMeters
+        ? formatLetterDistance(distanceMeters)
+        : "Aguardando destino";
+  }
+  if (letterRoutePreviewEta) {
+    letterRoutePreviewEta.textContent = state.loading
+      ? "Calculando..."
+      : distanceMeters
+        ? formatLetterDuration(durationMs)
+        : "Aguardando rota";
+  }
+  if (letterRoutePreviewStatus) {
+    letterRoutePreviewStatus.textContent = state.loading
+      ? "Calculando a trajetória e a distância no mapa..."
+      : state.error
+        ? state.error
+        : route
+          ? `${getLetterTrajectoryLabel(transport)}. Previsão calculada pela distância e pela velocidade selecionada.`
+          : "Compartilhe o destino para visualizar a trajetória antes do envio.";
+  }
+
+  if (route && letterRoutePreview) {
+    letterRoutePreview.hidden = false;
+    state.activeRoute = route;
+    state.activeTransportId = transport.id;
+    renderLetterComposerRouteMap(route, transport);
+  }
+
+  if (letterDeliverySummary) {
+    const routeSummary = distanceMeters
+      ? `${formatLetterDistance(distanceMeters)} · ${formatLetterDuration(durationMs)}`
+      : state.loading
+        ? "Calculando trajetória e tempo..."
+        : "Aguardando destino";
+    letterDeliverySummary.innerHTML = `
+      <span><i class="fa-solid ${escapeHtml(transport.icon)}" aria-hidden="true"></i> ${escapeHtml(transport.name)}</span>
+      <strong>${selectedLocked ? `Bloqueado · ${routeSummary}` : `${speedKmh} km/h · ${routeSummary}`}</strong>
+    `;
+  }
+
+  const submit = letterForm?.querySelector('button[type="submit"]');
+  if (submit && !submit.dataset.busy) {
+    submit.disabled = selectedLocked || Boolean(state.destination && state.loading);
+  }
+}
+
+async function prepareLetterComposerRoutePreview(destination) {
+  if (!destination) return;
+  const destinationKey = getLetterDestinationKey(destination);
+  if (
+    letterComposerRouteState.destinationKey === destinationKey &&
+    (letterComposerRouteState.loading || letterComposerRouteState.originResult)
+  ) {
+    refreshLetterComposerRoutePreview();
+    return;
+  }
+
+  const requestId = Number(letterComposerRouteState.requestId || 0) + 1;
+  letterComposerRouteState = {
+    requestId,
+    destinationKey,
+    destination,
+    originResult: null,
+    groundRoute: null,
+    activeRoute: null,
+    activeTransportId: "",
+    loading: true,
+    error: ""
+  };
+  if (letterRoutePreview) letterRoutePreview.hidden = false;
+  if (letterMap) letterMap.hidden = false;
+  refreshLetterComposerRoutePreview();
+
+  try {
+    const originResult = await getLetterRouteOrigin(destination);
+    if (letterComposerRouteState.requestId !== requestId) return;
+    letterComposerRouteState.originResult = originResult;
+    letterComposerRouteState.groundRoute = await buildLetterRoute(originResult, destination);
+    if (letterComposerRouteState.requestId !== requestId) return;
+  } catch (error) {
+    console.warn("Não foi possível preparar a prévia da trajetória.", error);
+    if (letterComposerRouteState.requestId !== requestId) return;
+    letterComposerRouteState.error = "Não foi possível calcular a rota GPS agora. O envio tentará novamente.";
+  } finally {
+    if (letterComposerRouteState.requestId === requestId) {
+      letterComposerRouteState.loading = false;
+      refreshLetterComposerRoutePreview();
+    }
+  }
 }
 
 function renderLatestLetterDestination(room) {
   const destination = getLatestSharedLetterLocation(room);
-  if (letterLocationStatus) letterLocationStatus.textContent = destination ? "Destino autorizado e pronto para a entrega." : "Localização do destinatário ainda não compartilhada.";
-  if (!letterMap) return;
-  letterMap.hidden = !destination;
-  if (!destination || !window.L) return;
-  if (activeLetterMap) activeLetterMap.remove();
-  activeLetterMap = window.L.map(letterMap, { zoomControl: true, attributionControl: false }).setView([destination.latitude, destination.longitude], 13);
-  window.L.tileLayer("https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png", { maxZoom: 19 }).addTo(activeLetterMap);
-  window.L.marker([destination.latitude, destination.longitude]).addTo(activeLetterMap).bindPopup("Destino da carta").openPopup();
-  navigator.geolocation?.getCurrentPosition((position) => {
-    if (!activeLetterMap) return;
-    const origin = [position.coords.latitude, position.coords.longitude];
-    const target = [destination.latitude, destination.longitude];
-    window.L.marker(origin).addTo(activeLetterMap).bindPopup("Origem");
-    window.L.polyline([origin, target], { color: "#00e5c3", weight: 3, dashArray: "10 8" }).addTo(activeLetterMap);
-    activeLetterMap.fitBounds([origin, target], { padding: [28, 28] });
-  }, () => {}, { timeout: 6000, maximumAge: 120000 });
-  window.setTimeout(() => activeLetterMap?.invalidateSize(), 80);
+  const pendingRequest = destination ? null : getLatestLetterLocationRequest(room, "requested");
+  const locationPanel = requestLetterLocationButton?.closest?.(".letter-location-panel");
+
+  locationPanel?.classList.toggle("has-location", Boolean(destination));
+  locationPanel?.classList.toggle("is-pending", Boolean(pendingRequest));
+
+  if (letterLocationStatus) {
+    letterLocationStatus.textContent = destination
+      ? "Destino já autorizado. A trajetória e o tempo serão mostrados abaixo."
+      : pendingRequest
+        ? "Solicitação já enviada. Aguardando o destinatário compartilhar a localização."
+        : "Sem localização compartilhada: a carta usará uma rota simulada no mapa.";
+  }
+
+  if (requestLetterLocationButton) {
+    requestLetterLocationButton.hidden = Boolean(destination);
+    requestLetterLocationButton.disabled = Boolean(pendingRequest);
+    requestLetterLocationButton.innerHTML = pendingRequest
+      ? '<i class="fa-solid fa-clock"></i><span>Aguardando</span>'
+      : '<i class="fa-solid fa-location-dot"></i><span>Solicitar</span>';
+  }
+
+  if (letterRouteNote) {
+    letterRouteNote.hidden = Boolean(destination);
+    const noteText = letterRouteNote.querySelector("span");
+    if (noteText) {
+      noteText.textContent = pendingRequest
+        ? "Enquanto a localização não for compartilhada, a carta poderá usar uma rota simulada."
+        : "Sem um destino compartilhado, a carta continua funcionando com uma rota simulada.";
+    }
+  }
+
+  if (!destination) {
+    resetLetterComposerRouteState();
+    refreshLetterComposerRoutePreview();
+    return;
+  }
+
+  if (letterMap) letterMap.hidden = false;
+  if (letterRoutePreview) letterRoutePreview.hidden = false;
+  prepareLetterComposerRoutePreview(destination);
+}
+
+function handleLetterTransportChange(event) {
+  const input = event.target?.closest?.('input[name="letterTransport"]');
+  if (!input) return;
+  const transport = getLetterTransportOption(input.value);
+  if (transport.requiresChallenge && !letterUnlockedTransportIds.has(transport.id)) {
+    startLetterTranslationChallenge("transport", transport.id);
+  }
+  syncLetterComposerState();
+}
+
+function handleLetterTurboButtonClick() {
+  if (!letterTurboUnlocked) {
+    startLetterTranslationChallenge("turbo", "turbo");
+    return;
+  }
+  letterTurboEnabled = !letterTurboEnabled;
+  syncLetterComposerState();
+}
+
+function canCreateLetterTranslationChallenge(room) {
+  const nativeLanguage = getCurrentNativeLanguage();
+  const roomLanguage = getRoomLanguage(room);
+  return Boolean(roomLanguage?.code && nativeLanguage?.code && roomLanguage.code !== nativeLanguage.code);
+}
+
+function startLetterTranslationChallenge(kind, targetId, options = {}) {
+  const room = getActiveRoom();
+  if (!room || !letterChallengePanel) return;
+
+  const nativeLanguage = getCurrentNativeLanguage();
+  const roomLanguage = getRoomLanguage(room);
+  if (!canCreateLetterTranslationChallenge(room)) {
+    letterChallengeState = null;
+    letterChallengePanel.hidden = false;
+    if (letterChallengeEyebrow) letterChallengeEyebrow.textContent = "Desafio indisponível";
+    if (letterChallengeDirection) letterChallengeDirection.textContent = "Defina na conversa um idioma diferente do seu idioma nativo.";
+    if (letterChallengePrompt) letterChallengePrompt.textContent = "Os transportes rápidos e a turbina exigem tradução entre dois idiomas diferentes.";
+    if (letterChallengeInput) {
+      letterChallengeInput.value = "";
+      letterChallengeInput.disabled = true;
+    }
+    if (letterChallengeSubmitButton) letterChallengeSubmitButton.disabled = true;
+    if (letterChallengeFeedback) {
+      letterChallengeFeedback.textContent = "Abra o menu da conversa e escolha o idioma da sala.";
+      letterChallengeFeedback.className = "letter-challenge-feedback is-error";
+    }
+    syncLetterComposerState();
+    return;
+  }
+
+  const previousIndex = Number(letterChallengeState?.phraseIndex ?? -1);
+  let phraseIndex = Math.floor(Math.random() * LETTER_CHALLENGE_PHRASES.length);
+  if (LETTER_CHALLENGE_PHRASES.length > 1 && phraseIndex === previousIndex) {
+    phraseIndex = (phraseIndex + 1) % LETTER_CHALLENGE_PHRASES.length;
+  }
+  const phrase = LETTER_CHALLENGE_PHRASES[phraseIndex];
+  letterChallengeState = {
+    kind,
+    targetId,
+    phraseIndex,
+    sourceText: phrase[nativeLanguage.code] || phrase.pt,
+    expectedText: phrase[roomLanguage.code] || phrase.en,
+    attempts: options.keepAttempts ? Number(letterChallengeState?.attempts || 0) : 0
+  };
+
+  letterChallengePanel.hidden = false;
+  if (letterChallengeEyebrow) {
+    letterChallengeEyebrow.textContent = kind === "turbo" ? "Desafio da turbina" : `Desbloquear ${getLetterTransportOption(targetId).name}`;
+  }
+  if (letterChallengeDirection) {
+    letterChallengeDirection.textContent = `Traduza de ${nativeLanguage.label} para ${roomLanguage.label}`;
+  }
+  if (letterChallengePrompt) letterChallengePrompt.textContent = letterChallengeState.sourceText;
+  if (letterChallengeInput) {
+    letterChallengeInput.disabled = false;
+    letterChallengeInput.value = "";
+    letterChallengeInput.placeholder = `Digite em ${roomLanguage.label}`;
+  }
+  if (letterChallengeSubmitButton) letterChallengeSubmitButton.disabled = false;
+  if (letterChallengeFeedback) {
+    letterChallengeFeedback.textContent = "A pontuação e as maiúsculas não interferem na validação.";
+    letterChallengeFeedback.className = "letter-challenge-feedback";
+  }
+  syncLetterComposerState();
+  letterChallengePanel.scrollIntoView({ behavior: "smooth", block: "nearest" });
+  window.setTimeout(() => letterChallengeInput?.focus(), 80);
+}
+
+function refreshLetterTranslationChallenge() {
+  if (!letterChallengeState) return;
+  startLetterTranslationChallenge(letterChallengeState.kind, letterChallengeState.targetId, { keepAttempts: true });
+}
+
+function normalizeLetterChallengeAnswer(value) {
+  return normalize(value)
+    .replace(/[’'`´]/g, "")
+    .replace(/[^a-z0-9\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]+/g, "")
+    .trim();
+}
+
+function getLetterAnswerSimilarity(answer, expected) {
+  if (!answer || !expected) return 0;
+  if (answer === expected) return 1;
+  const rows = expected.length + 1;
+  const columns = answer.length + 1;
+  const matrix = Array.from({ length: rows }, (_, row) => {
+    const values = new Array(columns).fill(0);
+    values[0] = row;
+    return values;
+  });
+  for (let column = 0; column < columns; column += 1) matrix[0][column] = column;
+  for (let row = 1; row < rows; row += 1) {
+    for (let column = 1; column < columns; column += 1) {
+      const cost = expected[row - 1] === answer[column - 1] ? 0 : 1;
+      matrix[row][column] = Math.min(
+        matrix[row - 1][column] + 1,
+        matrix[row][column - 1] + 1,
+        matrix[row - 1][column - 1] + cost
+      );
+    }
+  }
+  const distance = matrix[rows - 1][columns - 1];
+  return 1 - distance / Math.max(answer.length, expected.length, 1);
+}
+
+function verifyLetterTranslationChallenge() {
+  if (!letterChallengeState || !letterChallengeInput) return;
+  const answer = normalizeLetterChallengeAnswer(letterChallengeInput.value);
+  const expected = normalizeLetterChallengeAnswer(letterChallengeState.expectedText);
+  const similarity = getLetterAnswerSimilarity(answer, expected);
+  const isCorrect = answer === expected || (expected.length >= 18 && similarity >= 0.92);
+
+  letterChallengeState.attempts += 1;
+  if (!isCorrect) {
+    if (letterChallengeFeedback) {
+      letterChallengeFeedback.textContent = letterChallengeState.attempts >= 2
+        ? "Ainda não está correto. Confira o verbo, a ordem das palavras e tente novamente."
+        : "Quase! Revise a tradução e tente outra vez.";
+      letterChallengeFeedback.className = "letter-challenge-feedback is-error";
+    }
+    letterChallengeInput.classList.remove("is-correct");
+    letterChallengeInput.classList.add("is-error");
+    window.setTimeout(() => letterChallengeInput?.classList.remove("is-error"), 420);
+    return;
+  }
+
+  if (letterChallengeState.kind === "transport") {
+    letterUnlockedTransportIds.add(letterChallengeState.targetId);
+    const input = letterForm?.querySelector(`input[name="letterTransport"][value="${CSS.escape(letterChallengeState.targetId)}"]`);
+    if (input) input.checked = true;
+  } else {
+    letterTurboUnlocked = true;
+    letterTurboEnabled = true;
+  }
+  if (letterChallengeFeedback) {
+    letterChallengeFeedback.textContent = letterChallengeState.kind === "turbo"
+      ? "Correto! Turbina desbloqueada e ativada."
+      : `Correto! ${getLetterTransportOption(letterChallengeState.targetId).name} foi desbloqueado.`;
+    letterChallengeFeedback.className = "letter-challenge-feedback is-success";
+  }
+  letterChallengeInput.classList.remove("is-error");
+  letterChallengeInput.classList.add("is-correct");
+  syncLetterComposerState();
+  window.setTimeout(() => {
+    if (letterChallengePanel) letterChallengePanel.hidden = true;
+    letterChallengeState = null;
+    letterChallengeInput?.classList.remove("is-correct");
+    syncLetterComposerState();
+  }, 1000);
+}
+
+function getSelectedLetterTransport() {
+  const selectedId = letterForm?.querySelector('input[name="letterTransport"]:checked')?.value || LETTER_DEFAULT_TRANSPORT_ID;
+  return getLetterTransportOption(selectedId);
+}
+
+function getEffectiveLetterSpeed(transport, turboEnabled = letterTurboEnabled) {
+  const baseSpeed = Math.max(1, Number(transport?.speedKmh || LETTER_TRANSPORT_OPTIONS[LETTER_DEFAULT_TRANSPORT_ID].speedKmh));
+  return Math.round(baseSpeed * (turboEnabled ? LETTER_TURBO_SPEED_MULTIPLIER : 1));
+}
+
+function getEffectiveLetterDuration(transport, turboEnabled = letterTurboEnabled, distanceMeters = 0) {
+  const distance = Math.max(0, Number(distanceMeters || 0));
+  if (!distance) {
+    const fallback = Number(transport?.fallbackDurationMs || LETTER_TRANSPORT_OPTIONS[LETTER_DEFAULT_TRANSPORT_ID].fallbackDurationMs);
+    return Math.max(LETTER_MIN_DURATION_MS, Math.round(fallback * (turboEnabled ? LETTER_TURBO_MULTIPLIER : 1)));
+  }
+  const speedKmh = getEffectiveLetterSpeed(transport, turboEnabled);
+  const duration = (distance / 1000) / speedKmh * 60 * 60 * 1000;
+  return Math.max(LETTER_MIN_DURATION_MS, Math.min(LETTER_MAX_DURATION_MS, Math.round(duration)));
+}
+
+function syncLetterComposerState() {
+  const selectedTransport = getSelectedLetterTransport();
+  const selectedLocked = selectedTransport.requiresChallenge && !letterUnlockedTransportIds.has(selectedTransport.id);
+
+  letterTransportPicker?.querySelectorAll("label[data-transport-id]").forEach((label) => {
+    const transportId = label.dataset.transportId || "";
+    const transport = getLetterTransportOption(transportId);
+    const locked = transport.requiresChallenge && !letterUnlockedTransportIds.has(transport.id);
+    label.classList.toggle("is-locked", locked);
+    label.classList.toggle("is-unlocked", transport.requiresChallenge && !locked);
+    const badge = label.querySelector(".letter-transport-badge");
+    if (badge) {
+      badge.innerHTML = locked
+        ? '<i class="fa-solid fa-lock"></i> Traduzir'
+        : transport.requiresChallenge
+          ? '<i class="fa-solid fa-lock-open"></i> Nesta carta'
+          : '<i class="fa-solid fa-circle-check"></i> Livre';
+    }
+  });
+
+  if (letterTurboButton) {
+    letterTurboButton.classList.toggle("is-locked", !letterTurboUnlocked);
+    letterTurboButton.classList.toggle("is-active", letterTurboEnabled);
+    letterTurboButton.setAttribute("aria-pressed", String(letterTurboEnabled));
+  }
+  if (letterTurboStatus) {
+    letterTurboStatus.textContent = !letterTurboUnlocked
+      ? "Exige uma nova tradução em cada carta"
+      : letterTurboEnabled
+        ? "Ativa nesta carta · velocidade duplicada"
+        : "Liberada nesta carta · toque para ativar";
+  }
+
+  refreshLetterComposerRoutePreview();
+
+  const submit = letterForm?.querySelector('button[type="submit"]');
+  if (submit && !submit.dataset.busy) {
+    submit.disabled = selectedLocked || Boolean(letterComposerRouteState.destination && letterComposerRouteState.loading);
+  }
+}
+
+function createApproximateLetterOrigin(destination, seed = Date.now()) {
+  const angle = ((Number(seed || 0) % 360) * Math.PI) / 180;
+  const distance = 0.09 + (Number(seed || 0) % 5) * 0.012;
+  return {
+    latitude: Number(destination.latitude) + Math.sin(angle) * distance,
+    longitude: Number(destination.longitude) + Math.cos(angle) * distance
+  };
+}
+
+async function getLetterRouteOrigin(destination) {
+  if (!destination) return { origin: null, mode: "simulated" };
+  try {
+    if (navigator.geolocation) {
+      const position = await new Promise((resolve, reject) => {
+        navigator.geolocation.getCurrentPosition(resolve, reject, {
+          enableHighAccuracy: true,
+          timeout: 8000,
+          maximumAge: 300000
+        });
+      });
+      return {
+        origin: { latitude: Number(position.coords.latitude), longitude: Number(position.coords.longitude) },
+        mode: "location"
+      };
+    }
+  } catch (error) {
+    console.warn("Não foi possível obter a origem exata da carta; usando ponto aproximado.", error);
+  }
+  return { origin: createApproximateLetterOrigin(destination, Date.now()), mode: "approximate" };
+}
+
+function simplifyLetterRouteCoordinates(coordinates, maxPoints = LETTER_ROUTE_MAX_POINTS) {
+  if (!Array.isArray(coordinates) || coordinates.length <= maxPoints) return normalizeLetterRouteCoordinates(coordinates);
+  const simplified = [];
+  for (let index = 0; index < maxPoints; index += 1) {
+    const sourceIndex = Math.round(index * (coordinates.length - 1) / (maxPoints - 1));
+    simplified.push(coordinates[sourceIndex]);
+  }
+  return normalizeLetterRouteCoordinates(simplified);
+}
+
+async function calculateLetterGpsRoute(origin, destination) {
+  if (!origin || !destination) return null;
+  const controller = new AbortController();
+  const timeout = window.setTimeout(() => controller.abort(), LETTER_ROUTE_TIMEOUT_MS);
+  try {
+    const coordinates = `${origin.longitude},${origin.latitude};${destination.longitude},${destination.latitude}`;
+    const response = await fetch(`${LETTER_ROUTE_ENDPOINT}/${coordinates}?overview=full&geometries=geojson&steps=false`, {
+      headers: { Accept: "application/json" }, signal: controller.signal
+    });
+    if (!response.ok) throw new Error(`Rota indisponível (${response.status})`);
+    const data = await response.json();
+    const route = data?.routes?.[0];
+    const rawCoordinates = route?.geometry?.coordinates;
+    if (!Array.isArray(rawCoordinates) || rawCoordinates.length < 2) throw new Error("Rota sem geometria");
+    const routeCoordinates = simplifyLetterRouteCoordinates(rawCoordinates.map(([longitude, latitude]) => [Number(latitude), Number(longitude)]));
+    return {
+      routeCoordinates,
+      distanceMeters: Math.max(1, Number(route.distance || 0)),
+      mode: "gps",
+      provider: "OSRM"
+    };
+  } finally {
+    window.clearTimeout(timeout);
+  }
+}
+
+function createDirectLetterRoute(origin, destination, mode = "direct") {
+  if (!origin || !destination) return null;
+  const routeCoordinates = [[origin.latitude, origin.longitude], [destination.latitude, destination.longitude]];
+  return {
+    routeCoordinates,
+    distanceMeters: calculateLetterPointDistanceMeters(routeCoordinates[0], routeCoordinates[1]),
+    mode,
+    provider: "direct"
+  };
+}
+
+async function buildLetterRoute(originResult, destination) {
+  if (!originResult?.origin || !destination) return null;
+  try {
+    return await calculateLetterGpsRoute(originResult.origin, destination);
+  } catch (error) {
+    console.warn("O serviço de rota GPS não respondeu; usando linha direta.", error);
+    return createDirectLetterRoute(originResult.origin, destination, "direct");
+  }
+}
+
+async function getLetterRecipientNativeLanguage(room) {
+  if (letterRecipientNativeLanguage) return letterRecipientNativeLanguage;
+  return prepareLetterRecipientNativeLanguage(room);
+}
+
+async function createLetterOpenProtection(room, directionMode, deliveredPayload) {
+  const roomLanguage = getRoomLanguage(room);
+  const nativeLanguage = await getLetterRecipientNativeLanguage(room);
+  if (!roomLanguage?.code || !nativeLanguage?.code || roomLanguage.code === nativeLanguage.code) {
+    throw new Error("O idioma nativo do destinatário precisa ser diferente do idioma da sala.");
+  }
+  let direction = directionMode;
+  if (!direction || direction === "random") direction = Math.random() < 0.5 ? "room-to-native" : "native-to-room";
+  const sourceLanguage = direction === "room-to-native" ? roomLanguage : nativeLanguage;
+  const targetLanguage = direction === "room-to-native" ? nativeLanguage : roomLanguage;
+  const phraseIndex = Math.floor(Math.random() * LETTER_CHALLENGE_PHRASES.length);
+  const phrase = LETTER_CHALLENGE_PHRASES[phraseIndex];
+  const sourceText = phrase[sourceLanguage.code] || phrase.pt;
+  const expectedText = phrase[targetLanguage.code] || phrase.en;
+  const secret = normalizeLetterChallengeAnswer(expectedText);
+  const answerHash = await hashLetterSecret(secret);
+  const encryptedPayload = await encryptLetterContent(deliveredPayload, secret);
+  return {
+    secret,
+    protection: {
+      enabled: true,
+      challenge: {
+        sourceText,
+        sourceLanguageCode: sourceLanguage.code,
+        sourceLanguageLabel: sourceLanguage.label,
+        targetLanguageCode: targetLanguage.code,
+        targetLanguageLabel: targetLanguage.label,
+        direction,
+        answerHash
+      }
+    },
+    encryptedPayload
+  };
 }
 
 async function requestPrivateLetterLocation() {
   const room = getActiveRoom();
   if (!room || !isPrivateRoom(room)) return;
+
+  if (getLatestSharedLetterLocation(room)) {
+    renderLatestLetterDestination(room);
+    showToast("Localização já disponível", "O destino já foi compartilhado nesta conversa. Não é necessário solicitar novamente.");
+    return;
+  }
+
+  if (getLatestLetterLocationRequest(room, "requested")) {
+    renderLatestLetterDestination(room);
+    showToast("Solicitação em andamento", "A localização já foi solicitada. Aguarde o destinatário responder.");
+    return;
+  }
+
   setButtonBusy(requestLetterLocationButton, true, "Solicitando...");
   try {
     await sendFirebaseMessage(room, "Solicitação de localização para entrega de carta", {
@@ -11611,11 +13237,23 @@ async function sendPrivateLetter(event) {
   if (!room || !isPrivateRoom(room)) return;
   const title = sanitizeText(letterTitleInput?.value || "", 60);
   const content = cleanMessageText(letterMessageInput?.value || "", 1500);
-  const transport = sanitizeText(letterForm?.querySelector('input[name="letterTransport"]:checked')?.value || "droid", 20);
+  const transport = getSelectedLetterTransport();
   if (!title || !content) return;
 
+  if (transport.requiresChallenge && !letterUnlockedTransportIds.has(transport.id)) {
+    startLetterTranslationChallenge("transport", transport.id);
+    showToast("Transporte bloqueado", "Conclua a tradução para liberar esta opção de entrega.");
+    return;
+  }
+  if (letterTurboEnabled && !letterTurboUnlocked) {
+    startLetterTranslationChallenge("turbo", "turbo");
+    showToast("Turbina bloqueada", "Conclua a tradução para acelerar a carta.");
+    return;
+  }
+
   const submit = letterForm?.querySelector('button[type="submit"]');
-  setButtonBusy(submit, true, "Enviando...");
+  if (submit) submit.dataset.busy = "1";
+  setButtonBusy(submit, true, "Calculando rota GPS...");
   try {
     const language = getRoomLanguage(room);
     let deliveredTitle = title;
@@ -11626,19 +13264,90 @@ async function sendPrivateLetter(event) {
         translateMessageText(content, language)
       ]);
     }
+
     const destination = getLatestSharedLetterLocation(room);
-    await sendFirebaseMessage(room, `Carta: ${title}`, {
+    const destinationKey = getLetterDestinationKey(destination);
+    let routeOrigin = null;
+    let route = null;
+    if (
+      destination &&
+      letterComposerRouteState.destinationKey === destinationKey &&
+      letterComposerRouteState.originResult
+    ) {
+      routeOrigin = letterComposerRouteState.originResult;
+      route = await resolveLetterRouteForTransport(
+        routeOrigin,
+        destination,
+        transport,
+        letterComposerRouteState.groundRoute
+      );
+    } else {
+      routeOrigin = await getLetterRouteOrigin(destination);
+      const groundRoute = transport.trajectoryMode === "ground"
+        ? await buildLetterRoute(routeOrigin, destination)
+        : null;
+      route = await resolveLetterRouteForTransport(routeOrigin, destination, transport, groundRoute);
+    }
+    const distanceMeters = Number(route?.distanceMeters || 0);
+    const speedKmh = getEffectiveLetterSpeed(transport, letterTurboEnabled);
+    const durationMs = getEffectiveLetterDuration(transport, letterTurboEnabled, distanceMeters);
+    const sentAtMillis = Date.now();
+    const requireTranslation = Boolean(letterRequireTranslationCheckbox?.checked);
+    let protection = null;
+    let encryptedPayload = null;
+    let openingSecret = "";
+    if (requireTranslation) {
+      const protectionResult = await createLetterOpenProtection(
+        room,
+        letterOpenChallengeDirectionSelect?.value || "random",
+        { title: deliveredTitle, content: deliveredContent, originalContent: content }
+      );
+      protection = protectionResult.protection;
+      encryptedPayload = protectionResult.encryptedPayload;
+      openingSecret = protectionResult.secret;
+    }
+
+    const sentMessage = await sendFirebaseMessage(room, requireTranslation ? "Carta protegida" : "Carta rastreável", {
       skipTranslation: true,
       translationDisabled: true,
-      letter: { title: deliveredTitle, content: deliveredContent, originalContent: content, transport, status: "transit", sentAtMillis: Date.now(), latitude: destination?.latitude, longitude: destination?.longitude }
+      letter: {
+        title: requireTranslation && encryptedPayload ? "Carta protegida" : deliveredTitle,
+        content: requireTranslation && encryptedPayload ? "" : deliveredContent,
+        originalContent: requireTranslation && encryptedPayload ? "" : content,
+        protection,
+        encryptedPayload,
+        transport: transport.id,
+        turbo: letterTurboEnabled,
+        status: "transit",
+        sentAtMillis,
+        durationMs,
+        arrivalAtMillis: sentAtMillis + durationMs,
+        routeMode: route?.mode || routeOrigin?.mode || "simulated",
+        routeProvider: route?.provider || "",
+        trajectoryMode: transport.trajectoryMode || "ground",
+        routeDistanceMeters: distanceMeters,
+        routeCoordinates: route?.routeCoordinates || [],
+        speedKmh,
+        originMode: routeOrigin.mode,
+        latitude: destination?.latitude,
+        longitude: destination?.longitude,
+        originLatitude: routeOrigin.origin?.latitude,
+        originLongitude: routeOrigin.origin?.longitude
+      }
     });
+    if (openingSecret && sentMessage?.id) rememberLetterOpenSecret(room.id, sentMessage.id, openingSecret);
     closeLetterModal();
-    showToast("Carta enviada", `A carta para ${getPrivateOtherNick(room) || "seu contato"} está em rota.`);
+    showToast(
+      "Carta enviada",
+      `${transport.name}${letterTurboEnabled ? " com turbina" : ""} iniciou a rota. ${distanceMeters ? `${formatLetterDistance(distanceMeters)} · ` : ""}previsão ${formatLetterDuration(durationMs)}.`
+    );
   } catch (error) {
     console.error("Não foi possível enviar a carta.", error);
-    showToast("Falha no envio", "Não foi possível enviar a carta agora.");
+    showToast("Falha no envio", error?.message || "Não foi possível enviar a carta agora.");
   } finally {
+    if (submit) delete submit.dataset.busy;
     setButtonBusy(submit, false);
+    syncLetterComposerState();
   }
 }
 

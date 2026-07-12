@@ -1059,6 +1059,46 @@
   </template>
 
   <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" crossorigin=""></script>
-  <script type="module" src="app.js"></script>
+
+  <script>
+    document.body.className = '';
+    document.getElementById('splashScreen').hidden = true;
+    document.getElementById('loginScreen').hidden = true;
+    document.getElementById('appShell').hidden = true;
+    const modal = document.getElementById('letterModal');
+    modal.hidden = false;
+    modal.setAttribute('aria-hidden', 'false');
+    document.getElementById('letterTitleInput').value = 'Uma carta especial';
+    document.getElementById('letterMessageInput').value = 'Esta é uma prévia da carta rastreável.';
+    const locationPanel = document.getElementById('letterLocationPanel');
+    locationPanel.classList.add('has-location');
+    document.getElementById('letterLocationStatus').textContent = 'Destino já autorizado. A trajetória e o tempo serão mostrados abaixo.';
+    document.getElementById('requestLetterLocationButton').hidden = true;
+    document.getElementById('letterRouteNote').hidden = true;
+    const preview = document.getElementById('letterRoutePreview');
+    preview.hidden = false;
+    document.getElementById('letterRoutePreviewTransport').textContent = 'Droid-X';
+    document.getElementById('letterRoutePreviewTrajectory').textContent = 'Rota terrestre segura pelas vias do mapa';
+    document.getElementById('letterRoutePreviewDistance').textContent = '12,4 km';
+    document.getElementById('letterRoutePreviewSpeed').textContent = '18 km/h';
+    document.getElementById('letterRoutePreviewEta').textContent = '41 min';
+    document.getElementById('letterRoutePreviewStatus').textContent = 'Previsão calculada pela distância e pela velocidade selecionada.';
+    document.getElementById('letterDeliverySummary').innerHTML = '<span><i class="fa-solid fa-robot"></i> Droid-X</span><strong>18 km/h · 12,4 km · 41 min</strong>';
+    document.getElementById('letterChallengePanel').hidden = true;
+    const mapEl = document.getElementById('letterMap');
+    mapEl.hidden = false;
+    if (window.L) {
+      const map = L.map(mapEl, {zoomControl:false, attributionControl:false, dragging:false, scrollWheelZoom:false}).setView([-22.91,-47.06], 13);
+      L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',{maxZoom:19}).addTo(map);
+      const route=[[-22.925,-47.085],[-22.919,-47.077],[-22.916,-47.071],[-22.911,-47.069],[-22.906,-47.061],[-22.902,-47.054],[-22.895,-47.048]];
+      L.polyline(route,{color:'#10b486',weight:5,opacity:.94}).addTo(map);
+      L.circleMarker(route[0],{radius:5,color:'#d7fff1',weight:2,fillColor:'#0b8f6f',fillOpacity:1}).addTo(map);
+      L.circleMarker(route[route.length-1],{radius:7,color:'#fff',weight:2,fillColor:'#ef6b73',fillOpacity:1}).addTo(map);
+      const icon=L.divIcon({className:'letter-composer-vehicle-icon',html:'<span><i class="fa-solid fa-robot"></i></span>',iconSize:[38,38],iconAnchor:[19,19]});
+      L.marker(route[0],{icon}).addTo(map);
+      map.fitBounds(route,{padding:[26,26]});
+      setTimeout(()=>map.invalidateSize(),100);
+    }
+  </script>
 </body>
 </html>
