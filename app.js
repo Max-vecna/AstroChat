@@ -51,7 +51,7 @@ const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
 const STANDARD_WEB_PUSH_PUBLIC_VAPID_KEY = "BLE7nXv1JR25D7PSPJgHRXcAIQUhe1R0XOhFPGheglqfIpNIo9G95_lSTDtFUNx4GjWZHFaRkdlMylcItINrvAs";
-const CHAT_VERSION = "v150";
+const CHAT_VERSION = "v151";
 // Backend externo opcional para enviar push com o site fechado.
 // Depois de publicar o Cloudflare Worker, cole aqui a URL dele.
 // Exemplo: https://astrochat-push.seu-usuario.workers.dev/notify
@@ -6968,10 +6968,14 @@ function normalizeLetterLocationRequest(value) {
   if (!value || typeof value !== "object") return null;
   const latitude = Number(value.latitude);
   const longitude = Number(value.longitude);
+  const sharedAtMillis = Math.max(0, Number(value.sharedAtMillis || 0) || 0);
   return {
     requesterUid: sanitizeText(value.requesterUid || "", 180),
+    recipientUid: sanitizeText(value.recipientUid || value.requestedUid || value.targetUid || "", 180),
+    sharedByUid: sanitizeText(value.sharedByUid || "", 180),
     status: Number.isFinite(latitude) && Number.isFinite(longitude) ? "shared" : "requested",
-    ...(Number.isFinite(latitude) && Number.isFinite(longitude) ? { latitude, longitude } : {})
+    ...(Number.isFinite(latitude) && Number.isFinite(longitude) ? { latitude, longitude } : {}),
+    ...(sharedAtMillis ? { sharedAtMillis } : {})
   };
 }
 
@@ -8145,12 +8149,16 @@ function initializeLetterViewerTracking(letter, transportInfo) {
 
 function createLetterLocationRequestElement(message) {
   const request = normalizeLetterLocationRequest(message.letterLocationRequest);
+  const room = getActiveRoom();
+  const recipientUid = getLetterLocationRecipientUid(request, room);
   const card = document.createElement("section");
   card.className = "letter-location-request";
   const isRequester = request?.requesterUid === currentFirebaseUid;
+  const isRecipient = recipientUid === currentFirebaseUid;
   const shared = request?.status === "shared";
-  card.innerHTML = `<strong><i class="fa-solid fa-location-dot"></i> Localização para entrega</strong><span>${shared ? "Localização compartilhada com segurança nesta conversa." : isRequester ? "Aguardando o destinatário compartilhar a localização." : "O remetente pediu sua localização para entregar uma carta."}</span>`;
-  if (!shared && !isRequester) {
+  const sharedByMe = shared && (request?.sharedByUid === currentFirebaseUid || isRecipient);
+  card.innerHTML = `<strong><i class="fa-solid fa-location-dot"></i> Localização para entrega</strong><span>${shared ? (sharedByMe ? "Sua localização foi compartilhada com segurança nesta conversa." : "O destinatário compartilhou a localização para esta entrega.") : isRequester ? "Aguardando o destinatário compartilhar a localização." : isRecipient ? "O remetente pediu sua localização para entregar uma carta." : "Solicitação de localização destinada ao outro participante."}</span>`;
+  if (!shared && isRecipient) {
     const button = document.createElement("button");
     button.type = "button";
     button.className = "small-action";
@@ -8166,8 +8174,14 @@ function createLetterLocationRequestElement(message) {
 
 async function shareLocationForLetter(message, button) {
   const room = getActiveRoom();
+  const request = normalizeLetterLocationRequest(message?.letterLocationRequest);
+  const recipientUid = getLetterLocationRecipientUid(request, room);
   if (!room?.id || !message?.id || !navigator.geolocation) {
     showToast("Localização indisponível", "Este aparelho não oferece acesso à localização.");
+    return;
+  }
+  if (!recipientUid || recipientUid !== currentFirebaseUid) {
+    showToast("Solicitação destinada a outro usuário", "Somente o destinatário indicado pode compartilhar esta localização.");
     return;
   }
   setButtonBusy(button, true, "Obtendo local...");
@@ -8175,11 +8189,13 @@ async function shareLocationForLetter(message, button) {
     const position = await new Promise((resolve, reject) => navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }));
     await update(ref(db), {
       [`rooms/${room.id}/messages/${message.id}/letterLocationRequest/status`]: "shared",
+      [`rooms/${room.id}/messages/${message.id}/letterLocationRequest/recipientUid`]: recipientUid,
+      [`rooms/${room.id}/messages/${message.id}/letterLocationRequest/sharedByUid`]: currentFirebaseUid,
       [`rooms/${room.id}/messages/${message.id}/letterLocationRequest/latitude`]: Number(position.coords.latitude),
       [`rooms/${room.id}/messages/${message.id}/letterLocationRequest/longitude`]: Number(position.coords.longitude),
       [`rooms/${room.id}/messages/${message.id}/letterLocationRequest/sharedAtMillis`]: Date.now()
     });
-    showToast("Localização compartilhada", "Agora o remetente pode visualizar o destino no mapa.");
+    showToast("Localização compartilhada", "Agora o remetente pode visualizar o seu destino no mapa.");
   } catch (error) {
     console.warn("Localização não compartilhada.", error);
     showToast("Permissão necessária", "Autorize a localização para compartilhar o destino da carta.");
@@ -13196,18 +13212,51 @@ function getLetterLocationMessages(room) {
   return roomMessagesById.get(room?.id) || room?.messages || [];
 }
 
-function getLatestLetterLocationRequest(room, status = "") {
-  return [...getLetterLocationMessages(room)]
-    .reverse()
-    .map((message) => message?.letterLocationRequest)
-    .find((request) => request && (!status || request.status === status)) || null;
+function getPrivateCounterpartUid(room, referenceUid = currentFirebaseUid) {
+  if (!room) return "";
+  const safeReferenceUid = sanitizeText(referenceUid || "", 180);
+  const candidates = [
+    ...(Array.isArray(room.memberUids) ? room.memberUids : []),
+    ...Object.keys(room.memberNickMap || {}),
+    ...Object.keys(room.memberAvatarIconMap || {})
+  ]
+    .map((uid) => sanitizeText(uid || "", 180))
+    .filter(Boolean);
+  return [...new Set(candidates)].find((uid) => uid !== safeReferenceUid) || "";
 }
 
-function getLatestSharedLetterLocation(room) {
+function getLetterLocationRecipientUid(request, room) {
+  const directRecipientUid = sanitizeText(
+    request?.recipientUid || request?.requestedUid || request?.targetUid || request?.sharedByUid || "",
+    180
+  );
+  if (directRecipientUid) return directRecipientUid;
+  return getPrivateCounterpartUid(room, request?.requesterUid || "");
+}
+
+function isLetterLocationRequestForRecipient(request, room, recipientUid) {
+  const safeRecipientUid = sanitizeText(recipientUid || "", 180);
+  if (!request || !safeRecipientUid) return false;
+  return getLetterLocationRecipientUid(request, room) === safeRecipientUid;
+}
+
+function getLatestLetterLocationRequest(room, status = "", recipientUid = getPrivateCounterpartUid(room)) {
   return [...getLetterLocationMessages(room)]
     .reverse()
-    .map((message) => message?.letterLocationRequest)
-    .find((request) => request?.status === "shared" && Number.isFinite(Number(request.latitude)) && Number.isFinite(Number(request.longitude))) || null;
+    .map((message) => normalizeLetterLocationRequest(message?.letterLocationRequest))
+    .find((request) => request && isLetterLocationRequestForRecipient(request, room, recipientUid) && (!status || request.status === status)) || null;
+}
+
+function getLatestSharedLetterLocation(room, recipientUid = getPrivateCounterpartUid(room)) {
+  return [...getLetterLocationMessages(room)]
+    .reverse()
+    .map((message) => normalizeLetterLocationRequest(message?.letterLocationRequest))
+    .find((request) =>
+      request?.status === "shared" &&
+      isLetterLocationRequestForRecipient(request, room, recipientUid) &&
+      Number.isFinite(Number(request.latitude)) &&
+      Number.isFinite(Number(request.longitude))
+    ) || null;
 }
 
 function resetLetterComposerRouteState() {
@@ -13868,16 +13917,21 @@ async function createLetterOpenProtection(room, directionMode, deliveredPayload)
 async function requestPrivateLetterLocation() {
   const room = getActiveRoom();
   if (!room || !isPrivateRoom(room)) return;
-
-  if (getLatestSharedLetterLocation(room)) {
-    renderLatestLetterDestination(room);
-    showToast("Localização já disponível", "O destino já foi compartilhado nesta conversa. Não é necessário solicitar novamente.");
+  const recipientUid = getPrivateCounterpartUid(room);
+  if (!recipientUid) {
+    showToast("Destinatário não encontrado", "Não foi possível identificar quem deve compartilhar a localização.");
     return;
   }
 
-  if (getLatestLetterLocationRequest(room, "requested")) {
+  if (getLatestSharedLetterLocation(room, recipientUid)) {
     renderLatestLetterDestination(room);
-    showToast("Solicitação em andamento", "A localização já foi solicitada. Aguarde o destinatário responder.");
+    showToast("Localização já disponível", "Este destinatário já compartilhou a localização nesta conversa.");
+    return;
+  }
+
+  if (getLatestLetterLocationRequest(room, "requested", recipientUid)) {
+    renderLatestLetterDestination(room);
+    showToast("Solicitação em andamento", "A localização já foi solicitada a este destinatário. Aguarde a resposta.");
     return;
   }
 
@@ -13886,9 +13940,9 @@ async function requestPrivateLetterLocation() {
     await sendFirebaseMessage(room, "Solicitação de localização para entrega de carta", {
       skipTranslation: true,
       translationDisabled: true,
-      letterLocationRequest: { requesterUid: currentFirebaseUid, status: "requested" }
+      letterLocationRequest: { requesterUid: currentFirebaseUid, recipientUid, status: "requested" }
     });
-    showToast("Solicitação enviada", "O destinatário poderá escolher se deseja compartilhar a localização.");
+    showToast("Solicitação enviada", "Somente o destinatário indicado poderá compartilhar a própria localização.");
     closeLetterModal();
   } catch (error) {
     console.error("Não foi possível solicitar a localização.", error);
