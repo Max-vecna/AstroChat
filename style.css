@@ -9987,3 +9987,102 @@ body[data-chat-theme]:not([data-chat-theme="padrao"]) .message-inline-audio-butt
     padding-inline: 8px;
   }
 }
+
+
+/* AstroChat v150 - mapas sem zoom, ações alinhadas e toque neutro nos balões */
+.letter-viewer-map .leaflet-control-zoom,
+.message-letter-map .leaflet-control-zoom,
+#letterMap .leaflet-control-zoom {
+  display: none !important;
+}
+
+.letter-viewer-content-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  align-items: stretch;
+  gap: 10px;
+}
+
+.letter-viewer-content-head > small {
+  display: block;
+  min-width: 0;
+}
+
+.letter-viewer-content-actions {
+  width: 100%;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  align-items: stretch;
+  gap: 8px;
+}
+
+.letter-viewer-content-actions .letter-viewer-action-button,
+.letter-viewer-content-actions .letter-viewer-original-button {
+  width: 100%;
+  min-width: 0;
+  min-height: 44px;
+  height: auto;
+  padding: 8px 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  border-radius: 12px;
+  line-height: 1.15;
+  text-align: center;
+  white-space: normal;
+}
+
+.letter-viewer-content-actions .letter-viewer-action-button i {
+  flex: 0 0 auto;
+}
+
+.letter-viewer-content-actions .letter-viewer-action-button span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.bubble,
+.bubble * {
+  -webkit-tap-highlight-color: transparent;
+}
+
+.bubble {
+  transition: transform 0.16s ease;
+}
+
+.message-row.is-letter-located .bubble {
+  animation: none !important;
+}
+
+@media (max-width: 560px) {
+  .letter-viewer-content-actions {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 7px;
+  }
+
+  .letter-viewer-content-actions .letter-viewer-action-button,
+  .letter-viewer-content-actions .letter-viewer-original-button {
+    min-height: 60px;
+    padding: 7px 5px;
+    flex-direction: column;
+    gap: 5px;
+  }
+
+  .letter-viewer-content-actions .letter-viewer-action-button span {
+    font-size: 0.7rem;
+    line-height: 1.08;
+  }
+}
+
+@media (max-width: 360px) {
+  .letter-viewer-content-actions {
+    grid-template-columns: 1fr;
+  }
+
+  .letter-viewer-content-actions .letter-viewer-action-button,
+  .letter-viewer-content-actions .letter-viewer-original-button {
+    min-height: 42px;
+    flex-direction: row;
+  }
+}
