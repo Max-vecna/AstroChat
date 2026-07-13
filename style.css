@@ -182,7 +182,6 @@ body.is-authenticated .login-screen {
 .login-card label,
 .modal-card label,
 .mini-form label {
-  display: block;
   margin-bottom: 8px;
   color: var(--text);
   font-size: 0.9rem;
