@@ -8226,12 +8226,6 @@ body[data-chat-theme]:not([data-chat-theme="padrao"]) .message-inline-audio-butt
   margin-top: 0;
 }
 
-.letter-compose-card button,
-.letter-compose-card input,
-.letter-compose-card textarea {
-  min-width: 0;
-}
-
 .letter-compose-grid {
   display: grid;
   grid-template-columns: minmax(0, 1.18fr) minmax(300px, 0.82fr);
