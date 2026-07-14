@@ -10149,25 +10149,52 @@ body[data-chat-theme]:not([data-chat-theme="padrao"]) .message-inline-audio-butt
 .chat-more-menu button:disabled { opacity: .45; cursor: not-allowed; }
 
 .letter-location-gate {
-  min-height: 300px;
+  width: min(520px, 100%);
+  min-height: 0;
+  margin: auto;
   display: flex;
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  gap: 13px;
-  padding: 34px 22px;
+  align-self: stretch;
+  gap: 14px;
+  padding: 40px 28px;
   text-align: center;
+  border: 1px solid color-mix(in srgb, var(--accent) 22%, var(--line));
+  border-radius: 24px;
+  background: color-mix(in srgb, var(--accent) 6%, rgba(10, 23, 29, .72));
 }
 
-.letter-location-gate > i { font-size: 2.4rem; color: var(--accent); }
-.letter-location-gate > strong { font-size: 1.15rem; }
+.letter-location-gate > i {
+  width: 68px;
+  height: 68px;
+  display: grid;
+  place-items: center;
+  border-radius: 22px;
+  font-size: 1.8rem;
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 14%, transparent);
+  box-shadow: 0 12px 30px color-mix(in srgb, var(--accent) 12%, transparent);
+}
+.letter-location-gate > strong { font-size: 1.2rem; }
 .letter-location-gate > span { max-width: 440px; color: var(--muted); line-height: 1.5; }
-.letter-location-gate .login-button { width: auto; margin-top: 5px; }
+.letter-location-gate .login-button { width: min(300px, 100%); margin-top: 8px; }
 
+.letter-compose-card.is-location-required {
+  min-height: min(620px, calc(100dvh - 32px));
+  grid-template-rows: auto minmax(0, 1fr);
+  overflow: hidden;
+}
 .letter-compose-card.is-location-required > :not(.letter-modal-header):not(.letter-location-gate) { display: none !important; }
 .letter-compose-card:not(.is-location-required) > .letter-location-gate { display: none !important; }
 
 @media (max-width: 640px) {
   .chat-header-identity { gap: 7px; padding: 2px; }
   .chat-more-menu { right: 6px; }
+  .letter-compose-card.is-location-required { min-height: 100dvh; }
+  .letter-location-gate {
+    width: min(430px, 100%);
+    padding: 30px 20px;
+    border-radius: 20px;
+  }
 }
