@@ -64,6 +64,16 @@ body.is-authenticated .login-screen {
   display: none;
 }
 
+.letter-location-request
+{
+  display: flex;
+  flex-direction: column;
+}
+
+.letter-location-request strong, .letter-location-request>span
+{
+  margin-bottom: 10px;
+}
 .splash-screen {
   min-height: 100%;
   display: grid;
@@ -182,7 +192,7 @@ body.is-authenticated .login-screen {
 .login-card label,
 .modal-card label,
 .mini-form label {
-  margin-bottom: 8px;
+  /* margin-bottom: 8px; */
   color: var(--text);
   font-size: 0.9rem;
   font-weight: 800;
@@ -199,6 +209,7 @@ body.is-authenticated .login-screen {
   background: rgba(255, 255, 255, 0.08);
   padding: 15px 16px;
   transition: 0.2s ease;
+  margin: 10px 0 10px 0;
 }
 
 .login-card input:focus,
@@ -4085,6 +4096,7 @@ button:disabled,
   background-position: calc(100% - 20px) 20px, calc(100% - 14px) 20px;
   background-size: 6px 6px, 6px 6px;
   background-repeat: no-repeat;
+  margin: 10px 0 10px 0;
 }
 
 .login-card select:focus,
@@ -8985,7 +8997,7 @@ body[data-chat-theme]:not([data-chat-theme="padrao"]) .message-inline-audio-butt
     width: 100%;
     max-height: 100dvh;
     min-height: 100dvh;
-    border-radius: 0;
+    border-radius: 0 !important;
     padding: 16px;
   }
 
