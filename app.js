@@ -51,7 +51,7 @@ const db = getDatabase(firebaseApp, DATABASE_URL);
 // Cole aqui a chave publica VAPID em Firebase Console > Cloud Messaging > Web push certificates.
 const FCM_WEB_PUSH_PUBLIC_VAPID_KEY = "BBXwpIabnuvNvPJKgXbHWhJMjrMXewHEYR6W1WkVvNVyOOO7NNRLqI8_Gm5uWX8T_TXH7GNTUvPGUndsdv9Da_w";
 const STANDARD_WEB_PUSH_PUBLIC_VAPID_KEY = "BLE7nXv1JR25D7PSPJgHRXcAIQUhe1R0XOhFPGheglqfIpNIo9G95_lSTDtFUNx4GjWZHFaRkdlMylcItINrvAs";
-const CHAT_VERSION = "v151";
+const CHAT_VERSION = "v152";
 // Backend externo opcional para enviar push com o site fechado.
 // Depois de publicar o Cloudflare Worker, cole aqui a URL dele.
 // Exemplo: https://astrochat-push.seu-usuario.workers.dev/notify
@@ -65,6 +65,7 @@ const GEMINI_AI_TIMEOUT_MS = 23000;
 const GEMINI_TTS_ENDPOINT = PUSH_WORKER_ENDPOINT.replace(/\/notify\/?$/, "/tts");
 const GEMINI_TTS_TIMEOUT_MS = 32000;
 const GEMINI_TTS_CACHE_NAME = "astrochat-gemini-tts-v1";
+const GEMINI_TTS_ENABLED = false;
 const GEMINI_TTS_MAX_TEXT_LENGTH = 1200;
 
 const ROOMS_STORAGE_KEY = "chat-pwa-salas-v3-ai-local";
@@ -494,6 +495,10 @@ const activeName = document.querySelector("#activeName");
 const activeStatus = document.querySelector("#activeStatus");
 const clearChatButton = document.querySelector("#clearChatButton");
 const roomMenuButton = document.querySelector("#roomMenuButton");
+const roomSettingsTrigger = document.querySelector("#roomSettingsTrigger");
+const chatMoreMenu = document.querySelector("#chatMoreMenu");
+const menuConversationSearchButton = document.querySelector("#menuConversationSearchButton");
+const menuLearningTestButton = document.querySelector("#menuLearningTestButton");
 const conversationSearchButton = document.querySelector("#conversationSearchButton");
 const liveTypingButton = document.querySelector("#liveTypingButton");
 const typingPreviewPanel = document.querySelector("#typingPreviewPanel");
@@ -578,6 +583,9 @@ const closeLetterButton = document.querySelector("#closeLetterButton");
 const letterTitleInput = document.querySelector("#letterTitleInput");
 const letterMessageInput = document.querySelector("#letterMessageInput");
 const requestLetterLocationButton = document.querySelector("#requestLetterLocationButton");
+const letterLocationGate = document.querySelector("#letterLocationGate");
+const letterLocationGateStatus = document.querySelector("#letterLocationGateStatus");
+const letterLocationGateButton = document.querySelector("#letterLocationGateButton");
 const letterLocationStatus = document.querySelector("#letterLocationStatus");
 const letterMap = document.querySelector("#letterMap");
 const letterRouteNote = document.querySelector("#letterRouteNote");
@@ -853,6 +861,7 @@ notificationsModal?.addEventListener("click", (event) => {
 });
 
 document.addEventListener("click", (event) => {
+  if (!event.target.closest("#roomMenuButton") && !event.target.closest("#chatMoreMenu")) closeChatMoreMenu();
   if (!event.target.closest(".reaction-picker") && !event.target.closest(".reaction-message-button")) {
     closeReactionPickers();
   }
@@ -1108,7 +1117,24 @@ document.addEventListener("visibilitychange", markVisibleActiveRoomAsRead);
 window.addEventListener("focus", markVisibleActiveRoomAsRead);
 
 liveTypingButton?.addEventListener("click", toggleLiveTypingForActiveRoom);
-roomMenuButton?.addEventListener("click", openRoomSettingsModal);
+roomSettingsTrigger?.addEventListener("click", openRoomSettingsModal);
+roomMenuButton?.addEventListener("click", (event) => {
+  event.stopPropagation();
+  const shouldOpen = Boolean(chatMoreMenu?.hidden);
+  closeChatMoreMenu();
+  if (shouldOpen && chatMoreMenu) {
+    chatMoreMenu.hidden = false;
+    roomMenuButton.setAttribute("aria-expanded", "true");
+  }
+});
+menuConversationSearchButton?.addEventListener("click", () => {
+  closeChatMoreMenu();
+  openMessageSearchPanel();
+});
+menuLearningTestButton?.addEventListener("click", () => {
+  closeChatMoreMenu();
+  toggleLearningTestMode();
+});
 conversationSearchButton?.addEventListener("click", openMessageSearchPanel);
 closeRoomSettingsButton?.addEventListener("click", closeRoomSettingsModal);
 roomSettingsModal?.addEventListener("click", (event) => {
@@ -1215,6 +1241,7 @@ letterAccelerationInput?.addEventListener("keydown", (event) => {
   verifyLetterAccelerationChallenge();
 });
 requestLetterLocationButton?.addEventListener("click", requestPrivateLetterLocation);
+letterLocationGateButton?.addEventListener("click", requestPrivateLetterLocation);
 closeInviteModalButton.addEventListener("click", closeInviteModal);
 cancelInviteButton.addEventListener("click", closeInviteModal);
 
@@ -3200,8 +3227,6 @@ function isLearningTestEnabledForRoom(room = getActiveRoom()) {
 }
 
 function updateLearningTestButtonState(room = getActiveRoom()) {
-  if (!learningTestButton) return;
-
   const available = isLearningTestAvailableForRoom(room);
   const enabled = isLearningTestEnabledForRoom(room);
   const language = getRoomLanguage(room);
@@ -3213,11 +3238,21 @@ function updateLearningTestButtonState(room = getActiveRoom()) {
         ? `Desativar teste em ${language.label}`
         : `Testar meu aprendizado em ${language.label}`;
 
-  learningTestButton.disabled = !available;
-  learningTestButton.classList.toggle("is-active", enabled);
-  learningTestButton.setAttribute("aria-pressed", String(enabled));
-  learningTestButton.title = title;
-  learningTestButton.setAttribute("aria-label", title);
+  if (learningTestButton) {
+    learningTestButton.disabled = !available;
+    learningTestButton.classList.toggle("is-active", enabled);
+    learningTestButton.setAttribute("aria-pressed", String(enabled));
+    learningTestButton.title = title;
+    learningTestButton.setAttribute("aria-label", title);
+  }
+  if (menuLearningTestButton) {
+    menuLearningTestButton.disabled = !available;
+    menuLearningTestButton.classList.toggle("is-active", enabled);
+    menuLearningTestButton.setAttribute("aria-pressed", String(enabled));
+    const label = menuLearningTestButton.querySelector("span");
+    if (label) label.textContent = enabled ? "Desativar modo de aprendizado" : "Ativar modo de aprendizado";
+    menuLearningTestButton.title = title;
+  }
 }
 
 function updateMessageInputPlaceholder(room = getActiveRoom()) {
@@ -6151,8 +6186,13 @@ function createEmptyMessageSearchState() {
 
 function updateConversationSearchButton(room = getActiveRoom()) {
   if (!conversationSearchButton) return;
-  conversationSearchButton.hidden = !room;
+  conversationSearchButton.hidden = true;
   conversationSearchButton.classList.toggle("is-active", Boolean(room && messageSearchState.open));
+}
+
+function closeChatMoreMenu() {
+  if (chatMoreMenu) chatMoreMenu.hidden = true;
+  roomMenuButton?.setAttribute("aria-expanded", "false");
 }
 
 function syncMessageSearchRoom(roomId) {
@@ -8885,20 +8925,9 @@ function shouldShowInlineSpeechPlaybackButton(message, roomId = activeRoomId) {
 
 function createInlineSpeechPlaybackElement(message) {
   const wrap = document.createElement("div");
-  const geminiButton = document.createElement("button");
   const browserButton = document.createElement("button");
 
   wrap.className = "message-inline-audio";
-  geminiButton.className = "message-inline-audio-button gemini-voice-button";
-  geminiButton.type = "button";
-  geminiButton.title = "Gerar voz com Gemini";
-  geminiButton.setAttribute("aria-label", geminiButton.title);
-  geminiButton.innerHTML = `<i class="fa-solid fa-wand-magic-sparkles" aria-hidden="true"></i><span>Gerar voz</span>`;
-  geminiButton.addEventListener("click", (event) => {
-    event.stopPropagation();
-    speakMessage(message);
-  });
-
   browserButton.className = "message-inline-audio-button browser-voice-button";
   browserButton.type = "button";
   browserButton.title = "Ouvir com o sintetizador do navegador";
@@ -8909,7 +8938,7 @@ function createInlineSpeechPlaybackElement(message) {
     speakMessageWithBrowserVoice(message);
   });
 
-  wrap.append(geminiButton, browserButton);
+  wrap.append(browserButton);
   return wrap;
 }
 
@@ -8917,12 +8946,12 @@ function createListenMessageButton(message) {
   const button = document.createElement("button");
   button.className = "listen-message-button translated-tool-button";
   button.type = "button";
-  button.title = "Gerar voz natural com Gemini";
-  button.setAttribute("aria-label", "Gerar voz natural para a mensagem");
+  button.title = "Ouvir com o sintetizador do navegador";
+  button.setAttribute("aria-label", "Ouvir mensagem com o sintetizador do navegador");
   button.innerHTML = `<i class="fa-solid fa-volume-high" aria-hidden="true"></i>`;
   button.addEventListener("click", (event) => {
     event.stopPropagation();
-    speakMessage(message);
+    speakMessageWithBrowserVoice(message);
   });
   return button;
 }
@@ -9081,16 +9110,12 @@ function openMessageMenu(message, row, bubble) {
   menu.setAttribute("role", "menu");
   menu.dataset.messageId = message?.id || "";
 
-  const geminiVoiceAction = createMenuButton("fa-solid fa-wand-magic-sparkles", "Gerar voz (Gemini)", () => {
-    closeMessageMenus();
-    speakMessage(message);
-  });
   const browserVoiceAction = createMenuButton("fa-solid fa-volume-high", "Ouvir (navegador)", () => {
     closeMessageMenus();
     speakMessageWithBrowserVoice(message);
   });
 
-  menu.append(geminiVoiceAction, browserVoiceAction);
+  menu.append(browserVoiceAction);
 
   if (getMessageEnglishAiText(message)) {
     menu.appendChild(createMenuButton("fa-solid fa-language", "Traduzir pela IA", () => {
@@ -10198,6 +10223,10 @@ function stopSpeaking() {
 }
 
 async function speakMessage(message) {
+  if (!GEMINI_TTS_ENABLED) {
+    speakMessageWithBrowserVoice(message);
+    return;
+  }
   const text = getMessageAudioText(message);
   if (!text) return;
 
@@ -13152,7 +13181,7 @@ function openLetterModal() {
   syncLetterProtectionComposerState();
   renderLatestLetterDestination(room);
   prepareLetterRecipientNativeLanguage(room);
-  window.setTimeout(() => letterTitleInput?.focus(), 50);
+  if (getLatestSharedLetterLocation(room)) window.setTimeout(() => letterTitleInput?.focus(), 50);
 }
 
 function closeLetterModal() {
@@ -13512,6 +13541,20 @@ function renderLatestLetterDestination(room) {
   const destination = getLatestSharedLetterLocation(room);
   const pendingRequest = destination ? null : getLatestLetterLocationRequest(room, "requested");
   const locationPanel = requestLetterLocationButton?.closest?.(".letter-location-panel");
+
+  letterForm?.classList.toggle("is-location-required", !destination);
+  if (letterLocationGate) letterLocationGate.hidden = Boolean(destination);
+  if (letterLocationGateStatus) {
+    letterLocationGateStatus.textContent = pendingRequest
+      ? "Solicitação enviada. Aguarde o destinatário compartilhar a localização para liberar o formulário."
+      : "Solicite a localização do destinatário para liberar os campos da carta.";
+  }
+  if (letterLocationGateButton) {
+    letterLocationGateButton.disabled = Boolean(pendingRequest);
+    letterLocationGateButton.innerHTML = pendingRequest
+      ? '<i class="fa-solid fa-clock"></i><span>Aguardando localização</span>'
+      : '<i class="fa-solid fa-location-crosshairs"></i><span>Solicitar localização</span>';
+  }
 
   locationPanel?.classList.toggle("has-location", Boolean(destination));
   locationPanel?.classList.toggle("is-pending", Boolean(pendingRequest));
@@ -13936,6 +13979,7 @@ async function requestPrivateLetterLocation() {
   }
 
   setButtonBusy(requestLetterLocationButton, true, "Solicitando...");
+  setButtonBusy(letterLocationGateButton, true, "Solicitando...");
   try {
     await sendFirebaseMessage(room, "Solicitação de localização para entrega de carta", {
       skipTranslation: true,
@@ -13949,6 +13993,7 @@ async function requestPrivateLetterLocation() {
     showToast("Falha", "Não foi possível solicitar a localização agora.");
   } finally {
     setButtonBusy(requestLetterLocationButton, false);
+    setButtonBusy(letterLocationGateButton, false);
   }
 }
 

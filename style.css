@@ -10091,3 +10091,83 @@ body[data-chat-theme]:not([data-chat-theme="padrao"]) .message-inline-audio-butt
     flex-direction: row;
   }
 }
+/* Chat header actions and location-first letter flow */
+#roomVoiceSettingsSection,
+#letterViewerListenButton { display: none !important; }
+
+.chat-header { position: relative; }
+
+.chat-header-identity {
+  min-width: 0;
+  flex: 1 1 auto;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 4px;
+  border: 0;
+  border-radius: 14px;
+  color: inherit;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-header-identity:hover,
+.chat-header-identity:focus-visible { background: rgba(255,255,255,.07); outline: none; }
+.chat-header-identity .avatar { flex: 0 0 auto; }
+.chat-header-identity .chat-title-wrap { display: flex; flex-direction: column; min-width: 0; }
+
+.chat-more-menu {
+  position: absolute;
+  z-index: 80;
+  top: calc(100% - 6px);
+  right: 10px;
+  width: min(270px, calc(100vw - 20px));
+  padding: 7px;
+  border: 1px solid var(--line);
+  border-radius: 15px;
+  background: rgba(14, 29, 35, .98);
+  box-shadow: 0 18px 48px rgba(0,0,0,.38);
+}
+
+.chat-more-menu button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  padding: 11px 12px;
+  border: 0;
+  border-radius: 11px;
+  color: var(--text);
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.chat-more-menu button:hover { background: rgba(255,255,255,.08); }
+.chat-more-menu button.is-active { color: var(--accent); background: rgba(72, 210, 174, .1); }
+.chat-more-menu button:disabled { opacity: .45; cursor: not-allowed; }
+
+.letter-location-gate {
+  min-height: 300px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 13px;
+  padding: 34px 22px;
+  text-align: center;
+}
+
+.letter-location-gate > i { font-size: 2.4rem; color: var(--accent); }
+.letter-location-gate > strong { font-size: 1.15rem; }
+.letter-location-gate > span { max-width: 440px; color: var(--muted); line-height: 1.5; }
+.letter-location-gate .login-button { width: auto; margin-top: 5px; }
+
+.letter-compose-card.is-location-required > :not(.letter-modal-header):not(.letter-location-gate) { display: none !important; }
+.letter-compose-card:not(.is-location-required) > .letter-location-gate { display: none !important; }
+
+@media (max-width: 640px) {
+  .chat-header-identity { gap: 7px; padding: 2px; }
+  .chat-more-menu { right: 6px; }
+}

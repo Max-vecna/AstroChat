@@ -196,11 +196,13 @@
         <button class="back-button" id="backButton" aria-label="Voltar para salas">
           <i class="fa-solid fa-chevron-left" aria-hidden="true"></i>
         </button>
-        <div class="avatar" id="activeAvatar">S</div>
-        <div class="chat-title-wrap">
-          <strong id="activeName">Sala</strong>
-          <span id="activeStatus">Sala online</span>
-        </div>
+        <button class="chat-header-identity" id="roomSettingsTrigger" type="button" title="Abrir menu da sala" aria-label="Abrir menu da sala">
+          <span class="avatar" id="activeAvatar">S</span>
+          <span class="chat-title-wrap">
+            <strong id="activeName">Sala</strong>
+            <span id="activeStatus">Sala online</span>
+          </span>
+        </button>
         <button class="icon-button live-typing-button" id="liveTypingButton" hidden title="Compartilhar texto digitado em tempo real" aria-label="Compartilhar texto digitado em tempo real">
           <i class="fa-solid fa-keyboard" aria-hidden="true"></i>
         </button>
@@ -221,9 +223,13 @@
           <i class="fa-solid fa-box-archive" aria-hidden="true"></i>
           <span class="notification-badge" id="letterInboxBadge" hidden>0</span>
         </button>
-        <button class="icon-button" id="roomMenuButton" title="Menu da sala" aria-label="Menu da sala">
+        <button class="icon-button" id="roomMenuButton" title="Mais opções" aria-label="Mais opções" aria-expanded="false" aria-controls="chatMoreMenu">
           <i class="fa-solid fa-ellipsis-vertical" aria-hidden="true"></i>
         </button>
+        <div class="chat-more-menu" id="chatMoreMenu" role="menu" hidden>
+          <button id="menuConversationSearchButton" type="button" role="menuitem"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><span>Pesquisar palavras</span></button>
+          <button id="menuLearningTestButton" type="button" role="menuitem" aria-pressed="false"><i class="fa-solid fa-graduation-cap" aria-hidden="true"></i><span>Ativar modo de aprendizado</span></button>
+        </div>
         <button class="icon-button" id="clearChatButton" hidden title="Limpar sala" aria-label="Limpar sala">
           <i class="fa-solid fa-trash-can" aria-hidden="true"></i>
         </button>
@@ -563,7 +569,7 @@
               <i class="fa-solid fa-volume-high" aria-hidden="true"></i>
               <span>
                 <strong class="room-menu-toggle-title">Botões de voz</strong>
-                <small class="room-menu-toggle-status">Gemini e sintetizador do navegador</small>
+                <small class="room-menu-toggle-status">Sintetizador do navegador</small>
               </span>
             </span>
             <span class="room-menu-toggle-switch" aria-hidden="true"></span>
@@ -608,7 +614,7 @@
         </div>
       </div>
 
-      <div class="room-settings-section" id="roomVoiceSettingsSection">
+      <div class="room-settings-section" id="roomVoiceSettingsSection" hidden>
         <div class="modal-section-title compact-title"><span>Voz Gemini</span><small>Configuração exclusiva desta sala</small></div>
         <div class="room-voice-settings-grid">
           <label>Voz<select id="roomSettingsVoiceSelect"><option>Kore</option><option>Aoede</option><option>Leda</option><option>Puck</option><option>Charon</option><option>Fenrir</option><option>Zephyr</option><option>Orus</option><option>Achernar</option><option>Gacrux</option><option>Sulafat</option></select></label>
@@ -882,6 +888,13 @@
         <button class="icon-button" id="closeLetterButton" type="button" aria-label="Fechar carta"><i class="fa-solid fa-xmark"></i></button>
       </header>
 
+      <section class="letter-location-gate" id="letterLocationGate" aria-live="polite">
+        <i class="fa-solid fa-location-dot" aria-hidden="true"></i>
+        <strong>Localização necessária</strong>
+        <span id="letterLocationGateStatus">Solicite a localização do destinatário para preencher e enviar a carta.</span>
+        <button class="login-button" id="letterLocationGateButton" type="button"><i class="fa-solid fa-location-crosshairs" aria-hidden="true"></i><span>Solicitar localização</span></button>
+      </section>
+
       <div class="letter-compose-grid">
         <section class="letter-writing-panel">
           <div class="letter-section-heading">
@@ -1048,7 +1061,7 @@
         <div class="letter-viewer-content-head">
           <small id="letterViewerContentLabel">Conteúdo traduzido</small>
           <div class="letter-viewer-content-actions" aria-label="Ações da carta">
-            <button class="small-action letter-viewer-action-button" id="letterViewerListenButton" type="button" title="Ouvir carta"><i class="fa-solid fa-volume-high" aria-hidden="true"></i><span>Ouvir</span></button>
+            <button class="small-action letter-viewer-action-button" id="letterViewerListenButton" type="button" title="Ouvir carta" hidden><i class="fa-solid fa-volume-high" aria-hidden="true"></i><span>Ouvir</span></button>
             <button class="small-action letter-viewer-action-button" id="letterViewerTranslateButton" type="button" title="Traduzir carta pela IA"><i class="fa-solid fa-language" aria-hidden="true"></i><span>Traduzir</span></button>
             <button class="small-action letter-viewer-action-button letter-viewer-original-button" id="letterViewerOriginalButton" type="button" aria-label="Mostrar mensagem original" title="Mostrar mensagem original" aria-pressed="false"><i class="fa-solid fa-eye" aria-hidden="true"></i><span>Mostrar original</span></button>
           </div>

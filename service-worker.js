@@ -1,4 +1,4 @@
-const CACHE_NAME = "astrochat-cache-v151";
+const CACHE_NAME = "astrochat-cache-v152";
 const SERVICE_WORKER_VERSION = "v151";
 const PUSH_SETTINGS_CACHE = "astrochat-push-settings-v1";
 const PUSH_SETTINGS_REQUEST = "./__astrochat-system-push-settings";
